@@ -45,3 +45,6 @@ bin/
 .DS_Store
 
 local.properties
+
+src/main/resources/icons
+AppDir

@@ -25,7 +25,7 @@ permissions:
 env:
   JAVA_VERSION: "21"
   APP_NAME: Tritium
-  MAIN_CLASS: io.github.footermandev.tritium.Main
+  MAIN_CLASS: io.github.tritium_launcher.launcher.Main
 
 jobs:
   build:

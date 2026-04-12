@@ -1,1 +1,12 @@
-rootProject.name = "Tritium Minecraft Launcher"
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+    }
+}

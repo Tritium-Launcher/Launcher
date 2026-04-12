@@ -13,7 +13,7 @@ plugins {
 
 ksp { arg("verbose", "true") }
 
-group = "io.github.footermandev.tritium"
+group = "io.github.tritium_launcher.launcher"
 version = "0.1.4"
 val tritiumVersion = project.version.toString()
 
@@ -31,9 +31,21 @@ repositories {
     mavenCentral()
 }
 
+configurations.configureEach {
+    resolutionStrategy {
+        // lsp4j declares gson as a version range; pin it for deterministic resolution.
+        force("com.google.code.gson:gson:2.13.2")
+        eachDependency {
+            if (requested.group == "com.google.code.gson" && requested.name == "gson") {
+                useVersion("2.13.2")
+                because("version range metadata can resolve nondeterministically")
+            }
+        }
+    }
+}
+
 dependencies {
     // Kotlin
-    implementation(libs.kotlin.stdlib)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.hocon)
     implementation(libs.kotlinx.coroutines.core)
@@ -109,7 +121,7 @@ tasks.processResources {
 
 tasks.jar {
     manifest {
-        attributes["Main-Class"] = "io.github.footermandev.tritium.Main"
+        attributes["Main-Class"] = "io.github.tritium_launcher.launcher.Main"
         attributes["Implementation-Version"] = tritiumVersion
     }
 }
@@ -119,7 +131,7 @@ tasks.shadowJar {
     archiveClassifier.set("")
     archiveVersion.set("")
     manifest {
-        attributes["Main-Class"] = "io.github.footermandev.tritium.Main"
+        attributes["Main-Class"] = "io.github.tritium_launcher.launcher.Main"
         attributes["Implementation-Version"] = tritiumVersion
     }
     transform(XmlAppendingTransformer::class.java){

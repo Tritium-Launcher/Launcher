@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <conversionRule conversionWord="trPrefixColor" converterClass="io.github.footermandev.tritium.logging.AnsiLevelPrefixColorConverter" />
-    <conversionRule conversionWord="trColorReset" converterClass="io.github.footermandev.tritium.logging.AnsiResetConverter" />
+    <conversionRule conversionWord="trPrefixColor" converterClass="io.github.tritium_launcher.launcher.logging.AnsiLevelPrefixColorConverter" />
+    <conversionRule conversionWord="trColorReset" converterClass="io.github.tritium_launcher.launcher.logging.AnsiResetConverter" />
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
             <pattern>%trPrefixColor[%d{HH:mm:ss}] [%thread/%level] [%logger]: %trColorReset%msg%n%ex</pattern>
         </encoder>
     </appender>
-    <appender name="TRITIUM_FILE" class="io.github.footermandev.tritium.logging.LogAppender" />
+    <appender name="TRITIUM_FILE" class="io.github.tritium_launcher.launcher.logging.LogAppender" />
 
     <root level="INFO">
         <appender-ref ref="CONSOLE" />
