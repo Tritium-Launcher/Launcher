@@ -379,6 +379,7 @@ jobs:
             --main-jar tritium.jar `
             --main-class "${{ env.MAIN_CLASS }}" `
             --app-version "${{ steps.version.outputs.app_version }}" `
+            --icon "packaging/windows/jpackage/${{ env.APP_NAME }}.ico" `
             --dest package
 
           $cfgFile = Get-ChildItem -Path "package" -Recurse -Filter "${{ env.APP_NAME }}.cfg" | Select-Object -First 1
@@ -403,7 +404,7 @@ jobs:
               if (-not $replaced) {
                 $newLines += "app.classpath=$classpath"
               }
-              Set-Content -Path $cfgFile.FullName -Value $newLines -Encoding utf8
+              [System.IO.File]::WriteAllLines($cfgFile.FullName, $newLines, [System.Text.UTF8Encoding]::new($false))
               Write-Host "Updated launcher classpath in $($cfgFile.FullName)"
             } else {
               Write-Host "No qt-lib-*.jar files found in launcher app dir: $appDir"
@@ -425,9 +426,12 @@ jobs:
             --vendor "FooterManDev" `
             --app-version "${{ steps.version.outputs.app_version }}" `
             --app-image "package/${{ env.APP_NAME }}" `
+            --icon "packaging/windows/jpackage/${{ env.APP_NAME }}.ico" `
+            --resource-dir "packaging/windows/jpackage" `
             --win-menu `
             --win-shortcut `
             --win-dir-chooser `
+            --win-per-user-install `
             --win-upgrade-uuid "${{ env.WINDOWS_UPGRADE_UUID }}" `
             --dest dist
 
