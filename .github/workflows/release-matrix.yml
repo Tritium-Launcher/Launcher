@@ -642,7 +642,7 @@ jobs:
     needs: release
     permissions:
       contents: read
-    if: needs.release.result == 'success' && secrets.WINGET_CREATE_GITHUB_TOKEN != ''
+    if: needs.release.result == 'success' && github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true') && vars.HAS_WINGET_CREATE_GITHUB_TOKEN == 'true'
     steps:
       - name: Download wingetcreate
         shell: pwsh
@@ -657,6 +657,15 @@ jobs:
           TAG_NAME: ${{ needs.release.outputs.tag_name }}
         run: |
           $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_TOKEN)) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN is not set. Skipping Winget submission."
+            exit 0
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TAG_NAME)) {
+            throw "Release tag output is empty; cannot submit Winget manifest."
+          }
 
           $version = $env:TAG_NAME.TrimStart('v')
           $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$($env:TAG_NAME)/tritium-windows-x64.msi"
