@@ -427,7 +427,6 @@ jobs:
             --app-version "${{ steps.version.outputs.app_version }}" `
             --app-image "package/${{ env.APP_NAME }}" `
             --icon "packaging/windows/jpackage/${{ env.APP_NAME }}.ico" `
-            --resource-dir "packaging/windows/jpackage" `
             --win-menu `
             --win-shortcut `
             --win-dir-chooser `
