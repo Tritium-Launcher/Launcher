@@ -385,7 +385,15 @@ jobs:
           $cfgFile = Get-ChildItem -Path "package" -Recurse -Filter "${{ env.APP_NAME }}.cfg" | Select-Object -First 1
           if ($cfgFile) {
             $appDir = $cfgFile.DirectoryName
-            $qtLibJars = Get-ChildItem -Path $appDir -Filter "qt-lib-*.jar" | Sort-Object Name
+            $bundledQtLibJars = Get-ChildItem -Path "build/libs" -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
+            if ($bundledQtLibJars.Count -eq 0) {
+              throw "No qt-lib-*.jar files were generated in build/libs; Qt deployment is incomplete."
+            }
+            foreach ($jar in $bundledQtLibJars) {
+              Copy-Item -Path $jar.FullName -Destination (Join-Path $appDir $jar.Name) -Force
+            }
+
+            $qtLibJars = Get-ChildItem -Path $appDir -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
             if ($qtLibJars.Count -gt 0) {
               $classpath = '$APPDIR/tritium.jar'
               foreach ($jar in $qtLibJars) {
@@ -405,9 +413,11 @@ jobs:
                 $newLines += "app.classpath=$classpath"
               }
               [System.IO.File]::WriteAllLines($cfgFile.FullName, $newLines, [System.Text.UTF8Encoding]::new($false))
+              Write-Host "Launcher classpath: $classpath"
+              $qtLibJars | ForEach-Object { Write-Host "App-image includes Qt jar: $($_.Name)" }
               Write-Host "Updated launcher classpath in $($cfgFile.FullName)"
             } else {
-              Write-Host "No qt-lib-*.jar files found in launcher app dir: $appDir"
+              throw "No qt-lib-*.jar files found in launcher app dir after copy: $appDir"
             }
           } else {
             Write-Host "Launcher config file not found for classpath patching."
