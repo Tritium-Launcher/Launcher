@@ -14,7 +14,7 @@ plugins {
 ksp { arg("verbose", "true") }
 
 group = "io.github.tritium_launcher.launcher"
-version = "0.1.4"
+version = "0.1.5"
 val tritiumVersion = project.version.toString()
 
 val os: OperatingSystem = OperatingSystem.current()

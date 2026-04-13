@@ -26,6 +26,8 @@ env:
   JAVA_VERSION: "21"
   APP_NAME: Tritium
   MAIN_CLASS: io.github.tritium_launcher.launcher.Main
+  WINGET_PACKAGE_IDENTIFIER: TritiumLauncher.Tritium
+  WINDOWS_UPGRADE_UUID: "36525b46-a7ad-4ff2-8be7-b760908f7d83"
 
 jobs:
   build:
@@ -364,7 +366,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
 
-      - name: Package Windows Portable Bundle
+      - name: Package Windows Bundles
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -372,6 +374,7 @@ jobs:
           jpackage `
             --type app-image `
             --name "${{ env.APP_NAME }}" `
+            --vendor "FooterManDev" `
             --input build/libs `
             --main-jar tritium.jar `
             --main-class "${{ env.MAIN_CLASS }}" `
@@ -415,6 +418,24 @@ jobs:
           Copy-Item "third_party/licenses/*" "package/${{ env.APP_NAME }}/licenses/"
 
           Compress-Archive -Path "package/${{ env.APP_NAME }}/*" -DestinationPath "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.zip" -Force
+
+          jpackage `
+            --type msi `
+            --name "${{ env.APP_NAME }}" `
+            --vendor "FooterManDev" `
+            --app-version "${{ steps.version.outputs.app_version }}" `
+            --app-image "package/${{ env.APP_NAME }}" `
+            --win-menu `
+            --win-shortcut `
+            --win-dir-chooser `
+            --win-upgrade-uuid "${{ env.WINDOWS_UPGRADE_UUID }}" `
+            --dest dist
+
+          $msi = Get-ChildItem -Path dist -Filter "*.msi" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $msi) {
+            throw "Failed to find generated MSI in dist/."
+          }
+          Move-Item -Path $msi.FullName -Destination "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.msi" -Force
 
       - name: Package macOS Portable Bundle
         if: runner.os == 'macOS'
@@ -551,10 +572,12 @@ jobs:
   release:
     name: Publish Release
     runs-on: ubuntu-24.04
+    outputs:
+      tag_name: ${{ steps.tag.outputs.name }}
     permissions:
       contents: write
     needs: build
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != ''))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -574,9 +597,20 @@ jobs:
       - name: Resolve Release Tag
         id: tag
         shell: bash
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
         run: |
           set -euo pipefail
-          raw="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1 || true)"
+          raw=""
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            raw="${GITHUB_REF#refs/tags/v}"
+          fi
+          if [[ -z "$raw" && "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && -n "${DISPATCH_TAG:-}" ]]; then
+            raw="${DISPATCH_TAG#v}"
+          fi
+          if [[ -z "$raw" ]]; then
+            raw="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1 || true)"
+          fi
           numeric="$(echo "$raw" | sed -E 's/[^0-9.]+/./g; s/\.+/./g; s/^\.//; s/\.$//')"
           if [[ -z "$numeric" ]]; then
             echo "Unable to resolve numeric version from build.gradle.kts version='$raw'" >&2
@@ -601,3 +635,51 @@ jobs:
           generate_release_notes: true
           files: |
             release-assets/*
+
+  winget:
+    name: Submit Winget Manifest
+    runs-on: windows-2025
+    needs: release
+    permissions:
+      contents: read
+    if: needs.release.result == 'success' && secrets.WINGET_CREATE_GITHUB_TOKEN != ''
+    steps:
+      - name: Download wingetcreate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Invoke-WebRequest "https://aka.ms/wingetcreate/latest" -OutFile "wingetcreate.exe"
+
+      - name: Submit Winget update (x64)
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.release.outputs.tag_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = $env:TAG_NAME.TrimStart('v')
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$($env:TAG_NAME)/tritium-windows-x64.msi"
+          $prTitle = "Update ${{ env.WINGET_PACKAGE_IDENTIFIER }} to $version"
+
+          $available = $false
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $installerUrl -Method Head | Out-Null
+              $available = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 15
+            }
+          }
+          if (-not $available) {
+            throw "MSI asset is not reachable at $installerUrl"
+          }
+
+          .\wingetcreate.exe update "${{ env.WINGET_PACKAGE_IDENTIFIER }}" `
+            --version "$version" `
+            --urls "$installerUrl" `
+            --submit `
+            --token "$env:WINGET_TOKEN" `
+            --prtitle "$prTitle" `
+            --no-open
