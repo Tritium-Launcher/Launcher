@@ -23,3 +23,19 @@ In its current form, Tritium is able to:
 * Use LSPs for specific file types
 
 There is much more planned, check out the [TODO Project](https://github.com/orgs/Tritium-Launcher/projects/1) to see current progress.
+
+
+## How to Download and Run
+Tritium is currently supported on Windows and Linux x64, with macOS and ARM builds to be released in the future.
+
+<p/>
+
+You can install Tritium from the Arch User Repository at [tritium-launcher-bin](https://aur.archlinux.org/packages/tritium-launcher-bin/), WinGet, or by downloading builds from [Releases](https://github.com/Tritium-Launcher/Launcher/releases).
+<p/>
+
+Alternatively, you can install builds from specific [commits](https://github.com/Tritium-Launcher/Launcher/actions). Select the workflow run triggered by the commit, and scroll to the Artifacts section.
+
+### Requirements
+* **6+ core CPU**
+* At least **16 GB RAM**. Tritium itself will use ~**4 GB** itself, but to also run Modded Minecraft requires more.
+* At least **30 GB** available storage.
