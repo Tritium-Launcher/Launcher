@@ -554,6 +554,114 @@ jobs:
           files: |
             release-assets/*
 
+  aur:
+    name: Update AUR Package
+    runs-on: ubuntu-24.04
+    needs: release
+    permissions:
+      contents: read
+    if: needs.release.result == 'success' && github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AUR SSH
+        shell: bash
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_AUTOMATION_READY: ${{ vars.AUR_AUTOMATION_READY }}
+        run: |
+          set -euo pipefail
+          if [[ "${AUR_AUTOMATION_READY:-}" != "true" ]]; then
+            echo "AUR_AUTOMATION_READY is not true. Skipping AUR update."
+            exit 0
+          fi
+          if [[ -z "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "AUR_SSH_PRIVATE_KEY is not set. Skipping AUR update."
+            exit 0
+          fi
+
+          install -dm700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Sync AUR package files
+        shell: bash
+        env:
+          AUR_AUTOMATION_READY: ${{ vars.AUR_AUTOMATION_READY }}
+          TAG_NAME: ${{ needs.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          if [[ "${AUR_AUTOMATION_READY:-}" != "true" ]]; then
+            exit 0
+          fi
+
+          if [[ -z "${TAG_NAME:-}" ]]; then
+            echo "Release tag output is empty; cannot update AUR package." >&2
+            exit 1
+          fi
+
+          version="${TAG_NAME#v}"
+          aur_repo_dir="$RUNNER_TEMP/aur-tritium-launcher-bin"
+          installer_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/tritium-linux-x64.tar.gz"
+
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" \
+            git clone ssh://aur@aur.archlinux.org/tritium-launcher-bin.git "$aur_repo_dir"
+
+          cp packaging/aur/tritium-launcher-bin/LICENSE "$aur_repo_dir/"
+          cp packaging/aur/tritium-launcher-bin/tritium-launcher-bin.desktop "$aur_repo_dir/"
+          cp packaging/aur/tritium-launcher-bin/tritium-launcher.png "$aur_repo_dir/"
+          cp packaging/aur/tritium-launcher-bin/tritium-launcher.svg "$aur_repo_dir/"
+          cp packaging/aur/tritium-launcher-bin/PKGBUILD "$aur_repo_dir/"
+
+          curl -fsSL -o "$RUNNER_TEMP/tritium-linux-x64.tar.gz" "$installer_url"
+          tarball_sha="$(sha256sum "$RUNNER_TEMP/tritium-linux-x64.tar.gz" | awk '{print $1}')"
+
+          python3 - "$aur_repo_dir/PKGBUILD" "$version" "$tarball_sha" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          pkgbuild = Path(sys.argv[1])
+          version = sys.argv[2]
+          tarball_sha = sys.argv[3]
+          text = pkgbuild.read_text()
+
+          text, version_count = re.subn(r'^pkgver=.*$', f'pkgver={version}', text, count=1, flags=re.MULTILINE)
+          if version_count != 1:
+              raise SystemExit('Failed to update pkgver in PKGBUILD')
+
+          text, sha_count = re.subn(
+              r"(sha256sums=\(\s*\n\s*')[^']+(')",
+              rf"\1{tarball_sha}\2",
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if sha_count != 1:
+              raise SystemExit('Failed to update source tarball sha256 in PKGBUILD')
+
+          pkgbuild.write_text(text)
+          PY
+
+          (
+            cd "$aur_repo_dir"
+            makepkg --printsrcinfo > .SRCINFO
+
+            if git diff --quiet; then
+              echo "AUR package is already up to date."
+              exit 0
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add PKGBUILD .SRCINFO LICENSE tritium-launcher-bin.desktop tritium-launcher.png tritium-launcher.svg
+            git commit -m "Update to ${version}"
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push origin master
+          )
+
   winget:
     name: Submit Winget Manifest
     runs-on: windows-2025
