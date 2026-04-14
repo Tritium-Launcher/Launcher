@@ -120,6 +120,9 @@ tasks.processResources {
 }
 
 tasks.jar {
+    archiveBaseName.set("tritium-app")
+    archiveClassifier.set("")
+    archiveVersion.set("")
     manifest {
         attributes["Main-Class"] = "io.github.tritium_launcher.launcher.Main"
         attributes["Implementation-Version"] = tritiumVersion
@@ -137,6 +140,15 @@ tasks.shadowJar {
     transform(XmlAppendingTransformer::class.java){
         resource = "META-INF/qtjambi-deployment.xml"
     }
+}
+
+val preparePackageInput by tasks.registering(Sync::class) {
+    dependsOn(tasks.jar)
+    into(layout.buildDirectory.dir("package-input"))
+    from(tasks.jar.flatMap { it.archiveFile })
+    from(configurations.runtimeClasspath.map { files ->
+        files.filter { it.isFile && it.extension == "jar" }
+    })
 }
 
 val compileKotlin: KotlinCompile by tasks

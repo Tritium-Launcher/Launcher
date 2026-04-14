@@ -167,14 +167,14 @@ jobs:
           echo "value=$qt_version" >> "$GITHUB_OUTPUT"
           echo "Resolved Qt version: $qt_version"
 
-      - name: Build Shadow Jar (Windows)
+      - name: Prepare Package Input (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\gradlew.bat --no-daemon clean shadowJar
+        run: .\gradlew.bat --no-daemon clean preparePackageInput
 
-      - name: Build Shadow Jar (Linux)
+      - name: Prepare Package Input (Linux)
         if: runner.os == 'Linux'
-        run: ./gradlew --no-daemon clean shadowJar
+        run: ./gradlew --no-daemon clean preparePackageInput
 
       - name: Bundle Qt Libraries (Windows)
         if: runner.os == 'Windows'
@@ -237,9 +237,9 @@ jobs:
           Invoke-WebRequest "$base/qtjambi-native-$qtPlatform/$env:QT_VERSION/qtjambi-native-$qtPlatform-$env:QT_VERSION.jar" -OutFile "$toolsDir\\qtjambi-native-$qtPlatform-$env:QT_VERSION.jar"
 
           $cp = "$toolsDir\\qtjambi-deployer-$env:QT_VERSION.jar;$toolsDir\\qtjambi-$env:QT_VERSION.jar;$toolsDir\\qtjambi-native-$qtPlatform-$env:QT_VERSION.jar"
-          java "-Djava.library.path=$qtLibDir" -cp $cp io.qt.qtjambi.deployer.Main qt "--qtdir=$qtDir" "--platform=$qtPlatform" "--target-version=$env:QT_VERSION" -d "$PWD\\build\\libs"
+          java "-Djava.library.path=$qtLibDir" -cp $cp io.qt.qtjambi.deployer.Main qt "--qtdir=$qtDir" "--platform=$qtPlatform" "--target-version=$env:QT_VERSION" -d "$PWD\\build\\package-input"
 
-          Get-ChildItem "$PWD\\build\\libs\\qt-lib-*.jar" | ForEach-Object { Write-Host "Bundled: $($_.Name)" }
+          Get-ChildItem "$PWD\\build\\package-input\\qt-lib-*.jar" | ForEach-Object { Write-Host "Bundled: $($_.Name)" }
 
       - name: Bundle Qt Libraries (Linux)
         if: runner.os == 'Linux'
@@ -302,9 +302,9 @@ jobs:
             --qtdir="$qt_dir" \
             --platform="$qt_platform" \
             --target-version="$QT_VERSION" \
-            -d "$PWD/build/libs"
+            -d "$PWD/build/package-input"
 
-          ls -1 build/libs/qt-lib-*.jar
+          ls -1 build/package-input/qt-lib-*.jar
 
       - name: Prepare Dist
         shell: bash
@@ -321,10 +321,11 @@ jobs:
             --type app-image `
             --name "${{ env.APP_NAME }}" `
             --vendor "FooterManDev" `
-            --input build/libs `
-            --main-jar tritium.jar `
+            --input build/package-input `
+            --main-jar tritium-app.jar `
             --main-class "${{ env.MAIN_CLASS }}" `
             --app-version "${{ steps.version.outputs.app_version }}" `
+            --java-options "-Dio.qt.deploymentdir=user" `
             --icon "packaging/windows/jpackage/${{ env.APP_NAME }}.ico" `
             --dest package
 
@@ -334,9 +335,9 @@ jobs:
           }
 
           $appDir = $cfgFile.DirectoryName
-          $bundledQtLibJars = Get-ChildItem -Path "build/libs" -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
+          $bundledQtLibJars = Get-ChildItem -Path "build/package-input" -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
           if ($bundledQtLibJars.Count -eq 0) {
-            throw "No qt-lib-*.jar files were generated in build/libs; Qt deployment is incomplete."
+            throw "No qt-lib-*.jar files were generated in build/package-input; Qt deployment is incomplete."
           }
 
           $appQtLibJars = Get-ChildItem -Path $appDir -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
@@ -344,12 +345,18 @@ jobs:
             throw "Generated Windows app-image is missing qt-lib-*.jar files in $appDir."
           }
 
+          $nativeQtJambiJars = Get-ChildItem -Path $appDir -Filter "qtjambi-native-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
+          if ($nativeQtJambiJars.Count -eq 0) {
+            throw "Generated Windows app-image is missing qtjambi-native-*.jar files in $appDir."
+          }
+
           $cfgClasspathLines = Get-Content $cfgFile.FullName | Where-Object { $_ -match '^app\.classpath=' }
-          if (-not ($cfgClasspathLines | Where-Object { $_ -match 'qt-lib-' })) {
-            throw "Generated Windows launcher config does not reference any qt-lib-*.jar entries: $($cfgFile.FullName)"
+          if (-not ($cfgClasspathLines | Where-Object { $_ -match 'qt-lib-' }) -or -not ($cfgClasspathLines | Where-Object { $_ -match 'qtjambi-native-' })) {
+            throw "Generated Windows launcher config does not reference the required QtJambi runtime jars: $($cfgFile.FullName)"
           }
 
           $cfgClasspathLines | ForEach-Object { Write-Host "Launcher cfg: $($_)" }
+          $nativeQtJambiJars | ForEach-Object { Write-Host "App-image includes QtJambi native jar: $($_.Name)" }
           $appQtLibJars | ForEach-Object { Write-Host "App-image includes Qt jar: $($_.Name)" }
 
           New-Item -ItemType Directory -Force "package/${{ env.APP_NAME }}/licenses" | Out-Null
@@ -388,8 +395,8 @@ jobs:
           jpackage \
             --type app-image \
             --name "${{ env.APP_NAME }}" \
-            --input build/libs \
-            --main-jar tritium.jar \
+            --input build/package-input \
+            --main-jar tritium-app.jar \
             --main-class "${{ env.MAIN_CLASS }}" \
             --app-version "${{ steps.version.outputs.app_version }}" \
             --dest package
@@ -401,9 +408,9 @@ jobs:
           fi
 
           app_dir="$(dirname "$cfg_file")"
-          bundled_qt_lib_jars="$(find build/libs -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
+          bundled_qt_lib_jars="$(find build/package-input -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
           if [[ -z "$bundled_qt_lib_jars" ]]; then
-            echo "No qt-lib-*.jar files were generated in build/libs; Qt deployment is incomplete." >&2
+            echo "No qt-lib-*.jar files were generated in build/package-input; Qt deployment is incomplete." >&2
             exit 1
           fi
 
@@ -413,13 +420,20 @@ jobs:
             exit 1
           fi
 
+          app_native_qtjambi_jars="$(find "$app_dir" -maxdepth 1 -type f -name 'qtjambi-native-*.jar' -exec basename {} \; | sort || true)"
+          if [[ -z "$app_native_qtjambi_jars" ]]; then
+            echo "Generated Linux app-image is missing qtjambi-native-*.jar files in $app_dir." >&2
+            exit 1
+          fi
+
           cfg_classpath_lines="$(grep '^app\.classpath=' "$cfg_file" || true)"
-          if ! grep -q 'qt-lib-' <<< "$cfg_classpath_lines"; then
-            echo "Generated Linux launcher config does not reference any qt-lib-*.jar entries: $cfg_file" >&2
+          if ! grep -q 'qt-lib-' <<< "$cfg_classpath_lines" || ! grep -q 'qtjambi-native-' <<< "$cfg_classpath_lines"; then
+            echo "Generated Linux launcher config does not reference the required QtJambi runtime jars: $cfg_file" >&2
             exit 1
           fi
 
           printf '%s\n' "$cfg_classpath_lines" | sed 's/^/Launcher cfg: /'
+          printf '%s\n' "$app_native_qtjambi_jars" | sed 's/^/App-image includes QtJambi native jar: /'
           printf '%s\n' "$app_qt_lib_jars" | sed 's/^/App-image includes Qt jar: /'
 
           mkdir -p "package/${{ env.APP_NAME }}/licenses"

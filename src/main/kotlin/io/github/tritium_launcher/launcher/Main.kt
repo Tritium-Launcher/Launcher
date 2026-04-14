@@ -44,46 +44,55 @@ class Main {
         @JvmStatic
         fun main(vararg args: String) {
             Logs.prepareForLaunch()
-            mainLogger.info("Starting Tritium (argCount={})", args.size)
-            Platform.printSystemDetails(mainLogger)
-
-            if (QApplication.instance() == null) QApplication.initialize(args)
-            appInstance = QApplication.instance() as QApplication
-            Hotkeys.install()
-
-            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, true)
-            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, true)
-
-
-            referenceWidget = QWidget()
-
-            manageArguments(args.toList())
-
-            ThemeMngr.init()
-
-            val loaders = startHost(TConstants.EXT_DIR)
-            Git.init()
-
-            attemptAutoSignIn()
-
-            val baseStyle = QStyleFactory.create("Fusion") ?: QApplication.style()
-            QApplication.setStyle(TritiumProxyStyle(baseStyle))
-            ThemeMngr.setTheme(ThemeMngr.currentThemeId)
-
-            applyStartupFont()
-
-            QApplication.setWindowIcon(QIcon(resourceIcon("icons/tritium.png", TConstants.classLoader)!!))
-            QApplication.setDesktopFileName("tritium")
-            QApplication.setApplicationName("tritium")
-            TApp.aboutToQuit.connect { handleRunningGamesOnExit() }
-
-            Dashboard.createAndShow()
-
-            runBlocking {
-                runLowPriorityTasks()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                mainLogger.error("Uncaught exception on thread {}", thread.name, throwable)
             }
 
-            QApplication.exec()
+            try {
+                mainLogger.info("Starting Tritium (argCount={})", args.size)
+                Platform.printSystemDetails(mainLogger)
+
+                if (QApplication.instance() == null) QApplication.initialize(args)
+                appInstance = QApplication.instance() as QApplication
+                Hotkeys.install()
+
+                QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, true)
+                QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, true)
+
+
+                referenceWidget = QWidget()
+
+                manageArguments(args.toList())
+
+                ThemeMngr.init()
+
+                val loaders = startHost(TConstants.EXT_DIR)
+                Git.init()
+
+                attemptAutoSignIn()
+
+                val baseStyle = QStyleFactory.create("Fusion") ?: QApplication.style()
+                QApplication.setStyle(TritiumProxyStyle(baseStyle))
+                ThemeMngr.setTheme(ThemeMngr.currentThemeId)
+
+                applyStartupFont()
+
+                QApplication.setWindowIcon(QIcon(resourceIcon("icons/tritium.png", TConstants.classLoader)!!))
+                QApplication.setDesktopFileName("tritium")
+                QApplication.setApplicationName("tritium")
+                TApp.aboutToQuit.connect { handleRunningGamesOnExit() }
+
+                Dashboard.createAndShow()
+
+                runBlocking {
+                    runLowPriorityTasks()
+                }
+
+                QApplication.exec()
+            } catch (t: Throwable) {
+                mainLogger.error("Fatal startup failure", t)
+                throw t
+            }
         }
 
         private fun handleRunningGamesOnExit() {
