@@ -35,7 +35,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,27 +42,9 @@ jobs:
           - runner: ubuntu-24.04
             platform: linux
             arch: x64
-            experimental: false
-          - runner: ubuntu-24.04-arm
-            platform: linux
-            arch: arm64
-            experimental: false
           - runner: windows-2025
             platform: windows
             arch: x64
-            experimental: false
-          - runner: windows-11-arm
-            platform: windows
-            arch: arm64
-            experimental: true
-          - runner: macos-15-intel
-            platform: macos
-            arch: x64
-            experimental: false
-          - runner: macos-15
-            platform: macos
-            arch: arm64
-            experimental: false
 
     steps:
       - name: Checkout
@@ -169,16 +150,9 @@ jobs:
           build_num="$((10#$build_number))"
 
           app_version="${major_num}.${minor_num}.${build_num}"
-          mac_major_num="$major_num"
-          if [[ "$mac_major_num" -eq 0 ]]; then
-            mac_major_num=1
-          fi
-          mac_app_version="${mac_major_num}.${minor_num}.${build_num}"
 
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
-          echo "mac_app_version=$mac_app_version" >> "$GITHUB_OUTPUT"
           echo "Resolved app version: $app_version"
-          echo "Resolved macOS package version: $mac_app_version"
 
       - name: Resolve Qt Version
         id: qtver
@@ -198,8 +172,8 @@ jobs:
         shell: pwsh
         run: .\gradlew.bat --no-daemon clean shadowJar
 
-      - name: Build Shadow Jar (Non-Windows)
-        if: runner.os != 'Windows'
+      - name: Build Shadow Jar (Linux)
+        if: runner.os == 'Linux'
         run: ./gradlew --no-daemon clean shadowJar
 
       - name: Bundle Qt Libraries (Windows)
@@ -213,28 +187,18 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade aqtinstall
 
-          if ("${{ matrix.arch }}" -eq "arm64") {
-            $qtHost = "windows_arm64"
-          } else {
-            $qtHost = "windows"
-          }
-
+          $qtHost = "windows"
           $archOutput = python -m aqt list-qt $qtHost desktop --arch $env:QT_VERSION
           $archs = $archOutput -split '\s+' | Where-Object { $_ -ne '' }
 
-          if ("${{ matrix.arch }}" -eq "arm64") {
-            $qtArch = $archs | Where-Object { $_ -match 'arm64' } | Select-Object -First 1
-            $qtPlatform = "windows-arm64"
-          } else {
-            $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' -and $_ -notmatch 'arm64' } | Select-Object -First 1
-            if (-not $qtArch) {
-              $qtArch = $archs | Where-Object { $_ -match '64' -and $_ -notmatch 'arm64' } | Select-Object -First 1
-            }
-            $qtPlatform = "windows-x64"
+          $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' } | Select-Object -First 1
+          if (-not $qtArch) {
+            $qtArch = $archs | Where-Object { $_ -match '64' } | Select-Object -First 1
           }
+          $qtPlatform = "windows-x64"
 
           if (-not $qtArch) {
-            throw "Unable to resolve Qt architecture for windows/${{ matrix.arch }}. Available: $($archs -join ', ')"
+            throw "Unable to resolve Qt architecture for windows/x64. Available: $($archs -join ', ')"
           }
 
           $modulesOutput = python -m aqt list-qt $qtHost desktop --modules $env:QT_VERSION $qtArch
@@ -277,8 +241,8 @@ jobs:
 
           Get-ChildItem "$PWD\\build\\libs\\qt-lib-*.jar" | ForEach-Object { Write-Host "Bundled: $($_.Name)" }
 
-      - name: Bundle Qt Libraries (Non-Windows)
-        if: runner.os != 'Windows'
+      - name: Bundle Qt Libraries (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         env:
           QT_VERSION: ${{ steps.qtver.outputs.value }}
@@ -287,27 +251,9 @@ jobs:
 
           python3 -m pip install --user --break-system-packages --upgrade pip aqtinstall
 
-          if [[ "${{ matrix.platform }}" == "linux" ]]; then
-            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-              host="linux_arm64"
-            else
-              host="linux"
-            fi
-            qt_platform="linux-${{ matrix.arch }}"
-            if [[ "${{ matrix.arch }}" == "x64" ]]; then
-              arch_pattern='(linux_)?gcc_64'
-            else
-              arch_pattern='(arm64|aarch64)'
-            fi
-          else
-            host="mac"
-            qt_platform="macos"
-            if [[ "${{ matrix.arch }}" == "x64" ]]; then
-              arch_pattern='clang_64'
-            else
-              arch_pattern='(clang_arm64|arm64|clang_64)'
-            fi
-          fi
+          host="linux"
+          qt_platform="linux-x64"
+          arch_pattern='(linux_)?gcc_64'
 
           if ! archs="$(python3 -m aqt list-qt "$host" desktop --arch "$QT_VERSION" | tr ' \r\t' '\n' | sed '/^$/d')"; then
             echo "Failed to query Qt architectures for host '$host'." >&2
@@ -315,7 +261,7 @@ jobs:
           fi
           qt_arch="$(echo "$archs" | grep -E "$arch_pattern" | head -n1 || true)"
           if [[ -z "$qt_arch" ]]; then
-            echo "Unable to resolve Qt architecture for $host/${{ matrix.arch }}." >&2
+            echo "Unable to resolve Qt architecture for linux/x64." >&2
             echo "$archs" >&2
             exit 1
           fi
@@ -383,45 +329,28 @@ jobs:
             --dest package
 
           $cfgFile = Get-ChildItem -Path "package" -Recurse -Filter "${{ env.APP_NAME }}.cfg" | Select-Object -First 1
-          if ($cfgFile) {
-            $appDir = $cfgFile.DirectoryName
-            $bundledQtLibJars = Get-ChildItem -Path "build/libs" -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
-            if ($bundledQtLibJars.Count -eq 0) {
-              throw "No qt-lib-*.jar files were generated in build/libs; Qt deployment is incomplete."
-            }
-            foreach ($jar in $bundledQtLibJars) {
-              Copy-Item -Path $jar.FullName -Destination (Join-Path $appDir $jar.Name) -Force
-            }
-
-            $qtLibJars = Get-ChildItem -Path $appDir -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
-            if ($qtLibJars.Count -gt 0) {
-              $classpath = '$APPDIR/tritium.jar'
-              foreach ($jar in $qtLibJars) {
-                $classpath += ';$APPDIR/' + $jar.Name
-              }
-              $lines = Get-Content $cfgFile.FullName
-              $replaced = $false
-              $newLines = foreach ($line in $lines) {
-                if ($line -match '^app\.classpath=') {
-                  $replaced = $true
-                  "app.classpath=$classpath"
-                } else {
-                  $line
-                }
-              }
-              if (-not $replaced) {
-                $newLines += "app.classpath=$classpath"
-              }
-              [System.IO.File]::WriteAllLines($cfgFile.FullName, $newLines, [System.Text.UTF8Encoding]::new($false))
-              Write-Host "Launcher classpath: $classpath"
-              $qtLibJars | ForEach-Object { Write-Host "App-image includes Qt jar: $($_.Name)" }
-              Write-Host "Updated launcher classpath in $($cfgFile.FullName)"
-            } else {
-              throw "No qt-lib-*.jar files found in launcher app dir after copy: $appDir"
-            }
-          } else {
-            Write-Host "Launcher config file not found for classpath patching."
+          if (-not $cfgFile) {
+            throw "Launcher config file not found in generated Windows app-image."
           }
+
+          $appDir = $cfgFile.DirectoryName
+          $bundledQtLibJars = Get-ChildItem -Path "build/libs" -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
+          if ($bundledQtLibJars.Count -eq 0) {
+            throw "No qt-lib-*.jar files were generated in build/libs; Qt deployment is incomplete."
+          }
+
+          $appQtLibJars = Get-ChildItem -Path $appDir -Filter "qt-lib-*.jar" -ErrorAction SilentlyContinue | Sort-Object Name
+          if ($appQtLibJars.Count -eq 0) {
+            throw "Generated Windows app-image is missing qt-lib-*.jar files in $appDir."
+          }
+
+          $cfgClasspathLines = Get-Content $cfgFile.FullName | Where-Object { $_ -match '^app\.classpath=' }
+          if (-not ($cfgClasspathLines | Where-Object { $_ -match 'qt-lib-' })) {
+            throw "Generated Windows launcher config does not reference any qt-lib-*.jar entries: $($cfgFile.FullName)"
+          }
+
+          $cfgClasspathLines | ForEach-Object { Write-Host "Launcher cfg: $($_)" }
+          $appQtLibJars | ForEach-Object { Write-Host "App-image includes Qt jar: $($_.Name)" }
 
           New-Item -ItemType Directory -Force "package/${{ env.APP_NAME }}/licenses" | Out-Null
           Copy-Item "LICENSE" "package/${{ env.APP_NAME }}/"
@@ -450,48 +379,6 @@ jobs:
           }
           Move-Item -Path $msi.FullName -Destination "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.msi" -Force
 
-      - name: Package macOS Portable Bundle
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p package
-          jpackage \
-            --type app-image \
-            --name "${{ env.APP_NAME }}" \
-            --input build/libs \
-            --main-jar tritium.jar \
-            --main-class "${{ env.MAIN_CLASS }}" \
-            --app-version "${{ steps.version.outputs.mac_app_version }}" \
-            --dest package
-
-          cfg_file="$(find package -type f -name "${{ env.APP_NAME }}.cfg" | head -n1 || true)"
-          if [[ -n "$cfg_file" ]]; then
-            app_dir="$(dirname "$cfg_file")"
-            qt_lib_jars="$(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
-            if [[ -n "$qt_lib_jars" ]]; then
-              classpath="\$APPDIR/tritium.jar"
-              while IFS= read -r jar; do
-                [[ -z "$jar" ]] && continue
-                classpath="${classpath}:\$APPDIR/${jar}"
-              done <<< "$qt_lib_jars"
-              awk -v cp="$classpath" 'BEGIN{r=0} /^app\.classpath=/{print "app.classpath=" cp; r=1; next} {print} END{if(!r) print "app.classpath=" cp}' "$cfg_file" > "${cfg_file}.tmp"
-              mv "${cfg_file}.tmp" "$cfg_file"
-              echo "Updated launcher classpath in $cfg_file"
-            else
-              echo "No qt-lib-*.jar files found in launcher app dir: $app_dir"
-            fi
-          else
-            echo "Launcher config file not found for classpath patching."
-          fi
-
-          mkdir -p "package/${{ env.APP_NAME }}.app/Contents/Resources/licenses"
-          cp LICENSE "package/${{ env.APP_NAME }}.app/Contents/Resources/"
-          cp THIRD_PARTY_NOTICES.md "package/${{ env.APP_NAME }}.app/Contents/Resources/"
-          cp third_party/licenses/* "package/${{ env.APP_NAME }}.app/Contents/Resources/licenses/"
-
-          tar -C package -czf "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "${{ env.APP_NAME }}.app"
-
       - name: Package Linux Portable Bundles
         if: runner.os == 'Linux'
         shell: bash
@@ -508,24 +395,32 @@ jobs:
             --dest package
 
           cfg_file="$(find package -type f -name "${{ env.APP_NAME }}.cfg" | head -n1 || true)"
-          if [[ -n "$cfg_file" ]]; then
-            app_dir="$(dirname "$cfg_file")"
-            qt_lib_jars="$(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
-            if [[ -n "$qt_lib_jars" ]]; then
-              classpath="\$APPDIR/tritium.jar"
-              while IFS= read -r jar; do
-                [[ -z "$jar" ]] && continue
-                classpath="${classpath}:\$APPDIR/${jar}"
-              done <<< "$qt_lib_jars"
-              awk -v cp="$classpath" 'BEGIN{r=0} /^app\.classpath=/{print "app.classpath=" cp; r=1; next} {print} END{if(!r) print "app.classpath=" cp}' "$cfg_file" > "${cfg_file}.tmp"
-              mv "${cfg_file}.tmp" "$cfg_file"
-              echo "Updated launcher classpath in $cfg_file"
-            else
-              echo "No qt-lib-*.jar files found in launcher app dir: $app_dir"
-            fi
-          else
-            echo "Launcher config file not found for classpath patching."
+          if [[ -z "$cfg_file" ]]; then
+            echo "Launcher config file not found in generated Linux app-image." >&2
+            exit 1
           fi
+
+          app_dir="$(dirname "$cfg_file")"
+          bundled_qt_lib_jars="$(find build/libs -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
+          if [[ -z "$bundled_qt_lib_jars" ]]; then
+            echo "No qt-lib-*.jar files were generated in build/libs; Qt deployment is incomplete." >&2
+            exit 1
+          fi
+
+          app_qt_lib_jars="$(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
+          if [[ -z "$app_qt_lib_jars" ]]; then
+            echo "Generated Linux app-image is missing qt-lib-*.jar files in $app_dir." >&2
+            exit 1
+          fi
+
+          cfg_classpath_lines="$(grep '^app\.classpath=' "$cfg_file" || true)"
+          if ! grep -q 'qt-lib-' <<< "$cfg_classpath_lines"; then
+            echo "Generated Linux launcher config does not reference any qt-lib-*.jar entries: $cfg_file" >&2
+            exit 1
+          fi
+
+          printf '%s\n' "$cfg_classpath_lines" | sed 's/^/Launcher cfg: /'
+          printf '%s\n' "$app_qt_lib_jars" | sed 's/^/App-image includes Qt jar: /'
 
           mkdir -p "package/${{ env.APP_NAME }}/licenses"
           cp LICENSE "package/${{ env.APP_NAME }}/"
@@ -534,11 +429,7 @@ jobs:
 
           tar -C package -czf "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "${{ env.APP_NAME }}"
 
-          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-            appimage_arch="aarch64"
-          else
-            appimage_arch="x86_64"
-          fi
+          appimage_arch="x86_64"
 
           if curl -fsSL -o appimagetool.AppImage \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${appimage_arch}.AppImage"; then
