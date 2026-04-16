@@ -30,7 +30,10 @@ Tritium is currently supported on Windows and Linux x64, with macOS and ARM buil
 
 <p/>
 
-You can install Tritium from the Arch User Repository at [tritium-launcher-bin](https://aur.archlinux.org/packages/tritium-launcher-bin/), WinGet, or by downloading builds from [Releases](https://github.com/Tritium-Launcher/Launcher/releases).
+You can install Tritium from:
+* Arch User Repository at [tritium-launcher-bin](https://aur.archlinux.org/packages/tritium-launcher-bin/)
+* WinGet `winget install TritiumLauncher.Tritium`
+* GitHub [Releases](https://github.com/Tritium-Launcher/Launcher/releases).
 <p/>
 
 Alternatively, you can install builds from specific [commits](https://github.com/Tritium-Launcher/Launcher/actions). Select the workflow run triggered by the commit, and scroll to the Artifacts section.
