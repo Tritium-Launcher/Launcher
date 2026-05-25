@@ -7,7 +7,7 @@ import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.currentDpr
 import io.github.tritium_launcher.launcher.extension.kubejs.KubeJSIntelligenceService
 import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.registrydb.*
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
@@ -15,10 +15,6 @@ import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.TTooltip
 import io.github.tritium_launcher.launcher.ui.widgets.TTooltipStyle
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.gridLayout
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.toolButton
 import io.qt.core.*
 import io.qt.gui.*
 import io.qt.widgets.*
@@ -62,7 +58,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
 
     override fun createTitleBarAccessory(project: ProjectBase, dock: DockWidget, onStateChanged: () -> Unit): QWidget? {
         val controller = controllers[dock] ?: return null
-        return toolButton {
+        return QToolButton().apply {
             icon = TIcons.Rerun.icon
             iconSize = QSize(16, 16)
             autoRaise = true
@@ -93,6 +89,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
         val root = QWidget()
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+        private val logger = logger()
         private val outerLayout = QVBoxLayout(root)
         private val header = QWidget(root)
         private val headerLayout = QHBoxLayout(header)
@@ -101,24 +98,24 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
         private val nextPageButton = QToolButton(header)
 
         private val mainContainer = QWidget(root)
-        private val mainLayout = hBoxLayout {
-            0.m
-            widgetSpacing = 0
+        private val mainLayout = QHBoxLayout(mainContainer).apply {
+            setContentsMargins(0, 0, 0, 0)
+            setSpacing(0)
         }
         private val leftContainer = QWidget(mainContainer)
-        private val leftLayout = hBoxLayout(leftContainer) {
-            0.m
-            widgetSpacing = 0
+        private val leftLayout = QVBoxLayout(leftContainer).apply {
+            setContentsMargins(0, 0, 0, 0)
+            setSpacing(0)
         }
         private val viewport = GridViewport(this, leftContainer)
         private val viewportLayout = QVBoxLayout(viewport)
         private val statusLabel = QLabel(viewport)
         private val gridWidget = QWidget(viewport)
-        private val gridLayout = gridLayout(gridWidget) {
+        private val gridLayout = QGridLayout(gridWidget).apply {
             sizeConstraint = QLayout.SizeConstraint.SetNoConstraint
         }
 
-        val detailPanel = DetailPanel(mainContainer, this)
+        internal val detailPanel = DetailPanel(mainContainer, this)
 
         private val footer = QWidget(leftContainer)
         private val footerLayout = QHBoxLayout(footer)
@@ -150,13 +147,13 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             footer.objectName = "registryBrowserFooter"
             searchField.objectName = "registryBrowserSearch"
 
-            outerLayout.contentsMargins = 4.m
-            outerLayout.widgetSpacing = 4
+            outerLayout.setContentsMargins(4, 4, 4, 4)
+            outerLayout.setSpacing(4)
 
-            headerLayout.contentsMargins = 2.m
-            headerLayout.widgetSpacing = 4
-            footerLayout.contentsMargins = 2.m
-            footerLayout.widgetSpacing = 4
+            headerLayout.setContentsMargins(2, 2, 2, 2)
+            headerLayout.setSpacing(4)
+            footerLayout.setContentsMargins(2, 2, 2, 2)
+            footerLayout.setSpacing(4)
 
             prevPageButton.text = "<"
             prevPageButton.autoRaise = false
@@ -175,14 +172,14 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             headerLayout.addWidget(pageLabel, 1)
             headerLayout.addWidget(nextPageButton)
 
-            viewportLayout.contentsMargins = 0.m
-            viewportLayout.widgetSpacing = 0
+            viewportLayout.setContentsMargins(0, 0, 0, 0)
+            viewportLayout.setSpacing(0)
 
             statusLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
             statusLabel.wordWrap = true
             statusLabel.margin = 12
 
-            gridLayout.contentsMargins = 2.m
+            gridLayout.setContentsMargins(2, 2, 2, 2)
             gridLayout.setHorizontalSpacing(2)
             gridLayout.setVerticalSpacing(2)
             gridLayout.setAlignment(Qt.Alignment(Qt.AlignmentFlag.AlignTop, Qt.AlignmentFlag.AlignLeft))
@@ -390,7 +387,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
                         if (restoreId != null) {
                             restoreAfterLoad = null
                             if (items.any { it.id == restoreId }) {
-                                selectItem(restoreId)
+                                selectItem(restoreId, addToHistory = false)
                             }
                         }
                     }
@@ -542,7 +539,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             gridWidget.isVisible = true
         }
 
-        fun selectItem(id: String) {
+        fun selectItem(id: String, addToHistory: Boolean = true) {
             if (selectedItemId == id) return
             selectedItemId = id
             updateSelectionState()
@@ -682,8 +679,8 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
         private var currentScope: CoroutineScope? = null
 
         init {
-            outerLayout.contentsMargins = 0.m
-            outerLayout.widgetSpacing = 0
+            outerLayout.setContentsMargins(0, 0, 0, 0)
+            outerLayout.setSpacing(0)
 
             // Tab bar
             tabBarLayout.setContentsMargins(4, 4, 4, 0)
@@ -709,12 +706,12 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
 
             val infoSection = QWidget()
             val infoLayout = QVBoxLayout(infoSection)
-            infoLayout.contentsMargins = 0.m
+            infoLayout.setContentsMargins(0, 0, 0, 0)
             infoLayout.setSpacing(6)
 
             val headerRow = QWidget()
             val headerRowLayout = QHBoxLayout(headerRow)
-            headerRowLayout.contentsMargins = 0.m
+            headerRowLayout.setContentsMargins(0, 0, 0, 0)
             headerRowLayout.setSpacing(8)
 
             itemIconLabel.setFixedSize(64, 64)
@@ -723,8 +720,8 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
 
             val textColumn = QWidget()
             val textColumnLayout = QVBoxLayout(textColumn)
-            textColumnLayout.contentsMargins = 0.m
-            textColumnLayout.widgetSpacing = 4
+            textColumnLayout.setContentsMargins(0, 0, 0, 0)
+            textColumnLayout.setSpacing(4)
 
             itemNameLabel.font = QFont(itemNameLabel.font).apply { setPointSize(12); setBold(true) }
             itemNameLabel.wordWrap = true
@@ -746,14 +743,14 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             infoLayout.addWidget(headerRow)
 
             // Dynamic properties section
-            dynamicPropsLayout.contentsMargins = 0.m
-            dynamicPropsLayout.widgetSpacing = 4
+            dynamicPropsLayout.setContentsMargins(0, 0, 0, 0)
+            dynamicPropsLayout.setSpacing(4)
             dynamicPropsLayout.addStretch(1)
             infoLayout.addWidget(dynamicPropsContainer)
 
             // Tags section (at bottom)
             tagsLayout.setContentsMargins(0, 8, 0, 0)
-            tagsLayout.widgetSpacing = 4
+            tagsLayout.setSpacing(4)
             tagsLayout.addStretch(1)
             infoLayout.addWidget(tagsContainer)
 
@@ -763,13 +760,13 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             outerLayout.addWidget(detailScrollArea, 1)
 
             // Recipe tab
-            recipeContainerLayout.contentsMargins = 0.m
-            recipeContainerLayout.widgetSpacing = 0
+            recipeContainerLayout.setContentsMargins(0, 0, 0, 0)
+            recipeContainerLayout.setSpacing(0)
 
             recipeScrollArea.widgetResizable = true
             recipeScrollArea.setWidget(recipeContent)
             recipeScrollArea.frameShape = QFrame.Shape.NoFrame
-            recipeLayout.contentsMargins = 4.m
+            recipeLayout.setContentsMargins(4, 4, 4, 4)
             recipeLayout.setSpacing(2)
             recipeLayout.addStretch(1)
 
@@ -838,7 +835,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             when (value) {
                 is JsonPrimitive -> {
                     val displayValue = if (value.isString) value.content else value.toString()
-                    val label = label("${"  ".repeat(indent)}${displayKey}: $displayValue") {
+                    val label = QLabel("${"  ".repeat(indent)}${displayKey}: $displayValue").apply {
                         styleSheet = "color: ${TColors.Text}; padding-left: ${indentPx}px;"
                         wordWrap = true
                     }
@@ -847,7 +844,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
                 }
 
                 is JsonArray -> {
-                    val label = label("${"  ".repeat(indent)}${displayKey}:") {
+                    val label = QLabel("${"  ".repeat(indent)}${displayKey}:").apply {
                         styleSheet = "color: ${TColors.Text}; padding-left: ${indentPx}px;"
                     }
                     dynamicLabels.add(label)
@@ -858,7 +855,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
                 }
 
                 is JsonObject -> {
-                    val label = label("${"  ".repeat(indent)}${displayKey}:") {
+                    val label = QLabel("${"  ".repeat(indent)}${displayKey}:").apply {
                         styleSheet = "color: ${TColors.Accent}; font-weight: bold; padding-left: ${indentPx}px;"
                     }
                     dynamicLabels.add(label)
@@ -914,7 +911,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
                 dynamicPropsLayout.takeAt(0)?.widget()?.disposeLater()
             }
 
-            jsonObj?.forEach { (key, value) ->
+            jsonObj?.forEach { key, value ->
                 if (key in skipKeys) return@forEach
                 addDynamicField(key, value, 0)
             }
@@ -1052,7 +1049,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             }
 
             if (filteredRecipes.isEmpty()) {
-                recipeLayout.addWidget(label("No recipes found.") {
+                recipeLayout.addWidget(QLabel("No recipes found.").apply {
                     styleSheet = "color: ${TColors.Subtext};"
                 })
             } else {
@@ -1072,7 +1069,7 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
 
     private class RecipeRow(
         private val recipe: RegistryRecipeSummary,
-        detail: RegistryRecipeDetail?,
+        private val detail: RegistryRecipeDetail?,
         snapshotDir: VPath?,
         private val controller: Controller,
         scope: CoroutineScope
@@ -1081,15 +1078,15 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
 
         init {
             val layout = QHBoxLayout(this)
-            layout.contentsMargins = 4.m
+            layout.setContentsMargins(4, 4, 4, 4)
             layout.setSpacing(8)
 
-            val iconLabel = label {
+            val iconLabel = QLabel().apply {
                 setFixedSize(28, 28)
                 alignment = Qt.Alignment(Qt.AlignmentFlag.AlignCenter)
             }
 
-            val recipeTypeLabel = label(recipe.recipeType ?: "Recipe") {
+            val recipeTypeLabel = QLabel(recipe.recipeType ?: "Recipe").apply {
                 font = QFont(font).apply { setBold(true) }
             }
 
@@ -1121,6 +1118,8 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
                     if (isActive) {
                         if (pixmap != null) {
                             iconLabel.pixmap = pixmap
+                        } else {
+                            iconLabel.text = abbreviation(recipe.recipeType ?: "Recipe")
                         }
                     }
                 }
@@ -1484,6 +1483,16 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
                         text = ""
                     }
                 }
+            }
+        }
+
+        private fun abbreviation(item: RegistryItemSummary): String {
+            val base = item.displayName?.trim().takeUnless { it.isNullOrBlank() } ?: item.path
+            val words = base.split(Regex("\\s+|[_-]")).filter { it.isNotBlank() }
+            return when {
+                words.size >= 2 -> (words[0].first().toString() + words[1].first().toString()).uppercase()
+                base.length >= 2 -> base.take(2).uppercase()
+                else -> base.uppercase()
             }
         }
     }

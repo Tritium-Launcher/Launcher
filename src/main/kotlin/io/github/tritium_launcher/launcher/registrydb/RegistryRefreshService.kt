@@ -166,8 +166,7 @@ object RegistryRefreshService {
         val cmd = listOf(
             "cargo", "run", "--release", "--",
             "--input", locations.registryObjs.toAbsolute().toString(),
-            "--output", locations.database.toAbsolute().toString(),
-            "--typings-output", locations.typingsDb.toAbsolute().toString()
+            "--output", locations.database.toAbsolute().toString()
         )
 
         logger.info("Running registry-builder: {}", cmd.joinToString(" "))
@@ -245,15 +244,13 @@ object RegistryRefreshService {
         val root = project.projectDir.resolve("registryObjs").toAbsolute()
         return RegistryLocations(
             registryObjs = root,
-            database = root.resolve("game_registry.db"),
-            typingsDb = root.resolve("kubejs_typings.db")
+            database = root.resolve("game_registry.db")
         )
     }
 
     private data class RegistryLocations(
         val registryObjs: VPath,
-        val database: VPath,
-        val typingsDb: VPath
+        val database: VPath
     )
 
     @Serializable
