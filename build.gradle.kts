@@ -135,6 +135,7 @@ dependencies {
 val nativeLibDir = layout.buildDirectory.dir("native/grammar")
 val generatedGrammarDir = layout.buildDirectory.dir("generated")
 val grammarCmakeLists = generatedGrammarDir.map { it.file("CMakeLists.txt") }
+val grammarSourceDir = layout.projectDirectory.dir("tree-sitter-javascript/src")
 val nativeGrammarLibName: String = when {
     os.isWindows -> "ktreesitter-javascript.dll"
     os.isMacOsX  -> "libktreesitter-javascript.dylib"
@@ -148,7 +149,7 @@ val patchCmakeLists by tasks.registering {
     outputs.file(grammarCmakeLists)
     doLast {
         val cmakeFile = grammarCmakeLists.get().asFile
-        val content = cmakeFile.readText()
+        val content = cmakeFile.readText().replace('\\', '/')
         val fixed = content.replace(
             "../../tree-sitter-javascript/bindings/c",
             "../../tree-sitter-javascript/bindings/c ../../tree-sitter-javascript/bindings/c/tree_sitter"
@@ -164,10 +165,13 @@ val compileGrammarNative by tasks.registering {
     dependsOn(tasks.named("generateGrammarFiles"), patchCmakeLists)
     val cmakeBuildDir = nativeLibDir.get().asFile
     val srcDir = generatedGrammarDir.get().asFile
-    inputs.dir(layout.projectDirectory.dir("tree-sitter-javascript/src"))
+    inputs.dir(grammarSourceDir).optional()
     inputs.dir(srcDir.resolve("src/jni"))
     inputs.file(srcDir.resolve("CMakeLists.txt"))
     outputs.file(cmakeBuildDir.resolve(nativeGrammarLibName))
+    onlyIf {
+        grammarSourceDir.asFile.exists()
+    }
     doLast {
         cmakeBuildDir.mkdirs()
         exec {
