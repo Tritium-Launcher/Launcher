@@ -189,9 +189,32 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade aqtinstall
 
+          function Invoke-Aqt {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string[]] $Arguments,
+              [int] $Attempts = 5
+            )
+
+            for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+              Write-Host "Running: python -m aqt $($Arguments -join ' ') (attempt $attempt/$Attempts)"
+              $output = & python -m aqt @Arguments 2>&1
+              $exitCode = $LASTEXITCODE
+              if ($exitCode -eq 0) {
+                return $output
+              }
+
+              Write-Host ($output -join [Environment]::NewLine)
+              if ($attempt -eq $Attempts) {
+                throw "python -m aqt $($Arguments -join ' ') failed with exit code $exitCode after $Attempts attempts."
+              }
+              Start-Sleep -Seconds (10 * $attempt)
+            }
+          }
+
           $qtHost = "windows"
-          $archOutput = python -m aqt list-qt $qtHost desktop --arch $env:QT_VERSION
-          $archs = $archOutput -split '\s+' | Where-Object { $_ -ne '' }
+          $archOutput = Invoke-Aqt -Arguments @("list-qt", $qtHost, "desktop", "--arch", $env:QT_VERSION)
+          $archs = ($archOutput -join " ") -split '\s+' | Where-Object { $_ -ne '' }
 
           $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' } | Select-Object -First 1
           if (-not $qtArch) {
@@ -203,13 +226,13 @@ jobs:
             throw "Unable to resolve Qt architecture for windows/x64. Available: $($archs -join ', ')"
           }
 
-          $modulesOutput = python -m aqt list-qt $qtHost desktop --modules $env:QT_VERSION $qtArch
+          $modulesOutput = Invoke-Aqt -Arguments @("list-qt", $qtHost, "desktop", "--modules", $env:QT_VERSION, $qtArch)
           if ($modulesOutput -match '\bqtsvg\b') {
             Write-Host "Installing Qt with optional module qtsvg"
-            python -m aqt install-qt $qtHost desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-m", "qtsvg", "-O", "$PWD\\.qt") | Out-Host
           } else {
             Write-Host "qtsvg module not available for $qtHost/$qtArch on Qt $env:QT_VERSION; installing base Qt only"
-            python -m aqt install-qt $qtHost desktop $env:QT_VERSION $qtArch -O "$PWD\\.qt"
+            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-O", "$PWD\\.qt") | Out-Host
           }
 
           $qtRoot = "$PWD\\.qt\\$env:QT_VERSION"

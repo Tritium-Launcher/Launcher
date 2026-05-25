@@ -5,6 +5,7 @@ import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxLanguage
+import kotlinx.coroutines.*
 import org.eclipse.lsp4j.*
 import org.eclipse.lsp4j.launch.LSPLauncher
 import org.eclipse.lsp4j.services.LanguageServer
@@ -47,7 +48,7 @@ object LSPMngr {
             }
         }
         if(connection == null) return null
-        refCounts.computeIfAbsent(key) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+        refCounts.computeIfAbsent(key) { AtomicInteger(0) }.incrementAndGet()
         return connection
     }
 
@@ -122,6 +123,8 @@ class LSPConnection(
     private val onFailedStart: ((LSPConnection) -> Unit)? = null
 ) {
     private var process: Process? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var watcherJob: Job? = null
     lateinit var server: LanguageServer
     val client = TritiumLanguageClient()
     val ready = CompletableFuture<Unit>()
@@ -143,14 +146,15 @@ class LSPConnection(
 
             // Watch for unexpected process exit so adapters can check isClosed
             val proc = process!!
-            Thread.ofPlatform().name("lsp-watcher-$langId").daemon(true).start {
+            watcherJob = scope.launch {
                 try {
-                    val exitCode = proc.waitFor()
+                    val exitCode = runInterruptible { proc.waitFor() }
                     if (!isClosed) {
                         logger.info("LSP '{}' process exited unexpectedly (code {})", langId, exitCode)
                         isClosed = true
                     }
-                } catch (_: InterruptedException) { }
+                } catch (_: InterruptedException) {
+                }
             }
 
             val launcher = LSPLauncher.createClientLauncher(
@@ -218,6 +222,8 @@ class LSPConnection(
             return
         }
         isClosed = true
+        watcherJob?.cancel()
+        scope.cancel()
         try {
             val shutdown = if(this::server.isInitialized) {
                 server.shutdown()
