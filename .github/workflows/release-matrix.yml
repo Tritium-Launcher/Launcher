@@ -189,31 +189,25 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade aqtinstall
 
+          $aqtCfg = "$PWD\.qt\aqt-settings.ini"
+          New-Item -ItemType Directory -Force "$PWD\.qt" | Out-Null
+          @"
+          [requests]
+          INSECURE_NOT_FOR_PRODUCTION_ignore_hash : True
+          "@ | Out-File -FilePath $aqtCfg -Encoding ascii
+
           function Invoke-Aqt {
-            param(
-              [Parameter(Mandatory = $true)]
-              [string[]] $Arguments,
-              [int] $Attempts = 5
-            )
-
-            for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-              Write-Host "Running: python -m aqt $($Arguments -join ' ') (attempt $attempt/$Attempts)"
-              $output = & python -m aqt @Arguments 2>&1
-              $exitCode = $LASTEXITCODE
-              if ($exitCode -eq 0) {
-                return $output
-              }
-
-              Write-Host ($output -join [Environment]::NewLine)
-              if ($attempt -eq $Attempts) {
-                throw "python -m aqt $($Arguments -join ' ') failed with exit code $exitCode after $Attempts attempts."
-              }
-              Start-Sleep -Seconds (10 * $attempt)
+            param([string[]] $Arguments)
+            Write-Host "Running: python -m aqt -c `"$aqtCfg`" $($Arguments -join ' ')"
+            & python -m aqt "-c" $aqtCfg @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "aqt $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
             }
           }
 
           $qtHost = "windows"
-          $archOutput = Invoke-Aqt -Arguments @("list-qt", $qtHost, "desktop", "--arch", $env:QT_VERSION)
+          $archOutput = & python -m aqt "-c" $aqtCfg "list-qt" $qtHost "desktop" "--arch" $env:QT_VERSION 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "list-qt --arch failed with exit code $LASTEXITCODE" }
           $archs = ($archOutput -join " ") -split '\s+' | Where-Object { $_ -ne '' }
 
           $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' } | Select-Object -First 1
@@ -226,13 +220,14 @@ jobs:
             throw "Unable to resolve Qt architecture for windows/x64. Available: $($archs -join ', ')"
           }
 
-          $modulesOutput = Invoke-Aqt -Arguments @("list-qt", $qtHost, "desktop", "--modules", $env:QT_VERSION, $qtArch)
+          $modulesOutput = & python -m aqt "-c" $aqtCfg "list-qt" $qtHost "desktop" "--modules" $env:QT_VERSION $qtArch 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "list-qt --modules failed with exit code $LASTEXITCODE" }
           if ($modulesOutput -match '\bqtsvg\b') {
             Write-Host "Installing Qt with optional module qtsvg"
-            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-m", "qtsvg", "-O", "$PWD\\.qt") | Out-Host
+            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-m", "qtsvg", "-O", "$PWD\\.qt")
           } else {
             Write-Host "qtsvg module not available for $qtHost/$qtArch on Qt $env:QT_VERSION; installing base Qt only"
-            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-O", "$PWD\\.qt") | Out-Host
+            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-O", "$PWD\\.qt")
           }
 
           $qtRoot = "$PWD\\.qt\\$env:QT_VERSION"
