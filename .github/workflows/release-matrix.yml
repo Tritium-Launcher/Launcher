@@ -189,16 +189,27 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade aqtinstall
 
-          # aqtinstall's list-qt commands consistently fail on Windows GHA
-          # runners (cannot verify Updates.xml checksum).  Bypass discovery
-          # and use the standard MSVC 2022 x64 architecture directly.
           $qtHost = "windows"
-          $qtArch = "win64_msvc2022_64"
+          $archOutput = & python -m aqt list-qt $qtHost desktop --arch $env:QT_VERSION 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "list-qt --arch failed" }
+          $archs = ($archOutput -join " ") -split '\s+' | Where-Object { $_ -ne '' }
+
+          $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' } | Select-Object -First 1
+          if (-not $qtArch) { $qtArch = $archs | Where-Object { $_ -match '64' } | Select-Object -First 1 }
+          if (-not $qtArch) { throw "Unable to resolve Qt architecture. Available: $($archs -join ', ')" }
           $qtPlatform = "windows-x64"
 
-          Write-Host "Installing Qt $env:QT_VERSION for $qtArch"
-          & python -m aqt install-qt --UNSAFE-ignore-hash $qtHost desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
-          if ($LASTEXITCODE -ne 0) { throw "install-qt (with qtsvg) failed with exit code $LASTEXITCODE" }
+          $modulesOutput = & python -m aqt list-qt $qtHost desktop --modules $env:QT_VERSION $qtArch 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "list-qt --modules failed" }
+          if ($modulesOutput -match '\bqtsvg\b') {
+            Write-Host "Installing Qt with optional module qtsvg"
+            & python -m aqt install-qt $qtHost desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+            if ($LASTEXITCODE -ne 0) { throw "install-qt (with qtsvg) failed" }
+          } else {
+            Write-Host "qtsvg module not available; installing base Qt only"
+            & python -m aqt install-qt $qtHost desktop $env:QT_VERSION $qtArch -O "$PWD\\.qt"
+            if ($LASTEXITCODE -ne 0) { throw "install-qt failed" }
+          }
 
           $qtRoot = "$PWD\\.qt\\$env:QT_VERSION"
           $qtDir = Join-Path $qtRoot $qtArch
