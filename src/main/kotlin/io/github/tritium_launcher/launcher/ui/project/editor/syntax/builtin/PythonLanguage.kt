@@ -2,8 +2,8 @@ package io.github.tritium_launcher.launcher.ui.project.editor.syntax.builtin
 
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.matches
-import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxLanguage
-import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxRule
+import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.launcher.ui.project.editor.syntax.*
 
 /**
  * Basic Python syntax definition with multiple LSP command options.
@@ -15,31 +15,47 @@ class PythonLanguage : SyntaxLanguage {
     override val displayName: String = "Python"
 
     override val rules: List<SyntaxRule> = listOf(
-        // Keywords
+        SyntaxRule(Regex("#[^\n]*"), "Comment"),
+        SyntaxRule(Regex("\"\"\".*?\"\"\"|'''.*?'''", RegexOption.DOT_MATCHES_ALL), "Comment"), // docstrings
+        SyntaxRule(Regex("\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b"), "Number"),
         SyntaxRule(
-            Regex("\\b(False|None|True|and|as|assert|async|await|break|case|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|match|nonlocal|not|or|pass|raise|return|try|while|with|yield)\\b"),
-            "Keyword"
+            Regex(
+                "f?b?\"\"\".*?\"\"\"|f?b?'''.*?'''|f?b?\"(?:[^\"\\\\]|\\\\.)*\"|f?b?'(?:[^'\\\\]|\\\\.)*'",
+                RegexOption.DOT_MATCHES_ALL
+            ), "String"
         ),
-
-        // Numbers
-        SyntaxRule(
-            Regex("(?<!\\w)(?:0[bB][01](?:_?[01])*|0[oO][0-7](?:_?[0-7])*|0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|\\d(?:_?\\d)*(?:\\.\\d(?:_?\\d)*)?(?:[eE][+-]?\\d(?:_?\\d)*)?|\\.\\d(?:_?\\d)*(?:[eE][+-]?\\d(?:_?\\d)*)?)(?:[jJ])?(?!\\w)"),
-            "Number"
-        ),
-
-        // Strings (single/double, triple, with prefixes)
-        SyntaxRule(
-            Regex("(?is)(?:r|u|f|fr|rf|b|br|rb|bu|ub)?(?:'''(?:.|\\R)*?'''|\"\"\"(?:.|\\R)*?\"\"\"|'(?:\\\\.|[^'\\\\])*'|\"(?:\\\\.|[^\"\\\\])*\")"),
-            "String"
-        ),
-
-        // Comments (avoid matches inside simple quoted strings)
-        SyntaxRule(Regex("#(?=(?:[^\"']|\"[^\"]*\"|'[^']*')*$).*"), "Comment")
+        SyntaxRule(Regex("[+\\-*/%=<>!&|^~@]+"), "Operator"),
     )
 
-    override val lspCmds: List<List<String>> = listOf(
-        listOf("pyright-langserver", "--stdio"),
-        listOf("pylsp")
+    override val lsp: LSPDefinition = LSPDefinition(
+        servers = listOf(
+            LSPServerDefinition(
+                id = "basedpyright",
+                command = listOf("basedpyright-langserver", "--stdio"),
+                installSpec = LSPInstallSpec(
+                    downloadUrls = mapOf(
+                        Platform.Linux to "https://github.com/detachhead/basedpyright/releases/download/v1.1.350/basedpyright-linux-x64.tar.gz",
+                        Platform.Windows to "https://github.com/detachhead/basedpyright/releases/download/v1.1.350/basedpyright-win-x64.zip"
+                    ),
+                    binaryPath = "bin/basedpyright-langserver"
+                )
+            ),
+            LSPServerDefinition(
+                id = "pyright",
+                command = listOf("pyright-langserver", "--stdio"),
+                installSpec = LSPInstallSpec(
+                    downloadUrls = mapOf(
+                        Platform.Linux to "https://github.com/microsoft/pyright/releases/download/1.1.350/pyright-linux-x64.tar.gz",
+                        Platform.Windows to "https://github.com/microsoft/pyright/releases/download/1.1.350/pyright-win-x64.zip"
+                    ),
+                    binaryPath = "bin/pyright-langserver"
+                )
+            ),
+            LSPServerDefinition(
+                id = "pylsp",
+                command = listOf("pylsp")
+            )
+        )
     )
 
     override fun matches(file: VPath): Boolean = file.extension().matches("py")

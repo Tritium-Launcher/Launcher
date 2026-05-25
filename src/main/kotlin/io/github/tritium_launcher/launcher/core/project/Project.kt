@@ -39,6 +39,10 @@ open class ProjectBase(
     val path: VPath
         get() = projectDir.toAbsolute()
 
+    fun fromProject(path: String): VPath = projectDir.resolve(path)
+
+    fun fromProject(path: VPath): VPath = projectDir.resolve(path)
+
     /**
      * Resolve the icon path, expanding a leading "~" to the user home directory.
      */

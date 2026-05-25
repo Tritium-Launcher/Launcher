@@ -8,12 +8,13 @@ import java.util.*
 
 object ExtensionDirectoryLoader {
 
-    data class Result(val modules: List<Module>, val loaders: List<Closeable>)
+    data class Result(val modules: List<Module>, val extensions: List<Extension>, val loaders: List<Closeable>)
 
     fun loadFrom(dir: VPath): Result {
-        if(!dir.exists() || !dir.isDir()) return Result(emptyList(), emptyList())
+        if(!dir.exists() || !dir.isDir()) return Result(emptyList(), emptyList(), emptyList())
 
         val modules = mutableListOf<Module>()
+        val extensions = mutableListOf<Extension>()
         val loaders = mutableListOf<Closeable>()
 
         dir.listFiles { f -> f.isFile() && f.hasExtension("jar") }.forEach { jar ->
@@ -22,6 +23,7 @@ object ExtensionDirectoryLoader {
             try {
                 val sl = ServiceLoader.load(Extension::class.java, loader)
                 val found = sl.iterator().asSequence().toList()
+                extensions += found
                 found.forEach { modules += it.modules }
                 loaders += loader
             } catch (_: Throwable) {
@@ -29,6 +31,6 @@ object ExtensionDirectoryLoader {
             }
         }
 
-        return Result(modules, loaders)
+        return Result(modules, extensions, loaders)
     }
 }

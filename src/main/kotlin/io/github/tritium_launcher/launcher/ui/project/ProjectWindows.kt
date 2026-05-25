@@ -7,8 +7,7 @@ import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.qt.core.QThread
 import io.qt.widgets.QApplication
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -16,9 +15,13 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object ProjectWindows {
     private val logger = logger()
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val openWindows = ConcurrentHashMap<String, CompletableDeferred<ProjectViewWindow>>()
 
+    /**
+     * Controls whether project opening always creates a new window or prefers reuse.
+     */
     enum class OpenMode {
         NEW_WINDOW,
         CURRENT_WINDOW
@@ -42,6 +45,9 @@ object ProjectWindows {
         openProjectInternal(project, closeDashboard)
     }
 
+    /**
+     * Opens a project while preferring to replace the active or otherwise reusable project window.
+     */
     private fun openProjectInCurrentWindow(project: ProjectBase, closeDashboard: Boolean) {
         val replacement = preferredWindowForReuse()
         if (replacement == null) {
@@ -71,6 +77,9 @@ object ProjectWindows {
         }
     }
 
+    /**
+     * Opens, creates, or focuses the canonical window entry for [project].
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun openProjectInternal(project: ProjectBase, closeDashboard: Boolean) {
         val canonical = project.path.toString().trim()
@@ -78,29 +87,63 @@ object ProjectWindows {
         val newDeferred = CompletableDeferred<ProjectViewWindow>()
         val prevDeferred = openWindows.putIfAbsent(canonical, newDeferred)
 
-        if(prevDeferred == null) {
-            createWindowAsync(project, newDeferred, closeDashboard)
+        if (prevDeferred == null) {
+            scope.launch {
+                try {
+                    val (state, files) = withContext(Dispatchers.IO) {
+                        loadProjectInitialData(project)
+                    }
+
+                    createWindowAsync(project, newDeferred, closeDashboard, state, files)
+                } catch (t: Throwable) {
+                    logger.error("Failed to load project asynchronously for '{}'", project.name, t)
+                    newDeferred.completeExceptionally(t)
+                    openWindows.remove(canonical)
+                }
+            }
             return
         }
 
         // If an earlier creation is still pending, cancel it and start fresh to avoid deadlocks.
-        if(!prevDeferred.isCompleted) {
+        if (!prevDeferred.isCompleted) {
             logger.warn("Previous project window creation still pending for '{}', restarting.", project.name)
             prevDeferred.cancel()
             openWindows[canonical] = newDeferred
-            createWindowAsync(project, newDeferred, closeDashboard)
+            scope.launch {
+                try {
+                    val (state, files) = withContext(Dispatchers.IO) {
+                        loadProjectInitialData(project)
+                    }
+                    createWindowAsync(project, newDeferred, closeDashboard, state, files)
+                } catch (t: Throwable) {
+                    logger.error("Failed to load project asynchronously for '{}'", project.name, t)
+                    newDeferred.completeExceptionally(t)
+                    openWindows.remove(canonical)
+                }
+            }
             return
         }
 
-        if(prevDeferred.isCancelled) {
+        if (prevDeferred.isCancelled) {
             openWindows[canonical] = newDeferred
-            createWindowAsync(project, newDeferred, closeDashboard)
+            scope.launch {
+                try {
+                    val (state, files) = withContext(Dispatchers.IO) {
+                        loadProjectInitialData(project)
+                    }
+                    createWindowAsync(project, newDeferred, closeDashboard, state, files)
+                } catch (t: Throwable) {
+                    logger.error("Failed to load project asynchronously for '{}'", project.name, t)
+                    newDeferred.completeExceptionally(t)
+                    openWindows.remove(canonical)
+                }
+            }
             return
         }
 
         // Otherwise re-show existing window.
         prevDeferred.invokeOnCompletion {
-            if(prevDeferred.isCompleted) {
+            if (prevDeferred.isCompleted) {
                 try {
                     val w = prevDeferred.getCompleted()
                     runOnGuiThread {
@@ -108,11 +151,16 @@ object ProjectWindows {
                             w.show()
                             w.raise()
                             w.activateWindow()
-                            if(closeDashboard) {
+                            if (closeDashboard) {
                                 Dashboard.I?.close()
                             }
                         } catch (t: Throwable) {
-                            logger.debug("Failed to focus existing {} for '{}'", ProjectViewWindow::class.qualifiedName, project.name, t)
+                            logger.debug(
+                                "Failed to focus existing {} for '{}'",
+                                ProjectViewWindow::class.qualifiedName,
+                                project.name,
+                                t
+                            )
                         }
                     }
                 } catch (t: Throwable) {
@@ -123,6 +171,9 @@ object ProjectWindows {
         return
     }
 
+    /**
+     * Returns the best candidate window to reuse for current-window project opens.
+     */
     private fun preferredWindowForReuse(): ProjectViewWindow? {
         val active = QApplication.activeWindow() as? ProjectViewWindow
         if (active != null && active.isVisible) return active
@@ -175,26 +226,36 @@ object ProjectWindows {
         }
     }
 
+    /**
+     * Ensures project window creation happens on the Qt GUI thread.
+     */
     private fun createWindowAsync(
         project: ProjectBase,
         deferred: CompletableDeferred<ProjectViewWindow>,
-        closeDashboard: Boolean
+        closeDashboard: Boolean,
+        initialState: ProjectUIState? = null,
+        initialFiles: List<String>? = null
     ) {
         if (isGuiThread()) {
-            createWindow(project, deferred, closeDashboard)
+            createWindow(project, deferred, closeDashboard, initialState, initialFiles)
             return
         }
 
-        runOnGuiThread { createWindow(project, deferred, closeDashboard) }
+        runOnGuiThread { createWindow(project, deferred, closeDashboard, initialState, initialFiles) }
     }
 
+    /**
+     * Instantiates, shows, and registers a new project window.
+     */
     private fun createWindow(
         project: ProjectBase,
         deferred: CompletableDeferred<ProjectViewWindow>,
-        closeDashboard: Boolean
+        closeDashboard: Boolean,
+        initialState: ProjectUIState? = null,
+        initialFiles: List<String>? = null
     ) {
         try {
-            val window = ProjectViewWindow(project)
+            val window = ProjectViewWindow(project, initialState, initialFiles)
             window.show()
 
             try {
@@ -206,9 +267,10 @@ object ProjectWindows {
 
             deferred.complete(window)
 
-            window.destroyed.connect { openWindows.remove(project.path.toString().trim()) }
-            if(closeDashboard) {
-                Dashboard.I?.close()
+            val canonical = project.path.toString().trim()
+            window.destroyed.connect { openWindows.remove(canonical) }
+            if (closeDashboard) {
+                Dashboard.I?.hide()
             }
         } catch (t: Throwable) {
             deferred.completeExceptionally(t)
@@ -217,6 +279,25 @@ object ProjectWindows {
         }
     }
 
+    private fun loadProjectInitialData(project: ProjectBase): Pair<ProjectUIState?, List<String>?> {
+        return try {
+            val dotTr = project.projectDir.resolve(".tr")
+            val stateFile = dotTr.resolve("tritium-ui.json")
+            if (!stateFile.exists()) {
+                return null to null
+            }
+            val txt = stateFile.readTextOrNull() ?: return null to null
+            val state = ProjectUIState.parseOrNull(txt) ?: return null to null
+            state to state.openFiles
+        } catch (t: Throwable) {
+            logger.warn("Failed to load initial project UI state for '{}'", project.name, t)
+            null to null
+        }
+    }
+
+    /**
+     * Returns whether the current thread is Qt's GUI thread.
+     */
     private fun isGuiThread(): Boolean {
         val app = QApplication.instance() ?: return false
         return QThread.currentThread() == app.thread()

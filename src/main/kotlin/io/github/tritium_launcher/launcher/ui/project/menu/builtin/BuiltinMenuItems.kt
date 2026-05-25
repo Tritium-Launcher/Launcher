@@ -10,6 +10,7 @@ import io.github.tritium_launcher.launcher.platform.CompanionBridge
 import io.github.tritium_launcher.launcher.platform.CompanionBridgeResponse
 import io.github.tritium_launcher.launcher.platform.GameLauncher
 import io.github.tritium_launcher.launcher.platform.GameProcessMngr
+import io.github.tritium_launcher.launcher.registrydb.RegistryRefreshService
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.notifications.NotificationMngr
@@ -30,6 +31,7 @@ import io.qt.gui.QIcon
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import java.nio.file.Files
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Built-in menu items contributed by the core extension.
@@ -198,6 +200,46 @@ object BuiltinMenuItems {
                 }
             }
         }
+    )
+
+    val FileSepAfterRecent = MenuItem(
+        id = "file_sep_after_recent",
+        title = "",
+        parentId = File.id,
+        order = 11,
+        kind = MenuItemKind.SEPARATOR
+    )
+
+    val Save = MenuItem(
+        id = "save",
+        title = "Save",
+        parentId = File.id,
+        order = 12,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+S",
+        action = { ctx ->
+            (ctx.window as? ProjectViewWindow)?.saveActiveEditor()
+        }
+    )
+
+    val SaveAll = MenuItem(
+        id = "save_all",
+        title = "Save All",
+        parentId = File.id,
+        order = 13,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+Shift+S",
+        action = { ctx ->
+            (ctx.window as? ProjectViewWindow)?.saveAllEditors()
+        }
+    )
+
+    val FileSepAfterSave = MenuItem(
+        id = "file_sep_after_save",
+        title = "",
+        parentId = File.id,
+        order = 14,
+        kind = MenuItemKind.SEPARATOR
     )
 
     val CloseProject = MenuItem(
@@ -401,6 +443,19 @@ object BuiltinMenuItems {
         action = { ctx -> adjustFocusedTextWidgetFont(ctx.window, -1) }
     )
 
+    val ViewModBrowser = MenuItem(
+        id = "view_mod_browser",
+        title = "Mod Browser",
+        parentId = View.id,
+        order = 30,
+        kind = MenuItemKind.ACTION,
+        icon = TIcons.Search.icon,
+        enabledResolver = { ctx -> ctx.project?.typeId == "source" },
+        action = { ctx ->
+            (ctx.window as? ProjectViewWindow)?.openModBrowser()
+        }
+    )
+
     val LaunchGame = MenuItem(
         id = "launch_game",
         title = "Launch...",
@@ -508,10 +563,8 @@ object BuiltinMenuItems {
         order = 50,
         kind = MenuItemKind.ACTION,
         action = { ctx ->
-            val project = ctx.project
-            scope.launch {
-                val response = CompanionBridge.sendCommand("dumpRegistry")
-                postBridgeResponse(project, "Dump Registry", response)
+            ctx.project?.let { project ->
+                RegistryRefreshService.triggerRefresh(project)
             }
         }
     )
@@ -647,7 +700,7 @@ object BuiltinMenuItems {
             startDir,
             "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
         )
-        val selectedPath = chosen.result.trim()
+        val selectedPath = chosen?.result?.trim().orEmpty()
         if (selectedPath.isBlank()) return
 
         val selected = VPath.get(selectedPath).expandHome().toAbsolute().normalize()
@@ -891,7 +944,7 @@ object BuiltinMenuItems {
         val end = System.currentTimeMillis() + timeoutMs.coerceAtLeast(0L)
         while (System.currentTimeMillis() < end) {
             if (!GameLauncher.isGameRunning(project)) return true
-            delay(STOP_POLL_INTERVAL_MS)
+            delay(STOP_POLL_INTERVAL_MS.milliseconds)
         }
         return !GameLauncher.isGameRunning(project)
     }
@@ -910,7 +963,7 @@ object BuiltinMenuItems {
         val end = System.currentTimeMillis() + timeoutMs.coerceAtLeast(0L)
         while (System.currentTimeMillis() < end) {
             if (!GameLauncher.isRuntimePreparationActive(project)) return true
-            delay(DOWNLOAD_POLL_INTERVAL_MS)
+            delay(DOWNLOAD_POLL_INTERVAL_MS.milliseconds)
         }
         return !GameLauncher.isRuntimePreparationActive(project)
     }
@@ -949,6 +1002,10 @@ object BuiltinMenuItems {
         NewProjectFromExisting,
         NewProjectFromGit,
         RecentProjects,
+        FileSepAfterRecent,
+        Save,
+        SaveAll,
+        FileSepAfterSave,
         CloseProject,
         FileSepBeforeInvalidate,
         InvalidateCaches,
@@ -966,6 +1023,7 @@ object BuiltinMenuItems {
         ViewToolWindows,
         ViewIncreaseFont,
         ViewDecreaseFont,
+        ViewModBrowser,
         Game,
         LaunchGame,
         StopGame,

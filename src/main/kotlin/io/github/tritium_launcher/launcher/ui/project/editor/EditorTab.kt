@@ -1,7 +1,9 @@
 package io.github.tritium_launcher.launcher.ui.project.editor
 
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.qs
+import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
@@ -38,6 +40,13 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
     var isHovered = false
         set(value) {
             field = value
+            update()
+        }
+
+    var isModified = false
+        set(value) {
+            field = value
+            updateCloseBtn()
             update()
         }
 
@@ -157,9 +166,30 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
 
     private fun updateCloseBtn() {
         closeBtn.isVisible = true
-        closeBtn.isEnabled = showClose
-        closeBtn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, !showClose)
-        closeBtn.icon = if(showClose) TIcons.SmallCross.icon else QIcon()
+        val intensity = CoreSettingValues.editorUnsavedIndicatorIntensity
+        val showUnsavedCircle = isModified && intensity == CoreSettingValues.UnsavedIndicatorIntensity.High && !isHovered
+
+        if (showUnsavedCircle) {
+            closeBtn.isEnabled = true
+            closeBtn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, false)
+            closeBtn.icon = unsavedCircleIcon()
+        } else {
+            closeBtn.isEnabled = showClose
+            closeBtn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, !showClose)
+            closeBtn.icon = if(showClose) TIcons.SmallCross.icon else QIcon()
+        }
+    }
+
+    private fun unsavedCircleIcon(): QIcon {
+        val pixmap = QPixmap(16, 16)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        val painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QBrush(QColor(TColors.Unsaved)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(4, 4, 8, 8)
+        painter.end()
+        return QIcon(pixmap)
     }
 
     override fun paintEvent(event: @Nullable QPaintEvent?) {
@@ -177,7 +207,13 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
 
         if(isSelected) {
             val indicatorHeight = 2
-            painter.fillRect(0, height() - indicatorHeight, width().coerceAtLeast(1), indicatorHeight, QColor(255, 255, 255, 230))
+            val intensity = CoreSettingValues.editorUnsavedIndicatorIntensity
+            val color = if (isModified && intensity == CoreSettingValues.UnsavedIndicatorIntensity.High) {
+                QColor(TColors.Unsaved)
+            } else {
+                QColor(255, 255, 255, 230)
+            }
+            painter.fillRect(0, height() - indicatorHeight, width().coerceAtLeast(1), indicatorHeight, color)
         }
 
         painter.end()

@@ -18,6 +18,10 @@ import io.qt.core.QObject
 import io.qt.core.QTimer
 import io.qt.core.Qt
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
  * Notification Toast stack.
@@ -46,20 +50,20 @@ class Toaster(
     private val cardsById = LinkedHashMap<String, NotificationToastCard>()
     private var refreshQueued = false
 
-    private val unsubscribe: () -> Unit
+    private var unsubscribe: Job? = null
 
     init {
         overlayParent.installEventFilter(parentResizeFilter)
         container.hide()
         container.raise()
 
-        unsubscribe = NotificationMngr.addListener {
-            scheduleRefresh()
+        unsubscribe = CoroutineScope(Dispatchers.Main).launch {
+            NotificationMngr.events.collect { scheduleRefresh() }
         }
 
         window.destroyed.connect {
             overlayParent.removeEventFilter(parentResizeFilter)
-            unsubscribe()
+            unsubscribe?.cancel()
             container.disposeLater()
         }
 

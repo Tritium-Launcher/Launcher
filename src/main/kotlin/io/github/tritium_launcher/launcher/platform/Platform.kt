@@ -1,5 +1,6 @@
 package io.github.tritium_launcher.launcher.platform
 
+import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.mainLogger
 import io.github.tritium_launcher.launcher.toURI
 import kotlinx.io.IOException
@@ -25,6 +26,9 @@ enum class Platform {
         val isMacOS   = current == MacOSX
         val isLinux   = current == Linux
 
+        /**
+         * @throws IOException
+         */
         fun openBrowser(url: String): Boolean {
             try {
                 val desktop = Desktop.getDesktop()
@@ -51,7 +55,12 @@ enum class Platform {
                     else -> {
                         val candidates = listOf(
                             listOf("/usr/bin/xdg-open", url),
-                            listOf("gio", "open", url)
+                            listOf("xdg-open", url),
+                            listOf("gio", "open", url),
+                            listOf("kioclient5", "exec", url),
+                            listOf("kioclient", "exec", url),
+                            listOf("kde-open5", url),
+                            listOf("kde-open", url)
                         )
                         candidates.forEach { cmd ->
                             if(runAndLogProcess(cmd)) {
@@ -63,6 +72,57 @@ enum class Platform {
                 }
             } catch (e: IOException) {
                 throw IllegalStateException("Failed to open browser for URL: $url", e)
+            }
+
+            return false
+        }
+
+        /**
+         * @throws IOException
+         */
+        fun openFile(file: File): Boolean = openFile(file.path)
+
+        /**
+         * @throws IOException
+         */
+        fun openFile(file: VPath): Boolean = openFile(file.toString())
+
+        /**
+         * @throws IOException
+         */
+        fun openFile(path: String): Boolean {
+            try {
+                when(current) {
+                    Windows -> {
+                        val start = listOf("start", path)
+                        val process = runAndLogProcess(start)
+                        if(!process) return false
+                    }
+                    MacOSX -> {
+                        val open = listOf("open", path)
+                        val process = runAndLogProcess(open)
+                        if(!process) return false
+                    }
+                    else -> {
+                        val candidates = listOf(
+                            listOf("/usr/bin/xdg-open", path),
+                            listOf("xdg-open", path),
+                            listOf("gio", "open", path),
+                            listOf("kioclient5", "exec", path),
+                            listOf("kioclient", "exec", path),
+                            listOf("kde-open5", path),
+                            listOf("kde-open", path)
+                        )
+                        candidates.forEach { cmd ->
+                            if(runAndLogProcess(cmd)) {
+                                return true
+                            }
+                        }
+                        return false
+                    }
+                }
+            } catch (e: IOException) {
+                throw IllegalStateException("Failed to open file for: $path", e)
             }
 
             return false

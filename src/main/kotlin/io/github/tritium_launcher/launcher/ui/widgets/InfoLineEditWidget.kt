@@ -56,7 +56,9 @@ class InfoLineEditWidget(
         return popup!!
     }
 
-
+    /**
+     * Show tooltip
+     */
     private fun showPinnedToolTip() {
         if(tipText.isBlank() || !isVisible) return
 
@@ -76,10 +78,6 @@ class InfoLineEditWidget(
         p.raise()
     }
 
-    private fun hidePinnedTip() {
-        popup?.hide()
-    }
-
     override fun focusInEvent(arg__1: @Nullable QFocusEvent?) {
         super.focusInEvent(arg__1)
         if(tipText.isNotBlank()) showPinnedToolTip()
@@ -87,7 +85,7 @@ class InfoLineEditWidget(
 
     override fun focusOutEvent(arg__1: @Nullable QFocusEvent?) {
         super.focusOutEvent(arg__1)
-        hidePinnedTip()
+        popup?.hide()
     }
 
     override fun resizeEvent(event: @Nullable QResizeEvent?) {

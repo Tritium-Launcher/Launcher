@@ -7,6 +7,7 @@ import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.gridLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
@@ -180,6 +181,8 @@ private class GridStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
 
     init {
         root.setContentsMargins(0, 0, 0, 0)
+        AnimatedScrollController.attach(scroll)
+        AnimatedScrollController.attach(freeformPage)
 
         scrollLayout.contentsMargins = QMargins(0, 10, 0, 10)
         scrollLayout.widgetSpacing = 10
@@ -614,6 +617,7 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
     }
 
     init {
+        AnimatedScrollController.attach(list)
         list.itemDoubleClicked.connect { item ->
             val project = item?.data(Qt.ItemDataRole.UserRole) as? ProjectBase ?: return@connect
             if (project.isInvalidCatalogProject()) return@connect
@@ -1131,11 +1135,6 @@ private fun wrapProjectName(project: ProjectBase): String {
         """<br/><span style="color:${TColors.Warning}; font-size:10px;">Invalid project (missing trproj.json)</span>"""
     } else ""
     return "<div style=\"text-align:center; word-break: break-word; overflow-wrap: anywhere;\">$escaped$invalidSuffix</div>"
-}
-
-private fun wrapProjectName(name: String): String {
-    val escaped = escapeHtml(name)
-    return "<div style=\"text-align:center; word-break: break-word; overflow-wrap: anywhere;\">$escaped</div>"
 }
 
 private fun configureTileTitleLabel(label: QLabel, richText: String) {

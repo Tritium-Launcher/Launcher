@@ -1,0 +1,96 @@
+// KubeJS Typings FlatBuffers schema for Tritium
+// Used by CompanionMod (dump, Java) and registry-builder (consume, Rust)
+// Field declaration order MUST match /tmp/tritium-fb/kubejs_typings.fbs
+// for binary compatibility (FlatBuffers field IDs are positional).
+namespace io.github.tritium_launcher.kubejs;
+
+enum TypeKind : byte {
+    Primitive = 0,
+    Class = 1,
+    Interface = 2,
+    Array = 3,
+    Event = 4,
+}
+
+table Parameter {
+    name: string;
+    type: string;
+}
+
+table Constructor {
+    parameters: [Parameter];
+    documentation: string;
+}
+
+table Method {
+    name: string;
+    return_type: string;
+    type_params: [string];
+    parameters: [Parameter];
+    is_static: bool;
+    is_deprecated: bool;
+    documentation: string;
+}
+
+table Field {
+    name: string;
+    type: string;
+    is_static: bool;
+    is_deprecated: bool;
+    documentation: string;
+}
+
+table ClassDefinition {
+    full_name: string;
+    simple_name: string;
+    kind: TypeKind = Class;
+    type_params: [string];
+    methods: [Method];
+    fields: [Field];
+    constructors: [Constructor];
+    documentation: string;
+    super_class: string;
+    interfaces: [string];
+}
+
+table Binding {
+    name: string;
+    type: string;
+    documentation: string;
+    side: string;
+}
+
+table RecipeKeyInfo {
+    name: string;
+    type: string;
+    optional: bool;
+}
+
+table RecipeSchemaBinding {
+    namespace: string;
+    schema_id: string;
+    recipe_class: string;
+    keys: [RecipeKeyInfo];
+    documentation: string;
+}
+
+table EventBinding {
+    group_name: string;
+    event_name: string;
+    event_class: string;
+    side: string;
+    extra_type: string;
+    target_required: bool;
+    documentation: string;
+}
+
+table KubeTypings {
+    minecraft_version: string;
+    loader: string;
+    classes: [ClassDefinition];
+    bindings: [Binding];
+    events: [EventBinding];
+    recipes: [RecipeSchemaBinding];
+}
+
+root_type KubeTypings;

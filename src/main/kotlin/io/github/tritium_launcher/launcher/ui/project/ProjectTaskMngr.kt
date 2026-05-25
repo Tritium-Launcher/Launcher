@@ -3,9 +3,9 @@ package io.github.tritium_launcher.launcher.ui.project
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
+import kotlinx.coroutines.flow.*
 import java.nio.file.Files
 import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.roundToInt
 
 /**
@@ -15,7 +15,18 @@ object ProjectTaskMngr {
     private val logger = logger()
     private val lock = Any()
     private val tasksById = LinkedHashMap<String, ProjectTaskEntry>()
-    private val listeners = CopyOnWriteArrayList<() -> Unit>()
+    
+    private val _tasks = MutableStateFlow<List<ProjectTaskEntry>>(emptyList())
+    
+    /**
+     * Observable flow of all currently active background tasks.
+     */
+    val tasks: StateFlow<List<ProjectTaskEntry>> = _tasks.asStateFlow()
+
+    /**
+     * Compatibility flow that emits [Unit] whenever tasks change.
+     */
+    val taskChanges: Flow<Unit> = tasks.map { }
 
     /**
      * Runtime snapshot of a task currently tracked by [ProjectTaskMngr].
@@ -129,23 +140,18 @@ object ProjectTaskMngr {
     }
 
     /**
-     * Subscribes to task changes.
+     * Updates the StateFlow with the current list of active tasks.
      */
-    fun addListener(listener: () -> Unit): () -> Unit {
-        listeners += listener
-        return { listeners -= listener }
-    }
-
     private fun emitChanged() {
-        listeners.forEach { listener ->
-            try {
-                listener()
-            } catch (t: Throwable) {
-                logger.warn("Task listener failed", t)
-            }
+        val currentTasks = synchronized(lock) {
+            tasksById.values.toList()
         }
+        _tasks.value = currentTasks
     }
 
+    /**
+     * Returns filesystem scope for provided [VPath]
+     */
     private fun scopeOf(path: VPath): String {
         val abs = path.toAbsolute().normalize()
         return try {
@@ -161,10 +167,19 @@ object ProjectTaskMngr {
         }
     }
 
+    /**
+     * Trim task name
+     */
     private fun normalizeTitle(raw: String): String = raw.trim().ifBlank { "Background task" }
 
+    /**
+     * Trim task detail
+     */
     private fun normalizeDetail(raw: String): String = raw.trim()
 
+    /**
+     * Round progress to [Int]
+     */
     private fun normalizeProgress(progressPercent: Double?): Int? {
         if (progressPercent == null || !progressPercent.isFinite()) return null
         return progressPercent.coerceIn(0.0, 100.0).roundToInt()

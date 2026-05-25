@@ -2,6 +2,9 @@ package io.github.tritium_launcher.launcher.util
 
 import java.nio.ByteBuffer
 
+/**
+ * General Byte utilities
+ */
 object ByteUtils {
     fun toByteArray(buf: ByteBuffer?): ByteArray? {
         if(buf == null) return null

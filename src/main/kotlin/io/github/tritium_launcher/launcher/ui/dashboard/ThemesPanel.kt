@@ -1,9 +1,14 @@
 package io.github.tritium_launcher.launcher.ui.dashboard
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
+import io.github.tritium_launcher.launcher.font.FontMngr
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.launcher.settings.SettingNode
+import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.github.tritium_launcher.launcher.ui.theme.ThemeType
@@ -18,7 +23,9 @@ import io.qt.core.QSignalBlocker
 import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.*
-import java.util.prefs.Preferences
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
 
 /**
@@ -26,7 +33,6 @@ import kotlin.math.absoluteValue
  */
 class ThemesPanel internal constructor(): QWidget() {
     private val logger = logger()
-    private val prefs: Preferences = Preferences.userRoot().node("/tritium")
 
     private val mainLayout = QVBoxLayout()
 
@@ -88,7 +94,11 @@ class ThemesPanel internal constructor(): QWidget() {
 
         setupConnections()
 
-        ThemeMngr.addListener(themeListener)
+        CoroutineScope(Dispatchers.Main).launch {
+            ThemeMngr.currentThemeId.collect { themeId ->
+                themeListener()
+            }
+        }
     }
 
     private fun createThemeSection(): QGroupBox {
@@ -159,20 +169,10 @@ class ThemesPanel internal constructor(): QWidget() {
     }
 
     private fun loadAvailableFonts() {
-        val fonts = mutableSetOf<String>()
-
-        try {
-            val sysFonts = QFontDatabase.families()
-            fonts.addAll(sysFonts)
-        } catch (e: Exception) {
-            logger.warn("Failed to load system fonts", e)
-        }
-
-        val sortedFonts = fonts.sorted()
+        val fonts = FontMngr.availableFontFamilies()
         globalFontComboBox.clear()
         editorFontComboBox.clear()
-
-        sortedFonts.forEach { f ->
+        fonts.forEach { f ->
             globalFontComboBox.addItem(f)
             editorFontComboBox.addItem(f)
         }
@@ -204,7 +204,7 @@ class ThemesPanel internal constructor(): QWidget() {
             }
             themeComboBox.setModel(model)
             val target = entries.firstOrNull { it.id == prev }?.id
-                ?: entries.firstOrNull { it.id == current }?.id
+                ?: entries.firstOrNull { it.id == ThemeMngr.currentThemeIdValue }?.id
                 ?: entries.firstOrNull()?.id
             val idx = target?.let { themeComboBox.findData(it) } ?: -1
             if(idx >= 0) themeComboBox.currentIndex = idx
@@ -230,15 +230,12 @@ class ThemesPanel internal constructor(): QWidget() {
 
     private fun loadCurrentFontSettings() {
         isUpdating = true
-        val appFont = QApplication.font()
-        val globalFamily = prefs.get("globalFontFamily", appFont.family())
-        val globalSize = prefs.getInt("globalFontSize", appFont.pointSize())
+        val (globalFamily, globalSize) = CoreSettingValues.globalFont()
         ensureFontInCombo(globalFontComboBox, globalFamily)
         globalFontComboBox.currentText = globalFamily
         globalFontSizeSpinner.value = globalSize.coerceIn(globalFontSizeSpinner.minimum, globalFontSizeSpinner.maximum)
 
-        val editorFamily = prefs.get("editorFontFamily", globalFamily)
-        val editorSize = prefs.getInt("editorFontSize", globalSize)
+        val (editorFamily, editorSize) = CoreSettingValues.editorFont()
         ensureFontInCombo(editorFontComboBox, editorFamily)
         editorFontComboBox.currentText = editorFamily
         editorFontSizeSpinner.value = editorSize.coerceIn(editorFontSizeSpinner.minimum, editorFontSizeSpinner.maximum)
@@ -392,8 +389,8 @@ class ThemesPanel internal constructor(): QWidget() {
             val font = QFont(family, size)
             QApplication.setFont(font)
             applyFontToWidgets(font)
-            prefs.put("globalFontFamily", family)
-            prefs.putInt("globalFontSize", size)
+            val node = SettingsMngr.findSetting(CoreSettingKeys.GlobalFont) as? SettingNode<String>
+            node?.let { SettingsMngr.updateValue(it, "$family|$size") }
         } catch (e: Exception) {
             logger.warn("Failed to apply global font '{}': {}", family, e.message)
         }
@@ -420,7 +417,7 @@ class ThemesPanel internal constructor(): QWidget() {
         if(isUpdating) return
         val family = editorFontComboBox.currentText.takeIf { it.isNotBlank() } ?: return
         val size = editorFontSizeSpinner.value
-        prefs.put("editorFontFamily", family)
-        prefs.putInt("editorFontSize", size)
+        val node = SettingsMngr.findSetting(CoreSettingKeys.EditorFont) as? SettingNode<String>
+        node?.let { SettingsMngr.updateValue(it, "$family|$size") }
     }
 }

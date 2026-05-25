@@ -9,12 +9,17 @@ import io.github.tritium_launcher.launcher.redactUserPath
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.QMimeData
 import io.qt.gui.QTextCursor
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /**
  * Live log viewer dialog for `~/tritium/logs/tritium.log`.
@@ -23,7 +28,7 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
     private val logPathLabel = QLabel()
     private val copyFileButton = TPushButton()
     private val logView = QPlainTextEdit()
-    private val unsubscribe: () -> Unit
+    private var unsubscribe: Job? = null
 
     init {
         objectName = "tritiumLogDialog"
@@ -44,6 +49,7 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         logView.objectName = "tritiumLogView"
         logView.isReadOnly = true
         logView.lineWrapMode = QPlainTextEdit.LineWrapMode.NoWrap
+        AnimatedScrollController.attach(logView)
 
         val header = QWidget(this)
         hBoxLayout(header) {
@@ -72,7 +78,7 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
             selector("#tritiumLogView") {
                 backgroundColor(TColors.Surface1)
                 color(TColors.Text)
-                border(1, TColors.Surface2)
+                border(1, TColors.Surface1)
                 borderRadius(4)
             }
         }
@@ -81,14 +87,16 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         copyFileButton.clicked.connect {
             copyCurrentLogFileToClipboard()
         }
-        unsubscribe = Logs.addEntryListener { entry ->
-            runOnGuiThread {
-                appendEntry(entry)
+        unsubscribe = CoroutineScope(Dispatchers.Main).launch {
+            Logs.entryFlow.collect { entry ->
+                runOnGuiThread {
+                    appendEntry(entry)
+                }
             }
         }
 
         destroyed.connect {
-            unsubscribe()
+            unsubscribe?.cancel()
         }
     }
 

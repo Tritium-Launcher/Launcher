@@ -1,5 +1,6 @@
 package io.github.tritium_launcher.launcher.extension
 
+import io.qt.gui.QIcon
 import org.koin.core.module.Module
 
 /**
@@ -33,4 +34,10 @@ import org.koin.core.module.Module
 interface Extension {
     val namespace: String
     val modules: List<Module>
+
+    val isBuiltin: Boolean get() = false
+    val requiresRestart: Boolean get() = true
+    val displayName: String get() = namespace
+    val description: String? get() = null
+    val icon: QIcon? get() = null
 }

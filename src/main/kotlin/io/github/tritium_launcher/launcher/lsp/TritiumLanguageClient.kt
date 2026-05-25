@@ -1,7 +1,9 @@
 package io.github.tritium_launcher.launcher.lsp
 
 import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.lsp.LSPEventBus.publishDiagnostics
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import org.eclipse.lsp4j.*
 import org.eclipse.lsp4j.services.LanguageClient
 import java.util.concurrent.CompletableFuture
@@ -41,38 +43,30 @@ class TritiumLanguageClient : LanguageClient {
             logger.debug("[Server Log] {}", it.message)
         }
     }
+
+    override fun configuration(configurationParams: ConfigurationParams): CompletableFuture<List<Any>> {
+        return CompletableFuture.completedFuture(emptyList())
+    }
 }
 
 /**
- * Thread-safe diagnostics event bus.
- *
- * LSP4J calls [publishDiagnostics] on background threads, so this must be safe
- * for concurrent subscribe/unsubscribe/publish.
+ * Thread-safe diagnostics event bus using Kotlin Flows.
  */
 internal object LSPEventBus {
-    private val listeners = java.util.concurrent.ConcurrentHashMap<Int, (PublishDiagnosticsParams) -> Unit>()
-    private val nextId = java.util.concurrent.atomic.AtomicInteger(0)
+    private val _diagnostics = MutableSharedFlow<PublishDiagnosticsParams>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
 
     /**
-     * Registers a diagnostics listener and returns its subscription id.
+     * Flow of diagnostics published by the LSP server.
      */
-    fun subscribe(l: (PublishDiagnosticsParams) -> Unit): Int {
-        val id = nextId.getAndIncrement()
-        listeners[id] = l
-        return id
-    }
+    val diagnostics = _diagnostics.asSharedFlow()
 
     /**
-     * Removes a previously registered listener.
-     */
-    fun unsubscribe(id: Int) {
-        listeners.remove(id)
-    }
-
-    /**
-     * Publishes diagnostics to all listeners.
+     * Publishes diagnostics to the flow.
      */
     fun publishDiagnostics(p: PublishDiagnosticsParams) {
-        listeners.values.toList().forEach { it(p) }
+        _diagnostics.tryEmit(p)
     }
 }

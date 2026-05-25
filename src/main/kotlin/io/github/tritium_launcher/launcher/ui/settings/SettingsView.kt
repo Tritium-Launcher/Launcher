@@ -1,12 +1,15 @@
 package io.github.tritium_launcher.launcher.ui.settings
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
+import io.github.tritium_launcher.launcher.keymap.KeymapMngr
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.settings.*
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.InfoLineEditWidget
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.TToggleSwitch
@@ -16,6 +19,10 @@ import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBox
 import io.qt.core.Qt
 import io.qt.core.Qt.ItemDataRole.UserRole
 import io.qt.widgets.*
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /**
  * Reusable Settings UI for browsing categories and editing setting values.
@@ -76,6 +83,8 @@ class SettingsView : QWidget() {
 
     init {
         objectName = "settingsView"
+        AnimatedScrollController.attach(categoryTree)
+        AnimatedScrollController.attach(settingsScroll)
 
         val mainLayout = hBoxLayout(this) {
             contentsMargins = 0.m
@@ -91,14 +100,13 @@ class SettingsView : QWidget() {
         mainLayout.addWidget(splitter, 1)
 
         connectSignals()
-        reload()
 
         setThemedStyle {
             selector("#settingsView") { backgroundColor(TColors.Surface0) }
             selector("#settingsNav") { backgroundColor(TColors.Surface1) }
             selector("#settingsTree") {
                 backgroundColor(TColors.Surface1)
-                border(1, TColors.Surface2)
+                border(1, TColors.Surface1)
             }
             selector("#settingsHeaderTitle") { fontSize(16); fontWeight(600) }
             selector("#settingsHeaderDesc") { fontSize(11); color(TColors.Subtext) }
@@ -108,13 +116,13 @@ class SettingsView : QWidget() {
             selector("#settingsEmpty") { fontSize(12); color(TColors.Subtext) }
             selector("QLineEdit#settingsSearchInput") {
                 backgroundColor(TColors.Surface1)
-                border(1, TColors.Surface2)
+                border(1, TColors.Surface1)
                 borderRadius(4)
                 padding(4, 6, 4, 6)
             }
             selector("QLineEdit#settingsInput") {
                 backgroundColor(TColors.Surface1)
-                border(1, TColors.Surface2)
+                border(1, TColors.Surface1)
                 borderRadius(4)
                 padding(4, 6, 4, 6)
             }
@@ -373,6 +381,7 @@ class SettingsView : QWidget() {
         clearLayout(settingsLayout)
         rowByNode.clear()
         currentRootNodes = emptyList()
+        var hasFillHeightRow = false
 
         if (settings.isEmpty()) {
             val emptyLabel = label(emptyMessage) {
@@ -389,8 +398,14 @@ class SettingsView : QWidget() {
         currentRootNodes = roots
 
         val visited = HashSet<SettingNode<*>>()
-        roots.forEach { buildSettingRecursive(it, 0, visited) }
-        settingsLayout.addStretch(1)
+        roots.forEach {
+            if (buildSettingRecursive(it, 0, visited)) {
+                hasFillHeightRow = true
+            }
+        }
+        if (!hasFillHeightRow) {
+            settingsLayout.addStretch(1)
+        }
 
         refreshAll()
     }
@@ -402,14 +417,18 @@ class SettingsView : QWidget() {
      * @param indent Depth-based indentation level.
      * @param visited Set used to prevent duplicate/cyclic traversal.
      */
-    private fun buildSettingRecursive(node: SettingNode<*>, indent: Int, visited: MutableSet<SettingNode<*>>) {
-        if (!visited.add(node)) return
+    private fun buildSettingRecursive(node: SettingNode<*>, indent: Int, visited: MutableSet<SettingNode<*>>): Boolean {
+        if (!visited.add(node)) return false
         val row = buildSettingRow(node, indent)
         rowByNode[node] = row
-        settingsLayout.addWidget(row.container)
+        settingsLayout.addWidget(row.container, if (row.fillHeight) 1 else 0)
+        var hasFillHeight = row.fillHeight
         node.children.forEach { child ->
-            buildSettingRecursive(child.node, indent + 1, visited)
+            if (buildSettingRecursive(child.node, indent + 1, visited)) {
+                hasFillHeight = true
+            }
         }
+        return hasFillHeight
     }
 
     /**
@@ -506,6 +525,9 @@ class SettingsView : QWidget() {
     private fun applyStagedChanges() {
         if (pendingValues.isEmpty()) return
         val staged = pendingValues.entries.toList()
+        val stagedKeymapDraftRaw = staged.firstOrNull { (nodeAny, _) ->
+            nodeAny.key == CoreSettingKeys.KeymapActionsOverview
+        }?.value as? String
         staged.forEach { (nodeAny, valueAny) ->
             val node = nodeAny as SettingNode<Any?>
             val validation = SettingsMngr.updateValue(node, valueAny)
@@ -513,6 +535,17 @@ class SettingsView : QWidget() {
                 logger.warn("Invalid staged value for {}: {}", node.key, validation.reason)
             } else {
                 pendingValues.remove(nodeAny)
+            }
+        }
+        if (!stagedKeymapDraftRaw.isNullOrBlank()) {
+            runCatching {
+                Json.decodeFromString(
+                    MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+                    stagedKeymapDraftRaw
+                )
+            }.onSuccess { overrides ->
+                KeymapMngr.applyOverridesFromStrings(overrides)
+                KeymapMngr.reloadWithPersistence()
             }
         }
         updateActionButtons()
@@ -836,6 +869,22 @@ class SettingsView : QWidget() {
             setContentsMargins(indent * 16, 4, 4, 4)
             widgetSpacing = 4
         }
+        val widget = createWidget(descriptor, node)
+
+        if (descriptor.fullWidth) {
+            layout.addWidget(widget, 1)
+            container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            return SettingRow(
+                node = node,
+                container = container,
+                refresh = {
+                    (widget as? RefreshableSettingWidget)?.refreshFromSettingValue()
+                },
+                setEnabled = { enabled -> container.isEnabled = enabled },
+                fillHeight = descriptor.fullHeight
+            )
+        }
 
         val topRow = QWidget()
         val topLayout = hBoxLayout(topRow) {
@@ -852,8 +901,6 @@ class SettingsView : QWidget() {
             text = "Reset"
             minimumHeight = 25
         }
-
-        val widget = createWidget(descriptor, node)
 
         topLayout.addWidget(title, 1)
         topLayout.addStretch(1)
@@ -889,7 +936,8 @@ class SettingsView : QWidget() {
                 (widget as? RefreshableSettingWidget)?.refreshFromSettingValue()
                 resetBtn.isEnabled = current != descriptor.defaultValue
             },
-            setEnabled = { enabled -> container.isEnabled = enabled }
+            setEnabled = { enabled -> container.isEnabled = enabled },
+            fillHeight = false
         )
     }
 
@@ -954,6 +1002,7 @@ class SettingsView : QWidget() {
         val node: SettingNode<*>,
         val container: QWidget,
         val refresh: () -> Unit,
-        val setEnabled: (Boolean) -> Unit
+        val setEnabled: (Boolean) -> Unit,
+        val fillHeight: Boolean = false
     )
 }

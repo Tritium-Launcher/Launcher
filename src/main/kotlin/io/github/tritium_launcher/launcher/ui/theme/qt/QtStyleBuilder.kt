@@ -3,6 +3,9 @@ package io.github.tritium_launcher.launcher.ui.theme.qt
 import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.qt.widgets.QWidget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @DslMarker
 @Target(AnnotationTarget.CLASS, AnnotationTarget.TYPE)
@@ -166,15 +169,18 @@ fun QWidget.setThemedStyle(block: QtStyleSheet.() -> Unit): () -> Unit {
             qtStyle(block).applyTo(this)
         } catch (_: Throwable) {}
     }
-    ThemeMngr.addListener(apply)
     apply()
 
+    val job = CoroutineScope(Dispatchers.Main).launch {
+        ThemeMngr.currentThemeId.collect { apply() }
+    }
+
     try {
-        this.destroyed.connect { ThemeMngr.removeListener(apply) }
+        this.destroyed.connect { job.cancel() }
     } catch (_: Throwable) {}
 
     return {
-        ThemeMngr.removeListener(apply)
+        job.cancel()
     }
 }
 
