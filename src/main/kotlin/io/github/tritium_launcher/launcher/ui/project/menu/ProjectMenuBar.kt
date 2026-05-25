@@ -4,6 +4,8 @@ import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectType
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.launcher.keymap.ActionRegistry
+import io.github.tritium_launcher.launcher.keymap.KeymapMngr
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.ui.theme.TColors
@@ -16,6 +18,9 @@ import io.qt.core.Qt
 import io.qt.gui.QAction
 import io.qt.gui.QGuiApplication
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Command bar that replaces the native menu bar and supports:
@@ -30,6 +35,9 @@ import io.qt.widgets.*
  */
 class ProjectMenuBar : QWidget() {
     private val logger = logger()
+    private var attachedWindow: QMainWindow? = null
+    private var lastProject: ProjectBase? = null
+    private var lastSelection: Any? = null
 
     private val layout = hBoxLayout(this) {
         widgetSpacing = 0
@@ -38,10 +46,23 @@ class ProjectMenuBar : QWidget() {
 
     init {
         objectName = "projectMenuBar"
+        setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
+        val keymapJob = CoroutineScope(Dispatchers.Main).launch {
+            KeymapMngr.activeKeymapFlow.collect {
+                val window = attachedWindow ?: return@collect
+                if (!window.isVisible) return@collect
+                QTimer.singleShot(0) {
+                    rebuildFor(window, lastProject, lastSelection)
+                }
+            }
+        }
+        destroyed.connect {
+            keymapJob.cancel()
+        }
         setThemedStyle {
             selector("#projectMenuBar") {
                 backgroundColor(TColors.Surface0)
-                border()
+                border(1, TColors.Surface1, "bottom")
             }
 
             selector("#projectMenuBar QPushButton, #projectMenuBar QToolButton") {
@@ -79,10 +100,14 @@ class ProjectMenuBar : QWidget() {
     }
 
     fun attach(window: QMainWindow) {
+        attachedWindow = window
         window.setMenuWidget(this)
     }
 
     fun rebuildFor(window: QMainWindow, project: ProjectBase?, selection: Any?) {
+        attachedWindow = window
+        lastProject = project
+        lastSelection = selection
         clearLayout()
 
         val allItems = BuiltinRegistries.MenuItem.all().toList()
@@ -222,6 +247,7 @@ class ProjectMenuBar : QWidget() {
 
     private fun makeActionButton(window: QMainWindow, item: MenuItem, project: ProjectBase?, selection: Any?): QPushButton {
         val baseCtx = MenuActionContext(project, window, selection, item.meta)
+        registerActionHandler(item, window, project, selection)
         val iconOnly = item.meta["iconOnly"]?.equals("true", ignoreCase = true) == true
         val useShiftHoverForceIcon = item.meta["shiftHoverForceIcon"]?.equals("true", ignoreCase = true) == true
         val btn = QPushButton(if (iconOnly) "" else item.resolveTitle(baseCtx))
@@ -287,7 +313,7 @@ class ProjectMenuBar : QWidget() {
         btn.toolButtonStyle = Qt.ToolButtonStyle.ToolButtonTextOnly
         btn.autoRaise = true
 
-        val menu = QMenu(window)
+        val menu = QMenu(btn)
         val kids = childItems(item, children, window, project, selection)
         if (kids.isNotEmpty()) {
             for (child in kids) {
@@ -299,7 +325,7 @@ class ProjectMenuBar : QWidget() {
                 }
                 val submenuKids = childItems(child, children, window, project, selection)
                 if (submenuKids.isNotEmpty() && child.kind != MenuItemKind.ACTION) {
-                    val submenu = QMenu(child.resolveTitle(childCtx), window)
+                    val submenu = QMenu(child.resolveTitle(childCtx), menu)
                     submenuKids.forEach { grand ->
                         addActionToMenu(submenu, grand, window, project, selection, children)
                     }
@@ -312,10 +338,19 @@ class ProjectMenuBar : QWidget() {
 
         // Allow top-level action for menu button
         if (item.action != null) {
-            val act = QAction(item.resolveTitle(baseCtx), window)
+            registerActionHandler(item, window, project, selection)
+            val act = QAction(item.resolveTitle(baseCtx), menu)
             item.resolveIcon(baseCtx)?.let { act.icon = it }
             act.isEnabled = item.isEnabled(baseCtx)
-            item.shortcut?.let { act.setShortcut(it) }
+            val actionId = shortcutActionIdFor(item)
+            val mappedShortcuts = KeymapMngr.sequencesFor(actionId)
+            val hasExplicitOverride = KeymapMngr.activeKeymap.localOverrides().containsKey(actionId)
+            val hasDeclaredShortcut = actionId in KeymapMngr.declaredActionIds()
+            if (mappedShortcuts.isNotEmpty() || hasExplicitOverride || hasDeclaredShortcut) {
+                act.setShortcuts(mappedShortcuts)
+            } else {
+                item.shortcut?.let { act.setShortcut(it) }
+            }
             act.triggered.connect {
                 try {
                     val ctx = MenuActionContext(project, window, selection, item.meta)
@@ -325,6 +360,7 @@ class ProjectMenuBar : QWidget() {
                 }
             }
             menu.insertAction(menu.actions().firstOrNull(), act)
+            this.addAction(act)
         }
 
         btn.setMenu(menu)
@@ -348,7 +384,7 @@ class ProjectMenuBar : QWidget() {
 
         val subKids = childItems(item, children, window, project, selection)
         if (subKids.isNotEmpty() && item.kind != MenuItemKind.ACTION) {
-            val submenu = QMenu(item.resolveTitle(ctx), window)
+            val submenu = QMenu(item.resolveTitle(ctx), menu)
             subKids.forEach { sub ->
                 addActionToMenu(submenu, sub, window, project, selection, children)
             }
@@ -356,10 +392,19 @@ class ProjectMenuBar : QWidget() {
             return
         }
 
-        val act = QAction(item.resolveTitle(ctx), window)
+        val act = QAction(item.resolveTitle(ctx), menu)
+        registerActionHandler(item, window, project, selection)
         item.resolveIcon(ctx)?.let { act.icon = it }
         act.isEnabled = item.isEnabled(ctx)
-        item.shortcut?.let { act.setShortcut(it) }
+        val actionId = shortcutActionIdFor(item)
+        val mappedShortcuts = KeymapMngr.sequencesFor(actionId)
+        val hasExplicitOverride = KeymapMngr.activeKeymap.localOverrides().containsKey(actionId)
+        val hasDeclaredShortcut = actionId in KeymapMngr.declaredActionIds()
+        if (mappedShortcuts.isNotEmpty() || hasExplicitOverride || hasDeclaredShortcut) {
+            act.setShortcuts(mappedShortcuts)
+        } else {
+            item.shortcut?.let { act.setShortcut(it) }
+        }
         item.tooltip?.let { act.toolTip = it }
         act.triggered.connect {
             try {
@@ -370,6 +415,23 @@ class ProjectMenuBar : QWidget() {
             }
         }
         menu.addAction(act)
+        this.addAction(act)
+    }
+
+    private fun shortcutActionIdFor(item: MenuItem): String =
+        item.shortcutActionId ?: "menu.${item.id}"
+
+    private fun registerActionHandler(item: MenuItem, window: QMainWindow, project: ProjectBase?, selection: Any?) {
+        if (item.action == null) return
+        ActionRegistry.registerHandler(
+            id = shortcutActionIdFor(item),
+            allowKeyboardShortcuts = item.allowKeyboardShortcuts,
+            allowMouseShortcuts = item.allowMouseShortcuts,
+            focusGroups = item.shortcutFocusGroups
+        ) {
+            val actionCtx = MenuActionContext(project, window, selection, item.meta)
+            item.action.invoke(actionCtx)
+        }
     }
 
     private fun childItems(
@@ -389,11 +451,22 @@ class ProjectMenuBar : QWidget() {
     }
 
     private fun clearLayout() {
+        // 1. Manually remove and dispose of all actions associated with this widget
+        val currentActions = actions()
+        for (action in currentActions) {
+            removeAction(action)
+            action?.disposeLater()
+        }
+
+        // 2. Clear the layout and dispose of all widgets (buttons)
+        // Disposing the buttons will also dispose of their parented QMenu objects.
         val count = layout.count()
         for (i in 0 until count) {
             val item = layout.takeAt(0)
             item?.widget()?.let { w ->
                 w.hide()
+                // Explicitly unparent to stop any active shortcut participation immediately
+                w.setParent(null)
                 w.disposeLater()
             }
         }

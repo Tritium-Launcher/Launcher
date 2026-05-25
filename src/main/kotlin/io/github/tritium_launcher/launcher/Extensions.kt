@@ -1,30 +1,36 @@
 package io.github.tritium_launcher.launcher
 
-import io.qt.core.*
+import io.qt.core.QMargins
+import io.qt.core.QMetaObject
+import io.qt.core.QObject
+import io.qt.core.Qt
 import io.qt.gui.QColor
 import io.qt.gui.QImage
 import io.qt.widgets.QAbstractButton
 import io.qt.widgets.QLayout
 import io.qt.widgets.QWidget
-import kotlinx.io.IOException
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import org.slf4j.LoggerFactory
 import java.awt.image.BufferedImage
 import java.io.File
 import java.net.URI
 import java.net.URL
-import java.nio.file.Path
 import kotlin.math.PI
 
 private val logger = LoggerFactory.getLogger("ExtensionFunctions")
 
 /**
- * Includes various extension functions.
+ * Converts a [String] to Java[URL]
  */
-
 fun String.toUrl(): URL {
     return URI(this).toURL()
 }
 
+/**
+ * Converts a [String] to Java[URI]
+ */
 fun String.toURI(): URI {
     return URI(this)
 }
@@ -51,6 +57,9 @@ fun String.hexToRgbString(): String {
     return "rgb($r,$g,$b)"
 }
 
+/**
+ * Converts a hex color value to [QColor] object
+ */
 fun String.hexToQColor(): QColor {
     val raw = this.trim().removePrefix("#")
     val fullHex = when(raw.length) {
@@ -68,24 +77,36 @@ fun String.hexToQColor(): QColor {
     return QColor(r,g,b)
 }
 
-/** Checks if this string matches any of the provided strings. */
+/** Checks if this [String] matches any of the provided strings */
 fun String.matches(vararg strings: String): Boolean = strings.any { this == it }
 
+/** Checks if this [List] matches any of the provided strings */
 fun String.matches(strings: List<String>): Boolean = strings.any { this == it }
 
+/**
+ * Convert Double to Radians
+ */
 fun Double.toRadians(): Double = this * (PI / 180.0)
 
-fun Path.mkdirs(): Boolean {
-    return try { this.toFile().mkdirs() } catch (e: IOException) { logger.error("Error creating directory", e); false}
-}
-
+/**
+ * Resolves [File] from this pathname
+ */
 fun String.toFile(): File = File(this)
 
+/**
+ * Shorthand for a uniform [QMargins] value
+ */
 val Int.m: QMargins
     get() = QMargins(this, this, this, this)
 
+/**
+ * Adds multiple [QWidget]s to [QLayout]
+ */
 fun QLayout.add(vararg widgets: QWidget?) = widgets.forEach { w -> this.addWidget(w) }
 
+/**
+ * [QAbstractButton] click action block
+ */
 @JvmName("onClickedButton")
 fun QAbstractButton.onClicked(handler: () -> Unit) {
     val slotHolder = object : QObject(this) {
@@ -104,42 +125,83 @@ fun QAbstractButton.onClicked(handler: () -> Unit) {
     this.clicked.connect(slotHolder, "handleClick()")
 }
 
+/**
+ * Creates a Default Signal1 connection to [QObject]
+ */
 inline fun <T> QObject.Signal1Default1<T>.connect(crossinline handler: (T) -> Unit): QMetaObject.Slot1<T> {
     val slot = QMetaObject.Slot1<T> { arg -> handler(arg) }
     this.connect(slot)
     return slot
 }
 
+/**
+ * Creates a Private Signal0 connection to [QObject]
+ */
 inline fun QObject.PrivateSignal0.connect(crossinline handler: () -> Unit): QMetaObject.Slot0 {
     val slot = QMetaObject.Slot0 { handler() }
     this.connect(slot)
     return slot
 }
 
+/**
+ * Creates a Signal0 connection to [QObject]
+ */
 inline fun QObject.Signal0.connect(crossinline handler: () -> Unit): QMetaObject.Slot0 {
     val slot = QMetaObject.Slot0 { handler() }
     this.connect(slot)
     return slot
 }
 
+/**
+ * Creates a Signal1 connection to [QObject]
+ */
 inline fun <T> QObject.Signal1<T>.connect(crossinline handler: (T) -> Unit): QMetaObject.Slot1<T> {
     val slot = QMetaObject.Slot1<T> { arg -> handler(arg) }
     this.connect(slot)
     return slot
 }
 
+/**
+ * Creates a Signal2 connection to [QObject]
+ */
 inline fun <A, B> QObject.Signal2<A, B>.connect(crossinline handler: (A, B) -> Unit): QMetaObject.Slot2<A, B> {
     val slot = QMetaObject.Slot2<A, B> { a, b -> handler(a, b) }
     this.connect(slot)
     return slot
 }
 
-fun QTimer.stopIfActive() { if(this.isActive) this.stop() }
+/**
+ * Bridges a Qt Signal0 to a Kotlin Flow<Unit>.
+ */
+fun QObject.Signal0.asFlow(): Flow<Unit> = callbackFlow {
+    val slot = connect { trySend(Unit) }
+    awaitClose { disconnect(slot) }
+}
 
-fun QPropertyAnimation.stopIfRunning() { if(this.state == QAbstractAnimation.State.Running) this.stop() }
+/**
+ * Bridges a Qt Signal1 to a Kotlin Flow<T>.
+ */
+fun <T> QObject.Signal1<T>.asFlow(): Flow<T> = callbackFlow {
+    val slot = connect { trySend(it) }
+    awaitClose { disconnect(slot) }
+}
 
+/**
+ * Bridges a Qt PrivateSignal0 to a Kotlin Flow<Unit>.
+ */
+fun QObject.PrivateSignal0.asFlow(): Flow<Unit> = callbackFlow {
+    val slot = connect { trySend(Unit) }
+    awaitClose { disconnect(slot) }
+}
+
+/**
+ * Makes an [Qt.Alignment] from [Qt.AlignmentFlag]
+ */
 fun Qt.AlignmentFlag.asAlignment(): Qt.Alignment = Qt.Alignment(this)
 
+/**
+ * Converts an AWT [BufferedImage] to [QImage]
+ */
 fun BufferedImage.toQImage(): QImage {
     val argb = QImage.Format.Format_ARGB32
     val qimg = QImage(width, height, argb)

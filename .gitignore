@@ -5,10 +5,7 @@ build/
 !**/src/test/**/build/
 
 ### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
+.idea/
 *.iws
 *.iml
 *.ipr
@@ -48,3 +45,11 @@ local.properties
 
 src/main/resources/icons
 AppDir
+tools/registry-builder/target/
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+/CompanionMod/
+hs_err_pid*.log
+/.architectury-transformer/

@@ -1,16 +1,15 @@
 package io.github.tritium_launcher.launcher.ui.theme
 
 import io.github.tritium_launcher.launcher.currentDpr
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.referenceWidget
-import io.qt.core.Qt
 import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
-import io.qt.widgets.QWidget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.ceil
 
 /**
  * Default icons used throughout Tritium, including get methods.
@@ -19,12 +18,15 @@ object TIcons {
     private val cached = ConcurrentHashMap<String, QIcon>()
 
     init {
-        ThemeMngr.addListener {
-            cached.clear()
+        CoroutineScope(Dispatchers.Main).launch {
+            ThemeMngr.currentThemeId.collect {
+                cached.clear()
+            }
         }
     }
 
     val Tritium get() = pix("ui/tritium", 16, 16)
+    val TritiumGrayscale get() = pix("ui/tritium_grayscale", 16, 16)
 
     /* File Icons */
     val File       get() = pix("file/file", 16, 16)
@@ -59,22 +61,23 @@ object TIcons {
     val Schematic   get() = pix("file/schematic", 16, 16)
     val NBT         get() = pix("file/nbt", 16, 16)
 
-    // Menu Icons
-    val CurseForge get() = pix("ui/curseforge")
-    val Modrinth   get() = pix("ui/modrinth")
+    /* Menu Icons */
 
-    val Fabric get() = pix("ui/fabric")
-    val NeoForge get() = pix("ui/neoforge")
+    val CurseForge get() = pix("ui/curseforge", 16, 16)
+    val Modrinth   get() = pix("ui/modrinth", 16, 16)
 
-    val QuestionMark get() = pix("ui/question")
+    val Fabric get() = pix("ui/fabric", 16, 16)
+    val NeoForge get() = pix("ui/neoforge", 16, 16)
+
+    val QuestionMark get() = pix("ui/question", 16, 16)
 
     val NewProject  get() = pix("dashboard/new_project", 32, 32)
     val Import      get() = pix("dashboard/folder_import", 32, 32)
     val Git         get() = pix("dashboard/git", 32, 32)
     val Search      get() = pix("dashboard/search", 32, 32)
-    val ListView    get() = pix("dashboard/list_view")
-    val GridView    get() = pix("dashboard/grid_view")
-    val CompactView get() = pix("dashboard/compact_view")
+    val ListView    get() = pix("dashboard/list_view", 16, 16)
+    val GridView    get() = pix("dashboard/grid_view", 16, 16)
+    val CompactView get() = pix("dashboard/compact_view", 16, 16)
     val Microsoft   get() = pix("dashboard/microsoft", 32, 32)
     val SmallGrass  get() = pix("dashboard/tiny_grass", 32, 32)
 
@@ -92,38 +95,10 @@ object TIcons {
     val SmallPlay      get() = pix("ui/small_play", 16, 16)
     val SmallMenu      get() = pix("ui/small_menu", 16, 16)
 
-    private fun icon(keyOrPath: String, width: Int? = null, height: Int? = null): QIcon {
-        val dpr = try {
-            currentDpr(referenceWidget)
-        } catch (_: Throwable) { 1.0 }
-
-        val baseW = width ?: 16
-        val baseH = height ?: baseW
-
-        val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
-        val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
-
-        val dprKey = String.format("%.3f", dpr)
-        val cacheKey = "$keyOrPath|${baseW}x${baseH}|${physW}x${physH}@$dprKey"
-
-        return cached.computeIfAbsent(cacheKey) {
-            ThemeMngr.getIcon(keyOrPath, baseW, baseH, dpr)
-                ?: run {
-                    val normalized = if(keyOrPath.startsWith("/")) keyOrPath else "/$keyOrPath"
-                    val url = this::class.java.getResource(normalized) ?: this::class.java.classLoader.getResource(keyOrPath)
-                    if(url != null) {
-                        val pix = QPixmap(url.toString())
-                        if(!pix.isNull) {
-                            val scaled = pix.scaled(qs(physW, physH), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            try { scaled.setDevicePixelRatio(dpr) } catch (_: Throwable) {}
-                            QIcon(scaled)
-                        } else QIcon()
-                    } else QIcon()
-                }
-        }
-    }
-
-    private fun pix(keyOrPath: String, width: Int = 16, height: Int = 16, useDpr: Boolean = true): QPixmap {
+    /**
+     * Creates a [QPixmap] from specified Icon paths
+     */
+    private fun pix(keyOrPath: String, width: Int, height: Int, useDpr: Boolean = true): QPixmap {
         if(!useDpr) {
             val icon = ThemeMngr.getIcon(keyOrPath, width, height, 1.0) ?: return QPixmap()
             return icon.pixmap(width, height)
@@ -135,29 +110,24 @@ object TIcons {
 
         val icon = ThemeMngr.getIcon(keyOrPath, width, height, dpr) ?: return QPixmap()
 
-        return icon.pixmap(width, height)
+        return icon.pixmap(width, height).also { it.setDevicePixelRatio(dpr) }
     }
 
-    fun debugIcon(keyOrPath: String, baseW: Int, baseH: Int, widget: QWidget?) {
-        val dpr = try { currentDpr(widget) } catch (_: Throwable) { 1.0 }
-        val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
-        val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
-        println("DEBUG ICON: key=$keyOrPath dpr=$dpr base=${baseW}x$baseH phys=${physW}x${physH}")
+    fun pixForKey(key: String, width: Int, height: Int) = pix(key, width, height)
 
-        val ic = ThemeMngr.getIcon(keyOrPath, baseW, baseH, dpr)
-        println("  ThemeMngr.getIcon -> ${if (ic == null) "null" else "icon (isNull=${ic.isNull})"}")
-        ic?.let {
-            val pm = it.pixmap(baseW, baseH)
-            println("  icon.pixmap(logical) -> isNull=${pm.isNull} size=${pm.width()}x${pm.height()} dpr=${try { pm.devicePixelRatio() } catch(_: Throwable) { "?" }}")
-        }
-    }
-
+    /**
+     * When generating a Project without specifying an Icon, use a generic icon
+     * TODO: Get rid of this for a better system
+     */
     internal val defaultProjectIcon: String by lazy {
         resolveFileResource("/icons/folder.png")
             ?: renderFolderIconToTempPng()
             ?: ""
     }
 
+    /**
+     * Gets a file from bundled resources
+     */
     private fun resolveFileResource(path: String): String? {
         val url = javaClass.getResource(path) ?: return null
         return try {
@@ -167,6 +137,9 @@ object TIcons {
         }
     }
 
+    /**
+     * Temporary icon for rendering
+     */
     private fun renderFolderIconToTempPng(): String? {
         return try {
             val pix = ThemeMngr.getIcon("file/folder", 16, 16, 1.0)?.pixmap(16, 16)

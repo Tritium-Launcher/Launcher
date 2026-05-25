@@ -15,6 +15,10 @@ import io.qt.widgets.QPushButton
 import io.qt.widgets.QStyle
 import io.qt.widgets.QStyleOptionButton
 import io.qt.widgets.QWidget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
@@ -59,7 +63,7 @@ class TPushButton(
             else -> State.Normal
         }
 
-        val dpr = detectDpr(this)
+        val dpr = currentDpr(this)
         handleDprChange(dpr)
 
         val bg = skin.render(state.key, w, h, dpr)
@@ -73,6 +77,9 @@ class TPushButton(
         painter.end()
     }
 
+    /**
+     * Draw standard Qt button label on top of sprite
+     */
     private fun drawLabel(painter: QPainter, dpr: Double) {
         val opt = QStyleOptionButton()
         initStyleOption(opt)
@@ -119,14 +126,9 @@ class TPushButton(
         handleDprChange(currentDpr(this))
     }
 
-    private fun detectDpr(widget: QWidget?): Double {
-        return try {
-            currentDpr(widget)
-        } catch (_: Throwable) {
-            1.0
-        }
-    }
-
+    /**
+     * When DPR changes, update button to new values
+     */
     private fun handleDprChange(dpr: Double) {
         if (lastDpr < 0.0 || abs(lastDpr - dpr) > 0.001) {
             skin.clearCache(disposePixmaps = true)
@@ -135,19 +137,28 @@ class TPushButton(
         }
     }
 
+    /**
+     * Button states
+     */
     enum class State(val key: String) { Normal("normal"), Pressed("pressed"), Disabled("disabled") }
 
     companion object {
+        private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
         private var skin = buildSkin()
 
         init {
-            ThemeMngr.addListener {
-                val prev = skin
-                skin = buildSkin()
-                prev.clearCache(disposePixmaps = true)
+            scope.launch {
+                ThemeMngr.currentThemeId.collect {
+                    val prev = skin
+                    skin = buildSkin()
+                    prev.clearCache(disposePixmaps = true)
+                }
             }
         }
 
+        /**
+         * Build Sprite
+         */
         private fun buildSkin() = pixelSkin {
             pixelSize = 2
             palette {

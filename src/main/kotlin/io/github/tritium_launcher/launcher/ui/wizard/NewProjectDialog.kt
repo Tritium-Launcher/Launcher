@@ -7,9 +7,9 @@ import io.github.tritium_launcher.launcher.core.project.ProjectType
 import io.github.tritium_launcher.launcher.coroutines.UIDispatcher
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
@@ -75,9 +75,10 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
             frameShape = QFrame.Shape.NoFrame
             frameShadow = QFrame.Shadow.Plain
         }
+        AnimatedScrollController.attach(list)
         leftLayout.addWidget(list)
 
-        val rightPanel  = widget {
+        val rightPanel = widget {
             objectName = "rightPanel"
             autoFillBackground = true
             setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
@@ -99,7 +100,7 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
 
         val btnRow = QWidget()
-        val btnLayout = hBoxLayout(btnRow) {
+        hBoxLayout(btnRow) {
             addStretch(1)
             addWidget(createButton)
             addWidget(cancelButton)
@@ -157,6 +158,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         connectSignals()
     }
 
+    /**
+     * Get registered [ProjectType]s and create their UI
+     */
     private fun setupTypes() {
         val types = BuiltinRegistries.ProjectType
         logger.info("Registered Project Types: ${types.toListString()}")
@@ -188,6 +192,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
     }
 
+    /**
+     * If a [ProjectType] is unusable, display as such
+     */
     private fun unavailableTypeWidget(displayName: String, reason: String): QWidget {
         val panel = QWidget()
         vBoxLayout(panel) {
@@ -200,6 +207,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         return panel
     }
 
+    /**
+     * UI Actions
+     */
     private fun connectSignals() {
         list.currentRowChanged.connect { row ->
             if (row >= 0) stacked.currentIndex = row
@@ -218,6 +228,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
     }
 
+    /**
+     * Generate Project
+     */
     private fun startCreate() {
         if (currentJob?.isActive == true) {
             logger.info("Create requested while generation is active; ignoring duplicate request")
@@ -347,14 +360,6 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
                         logger.warn("Failed to open project window for {}", project.name, t)
                     }
 
-                    try {
-                        Dashboard.I?.let { dash ->
-                            try { dash.close() } catch (_: Throwable) {}
-                        }
-                    } catch (t: Throwable) {
-                        logger.debug("Failed closing dashboard post-create", t)
-                    }
-
                     finishDialog(accepted = true)
                 },
                 onFailure = { err ->
@@ -375,6 +380,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
     }
 
+    /**
+     * Cancel Project generation
+     */
     private fun requestCancellation(closeWhenDone: Boolean) {
         if (currentJob?.isActive != true) {
             if (closeWhenDone) finishDialog(accepted = false)
@@ -393,6 +401,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
     }
 
+    /**
+     * Get the generated Project's root directory
+     */
     private fun inferProjectRoot(vars: Map<String, String>): VPath? {
         fun value(key: String): String? = vars[key]?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -420,6 +431,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         return null
     }
 
+    /**
+     * Cleanup canceled Project on filesystem
+     */
     private fun cleanupCancelledMalformedProject(projectRoot: VPath?, rootExistedBeforeCreate: Boolean): Boolean {
         val root = projectRoot ?: return false
         if (rootExistedBeforeCreate) {
@@ -455,6 +469,9 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
     }
 
+    /**
+     * Actions when closing [NewProjectDialog]
+     */
     private fun finishDialog(accepted: Boolean) {
         if (isClosing) return
         isClosing = true

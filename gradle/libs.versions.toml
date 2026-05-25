@@ -1,19 +1,29 @@
 [versions]
-kotlin = "2.2.20"
-kotlinx-serialization = "1.9.0"
+kotlin = "2.3.20"
+kotlinx-serialization = "1.10.0"
 kotlinx-coroutines = "1.10.2"
-ktor = "3.3.1"
-msal = "1.23.1"
+ktor = "3.4.3"
+msal = "1.24.1"
 msal-persistence = "1.3.0"
-logback = "1.5.27"
-ksp = "2.2.20-2.0.4"
+logback = "1.5.32"
+jul-to-slf4j = "2.0.17"
+ksp = "2.3.6"
 autoservice = "1.1.1"
 autoservice-ksp = "1.2.0"
-koin = "4.1.1"
-koin-annotations = "2.2.0"
-qt = "6.9.3"
-lsp4j = "0.24.0"
+koin = "4.2.1"
+koin-annotations = "2.3.1"
+qt = "6.11.0"
 jna = "5.13.0"
+commonmark = "0.28.0"
+sqlite-jdbc = "3.50.3.0"
+ktreesitter = "0.25.0"
+lsp4j = "0.23.1"
+flatbuffers = "25.2.10"
+
+kotlin-json5 = "0.5.0"
+yamlkt = "0.13.0"
+ktoml = "0.7.1"
+knbt = "0.11.9"
 
 # Test
 kotest = "6.0.7"
@@ -24,9 +34,7 @@ junit = "6.0.1"
 # Kotlin
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
 kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
-kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
-kotlinx-serialization-hocon = { module = "org.jetbrains.kotlinx:kotlinx-serialization-hocon", version.ref = "kotlinx-serialization" }
 kotlin-scripting-common = { module = "org.jetbrains.kotlin:kotlin-scripting-common", version.ref = "kotlin" }
 kotlin-scripting-jvm = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm", version.ref = "kotlin" }
 kotlin-scripting-host = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm-host", version.ref = "kotlin" }
@@ -35,6 +43,17 @@ kotlin-script-scriptUtil = { module = "org.jetbrains.kotlin:kotlin-script-util",
 kotlin-scripting-dependencies = { module = "org.jetbrains.kotlin:kotlin-scripting-dependencies", version.ref = "kotlin" }
 kotlin-scripting-dependencies-maven = { module = "org.jetbrains.kotlin:kotlin-scripting-dependencies-maven", version.ref = "kotlin" }
 kotlin-scripting-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable", version.ref = "kotlin" }
+
+# Serialization
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-serialization-hocon = { module = "org.jetbrains.kotlinx:kotlinx-serialization-hocon", version.ref = "kotlinx-serialization" }
+kotlinx-serialization-properties = { module = "org.jetbrains.kotlinx:kotlinx-serialization-properties", version.ref = "kotlinx-serialization" }
+kotlin-json5 = { module = "li.songe:json5", name = "json5", version.ref = "kotlin-json5"}
+ktoml-core = { module = "com.akuleshov7:ktoml-core", name = "ktoml-core", version.ref = "ktoml"}
+ktoml-file = { module = "com.akuleshov7:ktoml-core", name = "ktoml-file", version.ref = "ktoml"}
+yamlkt = { module = "net.mamoe.yamlkt:yamlkt", name = "yamlkt", version.ref = "yamlkt"}
+knbt = { module = "net.benwoodworth.knbt:knbt", name = "knbt", version.ref = "knbt"}
+
 
 # KSP
 autoservice-annotations = { module = "com.google.auto.service:auto-service-annotations", version.ref = "autoservice" }
@@ -67,6 +86,7 @@ msal4j-persistence = { module = "com.microsoft.azure:msal4j-persistence-extensio
 
 # Logback
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+jultoslf4j = { module = "org.slf4j:jul-to-slf4j", version.ref = "jul-to-slf4j" }
 
 # LSP
 lsp4j = { module = "org.eclipse.lsp4j:org.eclipse.lsp4j", version.ref = "lsp4j" }
@@ -74,6 +94,20 @@ lsp4j = { module = "org.eclipse.lsp4j:org.eclipse.lsp4j", version.ref = "lsp4j" 
 # JNA
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
+
+# CommonMark
+commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
+commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-ext-image-attributes = { group = "org.commonmark", name = "commonmark-ext-image-attributes", version.ref = "commonmark" }
+
+# SQLite
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite-jdbc" }
+
+# FlatBuffers
+flatbuffers = { module = "com.google.flatbuffers:flatbuffers-java", version.ref = "flatbuffers" }
+
+# Kotlin Tree-sitter
+ktreesitter = { module = "io.github.tree-sitter:ktreesitter", version.ref = "ktreesitter"}
 
 # Testing
 
@@ -89,6 +123,7 @@ junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", vers
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ktreesitter = { id = "io.github.tree-sitter.ktreesitter-plugin", version.ref = "ktreesitter" }
 
 [bundles]
 test = [

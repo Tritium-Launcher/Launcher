@@ -7,11 +7,21 @@ plugins {
     alias(libs.plugins.kotlin)
     alias(libs.plugins.serialization)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.ktreesitter)
     idea
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 ksp { arg("verbose", "true") }
+
+val grammarDir = layout.projectDirectory.dir("tree-sitter-javascript").asFile
+
+grammar {
+    grammarName.set("javascript")
+    baseDir.set(grammarDir)
+    className.set("TreeSitterJavascript")
+    packageName.set("io.github.tritium_launcher.launcher.ui.project.editor.treesitter.grammar")
+}
 
 group = "io.github.tritium_launcher.launcher"
 version = "0.1.5"
@@ -26,6 +36,8 @@ val qtOs = when {
     os.isLinux -> if (isArm64) "linux-arm64" else "linux-x64"
     else -> "unknown"
 }
+
+dependencyLocking { lockAllConfigurations() }
 
 repositories {
     mavenCentral()
@@ -45,9 +57,17 @@ configurations.configureEach {
 }
 
 dependencies {
-    // Kotlin
+    // Serialization
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.hocon)
+    implementation(libs.kotlinx.serialization.properties)
+    implementation(libs.kotlin.json5)
+    implementation(libs.ktoml.core)
+    implementation(libs.ktoml.file)
+    implementation(libs.yamlkt)
+    implementation(libs.knbt)
+
+    // Coroutines
     implementation(libs.kotlinx.coroutines.core)
 
     // KSP
@@ -82,10 +102,10 @@ dependencies {
 
     // MSAL4j
     implementation(libs.msal4j)
+    implementation(libs.jultoslf4j)
 
     // Logback
     implementation(libs.logback.classic)
-    implementation(libs.kotlin.reflect)
 
     // LSP
     implementation(libs.lsp4j)
@@ -94,9 +114,72 @@ dependencies {
     implementation(libs.jna)
     implementation(libs.jna.platform)
 
+    // CommonMark
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.ext.gfm.tables)
+    implementation(libs.commonmark.ext.image.attributes)
+    implementation(libs.sqlite.jdbc)
+    implementation(libs.flatbuffers)
+
+    // Kotlin
+    implementation(libs.kotlin.reflect)
+
+    // KTreeSitter
+    implementation(libs.ktreesitter)
+
     /* Test */
 
     testImplementation(libs.bundles.test)
+}
+
+val nativeLibDir = layout.buildDirectory.dir("native/grammar")
+val generatedGrammarDir = layout.buildDirectory.dir("generated")
+val grammarCmakeLists = generatedGrammarDir.map { it.file("CMakeLists.txt") }
+val nativeGrammarLibName: String = when {
+    os.isWindows -> "ktreesitter-javascript.dll"
+    os.isMacOsX  -> "libktreesitter-javascript.dylib"
+    else         -> "libktreesitter-javascript.so"
+}
+
+val patchCmakeLists by tasks.registering {
+    description = "Fix CMakeLists.txt include path for tree-sitter header"
+    dependsOn(tasks.named("generateGrammarFiles"))
+    inputs.file(grammarCmakeLists)
+    outputs.file(grammarCmakeLists)
+    doLast {
+        val cmakeFile = grammarCmakeLists.get().asFile
+        val content = cmakeFile.readText()
+        val fixed = content.replace(
+            "../../tree-sitter-javascript/bindings/c",
+            "../../tree-sitter-javascript/bindings/c ../../tree-sitter-javascript/bindings/c/tree_sitter"
+        )
+        if (fixed != content) {
+            cmakeFile.writeText(fixed)
+        }
+    }
+}
+
+val compileGrammarNative by tasks.registering {
+    description = "Compile tree-sitter JavaScript grammar via CMake"
+    dependsOn(tasks.named("generateGrammarFiles"), patchCmakeLists)
+    val cmakeBuildDir = nativeLibDir.get().asFile
+    val srcDir = generatedGrammarDir.get().asFile
+    inputs.dir(layout.projectDirectory.dir("tree-sitter-javascript/src"))
+    inputs.dir(srcDir.resolve("src/jni"))
+    inputs.file(srcDir.resolve("CMakeLists.txt"))
+    outputs.file(cmakeBuildDir.resolve(nativeGrammarLibName))
+    doLast {
+        cmakeBuildDir.mkdirs()
+        exec {
+            workingDir = cmakeBuildDir
+            environment("JAVA_HOME", System.getProperty("java.home"))
+            commandLine("cmake", srcDir.path, "-DCMAKE_BUILD_TYPE=Release")
+        }
+        exec {
+            workingDir = cmakeBuildDir
+            commandLine("cmake", "--build", ".", "--target", "ktreesitter-javascript", "--parallel")
+        }
+    }
 }
 
 sourceSets["main"].java.srcDirs("src/main/kotlin")
@@ -113,9 +196,21 @@ tasks.test {
 }
 
 tasks.processResources {
+    dependsOn(compileGrammarNative)
+
+    val nativeSubdir = when {
+        os.isWindows -> if (isArm64) "windows/arm64" else "windows/x64"
+        os.isMacOsX  -> if (isArm64) "macos/arm64"   else "macos/x64"
+        else         -> if (isArm64) "linux/arm64"   else "linux/x64"
+    }
+
     inputs.property("version", tritiumVersion)
     filesMatching("version.txt") {
         expand("version" to tritiumVersion)
+    }
+
+    from(nativeLibDir.map { it.file(nativeGrammarLibName) }) {
+        into("lib/$nativeSubdir")
     }
 }
 
@@ -154,7 +249,17 @@ val preparePackageInput by tasks.registering(Sync::class) {
 val compileKotlin: KotlinCompile by tasks
 compileKotlin.apply {
     compilerOptions {
-        freeCompilerArgs.set(listOf("-Xcontext-parameters"))
-        allWarningsAsErrors = true
+        incremental = true
+        freeCompilerArgs.set(listOf("-Xcontext-parameters", "-progressive"))
     }
+}
+
+val compileJava: JavaCompile by tasks
+compileJava.apply {
+    options.isIncremental = true
+}
+
+tasks.clean {
+    delete(nativeLibDir)
+    delete(generatedGrammarDir)
 }

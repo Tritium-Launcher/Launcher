@@ -16,6 +16,7 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
@@ -29,14 +30,18 @@ import java.util.concurrent.ConcurrentHashMap
  * Holds methods for profile management, and the profile cache.
  */
 object ProfileMngr {
+    private val profileScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private const val MC_API_BASE = "https://api.minecraftservices.com"
     private const val PROFILE_URL = "$MC_API_BASE/minecraft/profile"
 
     private const val SKIN_CHANGE_URL = "$MC_API_BASE/minecraft/profile/skins"
     private const val CAPE_CHANGE_URL = "$MC_API_BASE/minecraft/profile/capes/active"
 
-    private val listeners = mutableListOf<(MCProfile?) -> Unit>()
-    private val progressListeners = mutableListOf<(Double) -> Unit>()
+    private val _profile = MutableStateFlow<MCProfile?>(null)
+    val profile: StateFlow<MCProfile?> = _profile.asStateFlow()
+
+    private val _progress = MutableSharedFlow<Double>(replay = 0)
+    val progress: SharedFlow<Double> = _progress.asSharedFlow()
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -51,22 +56,12 @@ object ProfileMngr {
         }
     }
 
-    /** Adds a listener for profile changes. */
-    fun addListener(listener: (MCProfile?) -> Unit) {
-        listeners.add(listener)
-    }
-
-    /** Adds a listener for profile fetch progress. */
-    fun addProgressListener(listener: (Double) -> Unit) {
-        progressListeners.add(listener)
-    }
-
     private fun notifyProgress(progress: Double) {
-        progressListeners.forEach { it(progress) }
+        _progress.tryEmit(progress)
     }
 
     private fun notifyProfileChanged(profile: MCProfile?) {
-        listeners.forEach { it(profile) }
+        _profile.value = profile
     }
 
     private val profilesDir = fromTR(TConstants.Dirs.PROFILES).also { it.mkdirs() }
@@ -87,7 +82,7 @@ object ProfileMngr {
             get() = profiles.isEmpty()
 
         init {
-            GlobalScope.launch(Dispatchers.IO) {
+            profileScope.launch {
                 try {
                     profilesDir.listFiles { it.isFile() && it.fileName().endsWith(".json") }.forEach { f ->
                         try {

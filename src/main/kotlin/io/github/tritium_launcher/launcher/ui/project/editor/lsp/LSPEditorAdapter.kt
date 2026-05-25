@@ -6,18 +6,16 @@ import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.lsp.LSPConnection
 import io.github.tritium_launcher.launcher.lsp.LSPEventBus
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.launcher.ui.project.editor.RainbowBracketHighlighter
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.qt.gui.QColor
 import io.qt.gui.QTextCharFormat
 import io.qt.gui.QTextCursor
 import io.qt.gui.QTextDocument
 import io.qt.widgets.QTextEdit
+import kotlinx.coroutines.*
 import org.eclipse.lsp4j.*
 
-/**
- * Bridges a QTextEdit instance to the LSP textDocument notifications and
- * renders diagnostics as underlines in the editor.
- */
 class LSPEditorAdapter(
     val file: VPath,
     val textEdit: QTextEdit,
@@ -25,8 +23,12 @@ class LSPEditorAdapter(
 ) {
     private val uri = file.toFileUriEncoded().toString()
     private var version = 0
-    private val listenerId: Int
     private var isReady = false
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var diagnosticsJob: Job? = null
+
+    var semanticSelections: List<QTextEdit.ExtraSelection> = emptyList()
+    private var diagnosticSelections: List<QTextEdit.ExtraSelection> = emptyList()
 
     init {
         connection.ready.thenRun {
@@ -38,28 +40,40 @@ class LSPEditorAdapter(
         }
 
         textEdit.textChanged.connect {
-            if(!isReady) {
-                return@connect
-            }
+            if (!isReady) return@connect
             sendDidChange(textEdit.toPlainText())
+            flushSelections()
         }
 
-        listenerId = LSPEventBus.subscribe { params ->
-            if(params.uri == uri) applyDiagnostics(params.diagnostics)
+        diagnosticsJob = scope.launch {
+            LSPEventBus.diagnostics.collect { params ->
+                if (params.uri == uri) {
+                    applyDiagnostics(params.diagnostics)
+                }
+            }
         }
     }
 
-    /**
-     * Unregisters diagnostics listener and notifies the server that the document closed.
-     */
+    fun openDocument(text: String) {
+        if (isReady) {
+            sendDidOpen(text)
+        }
+    }
+
+    fun updateSemanticSelections(selections: List<QTextEdit.ExtraSelection>) {
+        semanticSelections = selections
+        flushSelections()
+    }
+
     fun close() {
-        if(isReady) {
+        diagnosticsJob?.cancel()
+        scope.cancel()
+        if (isReady) {
             connection.server.textDocumentService.didClose(
                 DidCloseTextDocumentParams(TextDocumentIdentifier(uri))
             )
         }
-        textEdit.setExtraSelections(emptyList())
-        LSPEventBus.unsubscribe(listenerId)
+        flushSelections()
         io.github.tritium_launcher.launcher.lsp.LSPMngr.release(connection.project, connection.langId)
     }
 
@@ -76,16 +90,13 @@ class LSPEditorAdapter(
         })
     }
 
-    /**
-     * Applies diagnostics as underline selections in the editor.
-     */
     private fun applyDiagnostics(diagnostics: List<Diagnostic>) {
         runOnGuiThread {
             val doc = textEdit.document ?: return@runOnGuiThread
             val selections = diagnostics.map { diag ->
                 val start = getOffset(doc, diag.range.start)
                 val end = getOffset(doc, diag.range.end)
-                val color = when(diag.severity) {
+                val color = when (diag.severity) {
                     DiagnosticSeverity.Error -> TColors.Syntax.Error.hexToQColor()
                     DiagnosticSeverity.Warning -> TColors.Syntax.Warning.hexToQColor()
                     DiagnosticSeverity.Information -> TColors.Syntax.Information.hexToQColor()
@@ -103,16 +114,18 @@ class LSPEditorAdapter(
                     }
                 }
             }
-            textEdit.setExtraSelections(selections)
+            diagnosticSelections = selections
+            flushSelections()
         }
     }
 
-    /**
-     * Converts LSP line/character positions into Qt document offsets.
-     */
+    private fun flushSelections() {
+        textEdit.setExtraSelections(semanticSelections + diagnosticSelections + RainbowBracketHighlighter.highlight(textEdit))
+    }
+
     private fun getOffset(doc: QTextDocument, pos: Position): Int {
         val block = doc.findBlockByLineNumber(pos.line)
-        if(!block.isValid) return 0
+        if (!block.isValid) return 0
         return (block.position() + pos.character).coerceIn(0, doc.characterCount() - 1)
     }
 }

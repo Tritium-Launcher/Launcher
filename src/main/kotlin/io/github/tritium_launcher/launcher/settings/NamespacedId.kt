@@ -7,6 +7,7 @@ private val FULL_ID = Regex("^[a-z0-9_.-]+:[a-z0-9_.-]+$")
  * Represents an id scoped by the owning namespace (usually an extension id).
  */
 data class NamespacedId(val namespace: String, val id: String) {
+
     init {
         require(LOCAL_ID.matches(namespace)) { "Invalid namespace '$namespace', expected ${LOCAL_ID.pattern}" }
         require(LOCAL_ID.matches(id)) { "Invalid id '$id', expected ${LOCAL_ID.pattern}" }

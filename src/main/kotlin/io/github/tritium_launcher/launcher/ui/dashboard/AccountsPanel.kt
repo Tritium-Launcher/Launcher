@@ -76,9 +76,11 @@ class AccountsPanel internal constructor(): QWidget() {
             scope.cancel()
         }
 
-        ProfileMngr.addListener { _ ->
-            isLoading = false
-            QTimer.singleShot(0) { refreshUI() }
+        scope.launch {
+            ProfileMngr.profile.collect { _ ->
+                isLoading = false
+                QTimer.singleShot(0) { refreshUI() }
+            }
         }
 
         QTimer.singleShot(0) { refreshUI() }

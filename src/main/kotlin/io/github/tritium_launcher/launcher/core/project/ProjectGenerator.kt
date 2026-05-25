@@ -4,6 +4,8 @@ import io.github.tritium_launcher.launcher.core.project.templates.TemplateExecut
 import io.github.tritium_launcher.launcher.coroutines.UIDispatcher
 import io.github.tritium_launcher.launcher.logger
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 /**
  * Runs project creation on a background dispatcher and reports progress to UI.
@@ -13,7 +15,40 @@ class ProjectGenerator(private val uiCtx: CoroutineDispatcher = UIDispatcher) {
     private val logger = logger()
 
     /**
-     * Create a project asynchronously.
+     * Events emitted during project generation.
+     */
+    sealed class ProjectGeneratorEvent {
+        data class Progress(val message: String) : ProjectGeneratorEvent()
+        data class Success(val result: TemplateExecutionResult) : ProjectGeneratorEvent()
+        data class Error(val throwable: Throwable) : ProjectGeneratorEvent()
+    }
+
+    /**
+     * Create a project and returns a [Flow] of [ProjectGeneratorEvent].
+     */
+    fun createProject(
+        projectType: ProjectType,
+        vars: Map<String, String>
+    ): Flow<ProjectGeneratorEvent> = flow {
+        emit(ProjectGeneratorEvent.Progress("Generating Project..."))
+        logger.info("Started generating project '{}'", projectType.id)
+
+        try {
+            val result = projectType.createProject(vars)
+            logger.info("Finished generating project '{}'", projectType.id)
+            emit(ProjectGeneratorEvent.Progress("Finished"))
+            emit(ProjectGeneratorEvent.Success(result))
+        } catch (c: CancellationException) {
+            logger.info("Cancelled generating project '{}'", projectType.id)
+            throw c
+        } catch (t: Throwable) {
+            logger.warn("Failed to generate project '{}'", projectType.id, t)
+            emit(ProjectGeneratorEvent.Error(t))
+        }
+    }
+
+    /**
+     * Create a project asynchronously (Legacy callback-based API).
      *
      * @param projectType The project type to create.
      * @param vars Variables collected from the setup UI.
@@ -26,25 +61,16 @@ class ProjectGenerator(private val uiCtx: CoroutineDispatcher = UIDispatcher) {
         onProgress: (String) -> Unit = {},
         onComplete: (Result<TemplateExecutionResult>) -> Unit
     ): Job = scope.launch {
-        withContext(uiCtx) { onProgress("Generating Project...") }
-        logger.info("Started generating project '{}'", projectType.id)
-
-        val result = try {
-            projectType.createProject(vars)
-        } catch (c: CancellationException) {
-            logger.info("Cancelled generating project '{}'", projectType.id)
-            withContext(NonCancellable + uiCtx) { onComplete(Result.failure(c)) }
-            return@launch
-        } catch (t: Throwable) {
-            logger.warn("Failed to generate project '{}'", projectType.id, t)
-            withContext(NonCancellable + uiCtx) { onComplete(Result.failure(t)) }
-            return@launch
-        }
-
-        logger.info("Finished generating project '{}'", projectType.id)
-        withContext(NonCancellable + uiCtx) {
-            onProgress("Finished")
-            onComplete(Result.success(result))
+        createProject(projectType, vars).collect { event ->
+            when (event) {
+                is ProjectGeneratorEvent.Progress -> withContext(uiCtx) { onProgress(event.message) }
+                is ProjectGeneratorEvent.Success -> withContext(NonCancellable + uiCtx) { 
+                    onComplete(Result.success(event.result)) 
+                }
+                is ProjectGeneratorEvent.Error -> withContext(NonCancellable + uiCtx) { 
+                    onComplete(Result.failure(event.throwable)) 
+                }
+            }
         }
     }
 

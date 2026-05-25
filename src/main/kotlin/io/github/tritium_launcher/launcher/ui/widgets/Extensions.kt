@@ -1,12 +1,15 @@
 package io.github.tritium_launcher.launcher.ui.widgets
 
 import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.hexToQColor
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.ui.theme.TColors
-import io.qt.core.*
-import io.qt.widgets.*
+import io.qt.core.QEasingCurve
+import io.qt.core.QPropertyAnimation
+import io.qt.core.QTimer
+import io.qt.widgets.QGraphicsOpacityEffect
+import io.qt.widgets.QWidget
 
+/**
+ * Applies an opacity effect to temporarily show a [QWidget]
+ */
 fun QWidget.showThenFade(
     showDurationMs: Int = 1200,
     fadeDurationMs: Int = 600
@@ -33,30 +36,4 @@ fun QWidget.showThenFade(
 
         anim.start()
     }
-}
-
-fun QLineEdit.showErrorIfEmpty(msg: String) {
-    if(this.text != "") return
-
-    val alreadyApplied = (this.property("validationOutlineApplied") as? Boolean) == true
-    if(!alreadyApplied) {
-        try {
-            val outline = QGraphicsDropShadowEffect(this).apply {
-                blurRadius = 10.0
-                offset = QPointF(0.0, 0.0)
-                color = TColors.Error.hexToQColor()
-            }
-            this.setGraphicsEffect(outline)
-            this.setProperty("validationOutlineApplied", true)
-        } catch (t: Throwable) {
-            logger().debug("Issue", t)
-        }
-
-        val globalPos = mapToGlobal(QPoint(width / 2, 0))
-        QToolTip.showText(globalPos, msg, this)
-    }
-
-    val globalPos = this.mapToGlobal(QPoint(this.width() / 2, 0))
-
-    QToolTip.showText(globalPos, msg, this)
 }

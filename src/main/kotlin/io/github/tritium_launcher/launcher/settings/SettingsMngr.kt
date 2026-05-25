@@ -3,14 +3,15 @@ package io.github.tritium_launcher.launcher.settings
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigRenderOptions
 import io.github.tritium_launcher.launcher.extension.Extension
+import io.github.tritium_launcher.launcher.extension.core.CoreExtension.namespace
 import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.addListener
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.applyPending
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.category
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.childrenOf
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.comment
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.currentValue
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.currentValueOrNull
+import io.github.tritium_launcher.launcher.settings.SettingsMngr.events
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.findSetting
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.forNamespace
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.persistAll
@@ -18,12 +19,14 @@ import io.github.tritium_launcher.launcher.settings.SettingsMngr.persistNamespac
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.register
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.registerCategory
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.registerSetting
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.removeListener
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.suggestValue
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.text
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.toggle
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.updateValue
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.widget
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
@@ -31,7 +34,6 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.hocon.Hocon
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Central entry point for registering settings, reading persisted values, and writing updates.
@@ -60,7 +62,8 @@ object SettingsMngr {
     private val values = ConcurrentHashMap<NamespacedId, Any>()
     private val pendingRaw = ConcurrentHashMap<String, ConcurrentHashMap<String, String>>()
     private val loadLocks = ConcurrentHashMap<String, Any>()
-    private val listeners = CopyOnWriteArrayList<SettingsListener>()
+    private val _events = MutableSharedFlow<SettingsEvent>(replay = 0)
+    val events: SharedFlow<SettingsEvent> = _events.asSharedFlow()
 
     /* Registration */
 
@@ -83,9 +86,9 @@ object SettingsMngr {
      * @return Registered category node.
      * @see registerCategory
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun registerCategory(descriptor: SettingCategoryDescriptor): SettingsRegistry.CategoryNode =
-        registerCategory(ext.namespace, descriptor)
+        registerCategory(namespace, descriptor)
 
     /**
      * Registers a setting in [category] for [namespace] and applies any pending value.
@@ -112,9 +115,9 @@ object SettingsMngr {
      * @return Registered setting node.
      * @see registerSetting
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun <T> registerSetting(category: CategoryPath, descriptor: SettingDescriptor<T>): SettingNode<T> =
-        registerSetting(ext.namespace, category, descriptor)
+        registerSetting(namespace, category, descriptor)
 
     /* Builder helpers */
 
@@ -139,9 +142,9 @@ object SettingsMngr {
      * @return Registered category node.
      * @see category
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun category(id: String, block: CategoryBuilder.() -> Unit = {}): SettingsRegistry.CategoryNode =
-        category(ext.namespace, id, block)
+        category(namespace, id, block)
 
     /**
      * Builds and registers a toggle setting for [namespace].
@@ -166,9 +169,9 @@ object SettingsMngr {
      * @return Registered setting node.
      * @see toggle
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun toggle(category: CategoryPath, id: String, block: ToggleBuilder.() -> Unit = {}): SettingNode<Boolean> =
-        toggle(ext.namespace, category, id, block)
+        toggle(namespace, category, id, block)
 
     /**
      * Builds and registers a text setting for [namespace].
@@ -193,9 +196,9 @@ object SettingsMngr {
      * @return Registered setting node.
      * @see text
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun text(category: CategoryPath, id: String, block: TextBuilder.() -> Unit = {}): SettingNode<String> =
-        text(ext.namespace, category, id, block)
+        text(namespace, category, id, block)
 
     /**
      * Builds and registers a comment-only setting entry for [namespace].
@@ -220,9 +223,9 @@ object SettingsMngr {
      * @return Registered comment setting node.
      * @see comment
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun comment(category: CategoryPath, id: String, block: CommentBuilder.() -> Unit = {}): SettingNode<Unit> =
-        comment(ext.namespace, category, id, block)
+        comment(namespace, category, id, block)
 
     /**
      * Builds and registers a custom widget-backed setting for [namespace].
@@ -247,9 +250,9 @@ object SettingsMngr {
      * @return Registered setting node.
      * @see widget
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun <T> widget(category: CategoryPath, id: String, block: WidgetBuilder<T>.() -> Unit): SettingNode<T> =
-        widget(ext.namespace, category, id, block)
+        widget(namespace, category, id, block)
 
     /**
      * Creates a namespace-scoped settings registrar that can be passed to external files.
@@ -278,8 +281,8 @@ object SettingsMngr {
      * @return Namespace-scoped registrar bound to [Extension.namespace].
      * @see forNamespace
      */
-    context(ext: Extension)
-    fun scope(): SettingsNamespaceScope = forNamespace(ext.namespace)
+    context(_: Extension)
+    fun scope(): SettingsNamespaceScope = forNamespace(namespace)
 
     /**
      * Registers a reusable [block] for the current extension namespace.
@@ -287,35 +290,12 @@ object SettingsMngr {
      * @param block Registration block to execute.
      * @see register
      */
-    context(ext: Extension)
+    context(_: Extension)
     fun register(block: SettingsRegistration) {
-        register(ext.namespace, block)
+        register(namespace, block)
     }
 
     /* Events */
-
-    /**
-     * Registers [listener] for settings events.
-     *
-     * Events are delivered synchronously on the calling thread.
-     *
-     * @param listener Event listener callback.
-     * @see SettingsEvent
-     * @see removeListener
-     */
-    fun addListener(listener: SettingsListener) {
-        listeners += listener
-    }
-
-    /**
-     * Removes a previously registered [listener].
-     *
-     * @param listener Listener to remove.
-     * @see addListener
-     */
-    fun removeListener(listener: SettingsListener) {
-        listeners -= listener
-    }
 
     /**
      * Publishes a suggestion for [node] without mutating the setting.
@@ -590,7 +570,7 @@ object SettingsMngr {
                 loadEntry(node, rendered)
             }
         }
-        if (pendingNs != null && pendingNs!!.isEmpty()) {
+        if (pendingNs != null && pendingNs.isEmpty()) {
             pendingRaw.remove(namespace)
         }
     }
@@ -822,16 +802,10 @@ object SettingsMngr {
      * Dispatches [event] to all registered listeners.
      *
      * @param event Event payload.
-     * @see addListener
+     * @see events
      */
     private fun emitEvent(event: SettingsEvent) {
-        listeners.forEach { listener ->
-            try {
-                listener(event)
-            } catch (t: Throwable) {
-                logger.warn("Settings listener failed for {}", event.javaClass.simpleName, t)
-            }
-        }
+        _events.tryEmit(event)
     }
 }
 
@@ -976,6 +950,8 @@ class WidgetBuilder<T>(private val id: String) {
     var serializer: KSerializer<T>? = null
     var comments: List<String> = emptyList()
     var order: Int = -1
+    var fullWidth: Boolean = false
+    var fullHeight: Boolean = false
     lateinit var widgetFactory: SettingWidgetFactory<T>
 
     /**
@@ -994,6 +970,8 @@ class WidgetBuilder<T>(private val id: String) {
             defaultValue = default,
             serializer = serializer,
             widgetFactory = factory,
+            fullWidth = fullWidth,
+            fullHeight = fullHeight,
             comments = comments,
             order = order
         )

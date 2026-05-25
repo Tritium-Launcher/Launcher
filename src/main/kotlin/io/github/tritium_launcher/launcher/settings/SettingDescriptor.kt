@@ -150,7 +150,7 @@ data class SettingWidgetContext<T>(
 /**
  * Optional contract for custom setting widgets that can refresh themselves from model state.
  *
- * [SettingsView] calls this during staged/apply/cancel refresh so custom editors stay in sync
+ * [io.github.tritium_launcher.launcher.ui.settings.SettingsView] calls this during staged/apply/cancel refresh so custom editors stay in sync
  * with persisted and pending values.
  *
  * @see SettingWidgetContext.currentValue
@@ -177,6 +177,8 @@ class WidgetSettingDescriptor<T>(
     defaultValue: T,
     serializer: KSerializer<T>?,
     val widgetFactory: SettingWidgetFactory<T>,
+    val fullWidth: Boolean = false,
+    val fullHeight: Boolean = false,
     comments: List<String> = emptyList(),
     order: Int = -1
 ) : SettingDescriptor<T>(

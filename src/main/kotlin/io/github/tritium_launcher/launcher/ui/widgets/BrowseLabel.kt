@@ -8,6 +8,9 @@ import io.qt.gui.QCursor
 import io.qt.widgets.QLabel
 import io.qt.widgets.QWidget
 
+/**
+ * Displays provided URL, and opens URL in an external Browser when clicked
+ */
 class BrowseLabel(
     private val url: String,
     parent: QWidget? = null

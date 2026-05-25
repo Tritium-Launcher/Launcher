@@ -675,6 +675,23 @@ data class VPath(
     operator fun div(other: VPath): VPath = this.resolve(other)
     operator fun div(other: String): VPath = this.resolve(parse(other))
 
+    /**
+     * Append a suffix to the filename of this path.
+     * E.g. VPath("file") + ".txt" -> VPath("file.txt")
+     */
+    operator fun plus(suffix: String): VPath {
+        if (segments.isEmpty()) return this
+        val last = segments.last()
+        val newSegments = segments.toMutableList()
+        newSegments[newSegments.size - 1] = last + suffix
+        return VPath(root, newSegments)
+    }
+
+    /**
+     * Returns true if this path is a parent of (or equal to) [other].
+     */
+    operator fun contains(other: VPath): Boolean = other.startsWith(this)
+
     companion object {
 
         /** Parse a path string into a VPath. */

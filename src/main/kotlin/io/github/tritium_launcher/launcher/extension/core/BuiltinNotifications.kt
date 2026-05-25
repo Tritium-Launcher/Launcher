@@ -16,7 +16,7 @@ internal object BuiltinNotifications {
         sendToOsByDefault = false
     )
 
-    /** Posted when a modpack bootstrap completes successfully. */
+    /** Posted when a source bootstrap completes successfully. */
     val ModpackBootstrapSuccess = NotificationDefinition(
         id = "bootstrap_success",
         header = "Bootstrap Finished",
@@ -25,7 +25,7 @@ internal object BuiltinNotifications {
         sendToOsByDefault = false
     )
 
-    /** Posted when a modpack bootstrap fails. */
+    /** Posted when a source bootstrap fails. */
     val ModpackBootstrapFailed = NotificationDefinition(
         id = "bootstrap_failure",
         header = "Bootstrap Failed",
@@ -34,9 +34,18 @@ internal object BuiltinNotifications {
         sendToOsByDefault = false
     )
 
+    val LSPInstallPrompt = NotificationDefinition(
+        id = "lsp_install_prompt",
+        header = "LSP Server Missing",
+        description = "",
+        icon = TIcons.QuestionMark.icon,
+        sendToOsByDefault = false
+    )
+
     val All = listOf(
         Generic,
         ModpackBootstrapSuccess,
-        ModpackBootstrapFailed
+        ModpackBootstrapFailed,
+        LSPInstallPrompt
     )
 }

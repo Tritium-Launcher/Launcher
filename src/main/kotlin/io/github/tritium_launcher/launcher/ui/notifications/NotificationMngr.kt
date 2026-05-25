@@ -5,6 +5,9 @@ import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.fromTR
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.awt.GraphicsEnvironment
@@ -13,7 +16,6 @@ import java.awt.SystemTray
 import java.awt.TrayIcon
 import java.awt.image.BufferedImage
 import java.util.*
-import java.util.concurrent.CopyOnWriteArrayList
 import javax.imageio.ImageIO
 
 /**
@@ -29,7 +31,8 @@ object NotificationMngr {
 
     private val logger = logger()
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
-    private val listeners = CopyOnWriteArrayList<(NotificationEvent) -> Unit>()
+    private val _events = MutableSharedFlow<NotificationEvent>(replay = 0)
+    val events: SharedFlow<NotificationEvent> = _events.asSharedFlow()
     private val lock = Any()
 
     private val entriesByScope = LinkedHashMap<String, MutableList<NotificationEntry>>()
@@ -317,14 +320,6 @@ object NotificationMngr {
     }
 
     /**
-     * Subscribes to notification events.
-     */
-    fun addListener(listener: (NotificationEvent) -> Unit): () -> Unit {
-        listeners += listener
-        return { listeners -= listener }
-    }
-
-    /**
      * Clears all in-memory notification history.
      *
      * Active and dismissed entries are removed for every scope.
@@ -358,13 +353,7 @@ object NotificationMngr {
     }
 
     private fun emit(event: NotificationEvent) {
-        listeners.forEach { listener ->
-            try {
-                listener(event)
-            } catch (t: Throwable) {
-                logger.warn("Notification listener failed for {}", event.javaClass.simpleName, t)
-            }
-        }
+        _events.tryEmit(event)
     }
 
     private fun isDisabledLocked(definitionId: String, project: ProjectBase?): Boolean {

@@ -20,6 +20,7 @@
     "SelectedText": "#F0F4F8",
     "SelectedUI": "#2E436E",
     "Accent": "#1E8C64",
+    "Unsaved": "#E7944B",
     "Green": "#3A8325",
     "Success": "#10B981",
     "Warning": "#F59E0B",
@@ -43,6 +44,9 @@
     "Syntax.Error": "#F14C4C",
     "Syntax.Warning": "#CCA700",
     "Syntax.Info": "#3794EF",
+    "Syntax.Property": "#9CDCFE",
+    "Syntax.Namespace": "#4EC9B0",
+    "Syntax.Macro": "#569CD6",
 
     "Editor.Tab.Text": "#4db440"
   },
@@ -79,6 +83,7 @@
     "file/log": "icons/file/log.svg",
 
     "ui/tritium": "icons/ui/tritium.svg",
+    "ui/tritium_grayscale": "icons/ui/tritium_grayscale.svg",
     "ui/curseforge": "icons/ui/curseforge.svg",
     "ui/modrinth": "icons/ui/modrinth.svg",
     "ui/fabric": "icons/ui/fabric.svg",

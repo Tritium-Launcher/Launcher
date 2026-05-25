@@ -4,8 +4,6 @@ package io.github.tritium_launcher.launcher.settings
  * Base type for events emitted by [SettingsMngr].
  *
  * @property namespace Namespace associated with this event.
- * @see SettingsMngr.addListener
- * @see SettingsMngr.removeListener
  */
 sealed interface SettingsEvent {
     val namespace: String
@@ -13,8 +11,6 @@ sealed interface SettingsEvent {
 
 /**
  * Listener callback invoked for every [SettingsEvent].
- *
- * @see SettingsMngr.addListener
  */
 typealias SettingsListener = (SettingsEvent) -> Unit
 

@@ -36,7 +36,7 @@ import java.nio.file.Path
  * Project type for creating Modpack projects.
  */
 class ModpackProjectType : ProjectType {
-    override val id: String = "modpack"
+    override val id: String = "source"
     override val displayName: String = "Modpack" // TODO: Localization
     override val description: String = "Create a ModPack project"
     override val icon: QIcon = QIcon(TIcons.TrMeta)
@@ -158,7 +158,7 @@ class ModpackProjectType : ProjectType {
         }
 
         val iconRow = QWidget()
-        val iconRowLayout = hBoxLayout(iconRow) {
+        hBoxLayout(iconRow) {
             contentsMargins = 0.m
             setSpacing(8)
             addWidget(iconPathField)
@@ -360,7 +360,7 @@ class ModpackProjectType : ProjectType {
 
         fun fetchAndPopulateMcVersions() {
             CoroutineScope(Dispatchers.IO).launch {
-                val includePreReleases = CoreSettingValues.includePreReleaseMinecraftVersions()
+                val includePreReleases = CoreSettingValues.includePreReleaseMinecraftVersions
                 val releaseTypes = if (includePreReleases) {
                     listOf(MCVersionType.Release, MCVersionType.Snapshot)
                 } else {
@@ -396,7 +396,7 @@ class ModpackProjectType : ProjectType {
     }
 
     /**
-     * Create the project on disk and write `trproj.json` plus modpack metadata.
+     * Create the project on disk and write `trproj.json` plus source metadata.
      */
     override suspend fun createProject(
         vars: Map<String, String>
@@ -460,7 +460,7 @@ class ModpackProjectType : ProjectType {
 
         val steps = mutableListOf<GeneratorStepDescriptor>()
         steps += GeneratorStepDescriptor(
-            "create-modpack-meta",
+            "create-source-meta",
             "createFile",
             JsonObject(mapOf(
                 "path" to JsonPrimitive("trmodpack.json"),
@@ -526,7 +526,7 @@ class ModpackProjectType : ProjectType {
         projectRoot.mkdirs()
 
         val execResult = ProjectTemplateExecutor.run(
-            templateId = "builtin.modpack:$packName",
+            templateId = "builtin.source:$packName",
             projectRoot = projectRoot.toJPath(),
             variables = vars,
             steps = steps
@@ -654,7 +654,7 @@ class ModpackProjectType : ProjectType {
                             project = projectRef,
                             description = "Project '$packName' is ready.",
                             metadata = mapOf(
-                                "source" to "modpack.bootstrap",
+                                "source" to "source.bootstrap",
                                 "result" to "success",
                             )
                         )
@@ -665,7 +665,7 @@ class ModpackProjectType : ProjectType {
                             project = projectRef,
                             description = "Project '$packName' bootstrap failed: $reason",
                             metadata = mapOf(
-                                "source" to "modpack.bootstrap",
+                                "source" to "source.bootstrap",
                                 "result" to "failed",
                             )
                         )

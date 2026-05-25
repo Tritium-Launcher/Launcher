@@ -7,6 +7,7 @@ import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
@@ -17,6 +18,10 @@ import io.qt.core.QObject
 import io.qt.core.QTimer
 import io.qt.core.Qt
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -59,10 +64,11 @@ class ProjectNotificationListPanel(
         }
     }
 
-    private val unsubscribe: () -> Unit
+    private var unsubscribe: Job? = null
 
     init {
         objectName = "notificationListPanel"
+        AnimatedScrollController.attach(list)
         list.viewport()?.installEventFilter(viewportResizeFilter)
 
         hBoxLayout(controlsRow) {
@@ -88,13 +94,13 @@ class ProjectNotificationListPanel(
             NotificationMngr.clearForProject(project, includeGlobal = true)
         }
 
-        unsubscribe = NotificationMngr.addListener {
-            runOnGuiThread { refresh() }
+        unsubscribe = CoroutineScope(Dispatchers.Main).launch {
+            NotificationMngr.events.collect { runOnGuiThread { refresh() } }
         }
 
         destroyed.connect {
             list.viewport()?.removeEventFilter(viewportResizeFilter)
-            unsubscribe()
+            unsubscribe?.cancel()
         }
 
         setThemedStyle {

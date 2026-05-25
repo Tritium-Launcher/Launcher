@@ -8,8 +8,17 @@ import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.*
 
+/**
+ * Proxy style used to inject theme-specific Qt primitive rendering.
+ *
+ * This style handles custom painting cases that are difficult to
+ * express purely through stylesheets.
+ */
 class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
 
+    /**
+     * Reads a widget property as a double with a fallback for unsupported values.
+     */
     private fun QWidget.propDouble(name: String, fallback: Double): Double {
         val v = this.property(name) ?: return fallback
         return when (v) {
@@ -19,6 +28,9 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         }
     }
 
+    /**
+     * Reads a widget property as a boolean with a fallback for unsupported values.
+     */
     private fun QWidget.propBool(name: String, fallback: Boolean): Boolean {
         val v = this.property(name) ?: return fallback
         return when (v) {
@@ -29,6 +41,9 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         }
     }
 
+    /**
+     * Reads a widget property as a [QColor] with a fallback for unsupported values.
+     */
     private fun QWidget.propColor(name: String, fallback: QColor): QColor {
         val v = this.property(name) ?: return fallback
         return when (v) {
@@ -38,6 +53,9 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         }
     }
 
+    /**
+     * Converts a raw property value into a [QColor] when possible.
+     */
     private fun parseColor(value: Any?): QColor? {
         return when (value) {
             is QColor -> value
@@ -46,6 +64,12 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         }
     }
 
+    /**
+     * Walks up the object parent chain looking for a color-valued property.
+     *
+     * @param start Object to start searching from.
+     * @param key Property name to resolve.
+     */
     private fun findColorProperty(start: QObject?, key: String): QColor? {
         var current = start
         while (current != null) {
@@ -121,6 +145,11 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         super.drawPrimitive(element, option, painter, widget)
     }
 
+    /**
+     * Draws a property-configured rounded border/background for supported widgets.
+     *
+     * @return `true` when the primitive was fully handled and default painting should stop.
+     */
     private fun drawBorder(
         w: QWidget,
         pe: PrimitiveElement,
@@ -192,10 +221,17 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
             else -> super.pixelMetric(metric, option, widget)
         }
     }
-
-
 }
 
+/**
+ * Enables property-driven custom border rendering for this widget.
+ *
+ * @param radius Corner radius used by the proxy style.
+ * @param borderColor Border color used when the border is shown.
+ * @param borderWidth Border stroke width.
+ * @param showOnHover Whether the border should appear on hover.
+ * @param showOnPress Whether the border should appear while pressed.
+ */
 fun QWidget.enableCustomBorder(
     radius: Double = 6.0,
     borderColor: QColor = QColor(0, 0, 0, 80),
@@ -215,6 +251,9 @@ fun QWidget.enableCustomBorder(
     this.update()
 }
 
+/**
+ * Disables custom border rendering for this widget.
+ */
 fun QWidget.disableCustomBorder() {
     this.setProperty("customBorderEnabled", false)
     this.update()

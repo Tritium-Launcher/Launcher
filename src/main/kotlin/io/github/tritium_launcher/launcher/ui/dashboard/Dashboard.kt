@@ -5,11 +5,13 @@ import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.ui.settings.SettingsLink
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
+import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
+import io.github.tritium_launcher.launcher.util.SeasonalEvents.isPrideMonth
 import io.qt.core.Qt
 import io.qt.gui.QIcon
 import io.qt.widgets.*
@@ -40,16 +42,20 @@ class Dashboard internal constructor() : QMainWindow() {
         lineWidth = 0
     }
     private var settingsBtn: QPushButton
-    private val settingsDialog by lazy { SettingsDialog(this) }
+    private val settingsDialog = SettingsDialog(this)
     private var selectedButton: QPushButton? = null
     private val dashboardWindowSize: Pair<Int, Int> = CoreSettingValues.dashboardWindowSize()
 
     init {
-        windowTitle = "Tritium - Dashboard"
+        windowTitle = "Tritium Launcher - Dashboard"
         minimumSize = qs(dashboardWindowSize.first, dashboardWindowSize.second)
         maximumSize = qs(dashboardWindowSize.first, dashboardWindowSize.second)
         isWindowModified = false
-        windowIcon = QIcon(TIcons.Tritium)
+        windowIcon = if (isPrideMonth()) {
+            TIcons.TritiumGrayscale.applyRainbowOverlay(opacity = 0.5f).icon
+        } else {
+            QIcon(TIcons.Tritium.scaled(qs(256, 256), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+        }
 
         val central = qWidget {
             objectName = "dashboard"
@@ -81,12 +87,12 @@ class Dashboard internal constructor() : QMainWindow() {
         }
         val tritiumIconLabel = label {
             objectName = "dashboardTritiumIcon"
-            val icon = TIcons.Tritium
+            val icon = if (isPrideMonth()) TIcons.TritiumGrayscale.applyRainbowOverlay(opacity = 0.5f) else TIcons.Tritium
             if (!icon.isNull) {
-                pixmap = icon.scaled(qs(22, 22), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+                pixmap = icon.scaled(qs(32, 32), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
             }
-            minimumSize = qs(22, 22)
-            maximumSize = qs(22, 22)
+            minimumSize = qs(32, 32)
+            maximumSize = qs(32, 32)
         }
         val tritiumTextWidget = qWidget {
             objectName = "dashboardTritiumText"
@@ -109,6 +115,7 @@ class Dashboard internal constructor() : QMainWindow() {
         val projectsBtn = createNavBtn("Projects")
         val accountBtn  = createNavBtn("Accounts")
         val themesBtn   = createNavBtn("Themes")
+        val extensionsBtn = createNavBtn("Extensions")
         settingsBtn = createNavBtn("Settings").apply {
             isCheckable = false
         }
@@ -131,13 +138,18 @@ class Dashboard internal constructor() : QMainWindow() {
             stackedWidget.currentIndex = 2
         }
 
+        extensionsBtn.onClicked {
+            updateSelectedBtn(extensionsBtn)
+            stackedWidget.currentIndex = 3
+        }
+
         settingsBtn.onClicked {
             openSettings()
         }
 
         leftLayout.addWidget(tritiumWidget)
         leftLayout.addSpacing(8)
-        leftLayout.add(projectsBtn, accountBtn, themesBtn, settingsBtn)
+        leftLayout.add(projectsBtn, accountBtn, themesBtn, extensionsBtn, settingsBtn)
         leftLayout.addStretch(1)
 
         val bottomWidget = qWidget()
@@ -181,7 +193,7 @@ class Dashboard internal constructor() : QMainWindow() {
 
             selector("#dashboardTritium") {
                 backgroundColor(TColors.Surface0)
-                border(1, TColors.Surface2)
+                border(1, TColors.Surface1)
                 borderRadius(6)
             }
             selector("#dashboardTritiumTitle") {
@@ -240,6 +252,10 @@ class Dashboard internal constructor() : QMainWindow() {
         // Themes
         val themesPanel = ThemesPanel()
         stackedWidget.addWidget(themesPanel)
+
+        // Extensions
+        val extensionsPanel = ExtensionsPanel()
+        stackedWidget.addWidget(extensionsPanel)
     }
 
     /**

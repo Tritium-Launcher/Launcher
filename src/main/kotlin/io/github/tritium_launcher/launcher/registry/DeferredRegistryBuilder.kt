@@ -3,7 +3,8 @@ package io.github.tritium_launcher.launcher.registry
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import kotlinx.coroutines.*
-import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlin.time.toDuration
@@ -23,26 +24,28 @@ import kotlin.time.toDuration
  */
 class DeferredRegistryBuilder<T: Registrable>(
     private val registry: Registry<T>,
-    scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+    scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob() + CoroutineName("DeferredRegistryBuilder")),
     private val pollInterval: Duration = 100.toDuration(DurationUnit.MILLISECONDS),
     private val onBuild: (List<T>) -> Unit
 ) {
     private val logger = logger()
 
-    private val accumulated = CopyOnWriteArrayList<T>()
-    private val listener = object : RegistryListener<T> {
-        override fun onRegister(fullId: String, entry: T) {
-            accumulated.add(entry)
-        }
-    }
+    private val accumulated = mutableListOf<T>()
 
     init {
         if(registry.isFrozen) {
             onBuild(registry.all().toList())
         } else {
-            registry.addListener(listener)
             scope.launch {
                 try {
+                    registry.events
+                        .onEach { event ->
+                            if (event is RegistryEvent.Registered) {
+                                accumulated.add(event.entry)
+                            }
+                        }
+                        .launchIn(this)
+
                     while (!registry.isFrozen) {
                         delay(pollInterval)
                     }
@@ -51,9 +54,7 @@ class DeferredRegistryBuilder<T: Registrable>(
                         onBuild(snapshot)
                     }
                 } catch (t: Throwable) {
-                    logger.warn("Polling failed", t)
-                } finally {
-                    registry.removeListener(listener)
+                    logger.warn("Flow collection failed", t)
                 }
             }
         }
