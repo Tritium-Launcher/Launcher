@@ -189,46 +189,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade aqtinstall
 
-          $aqtCfg = "$PWD\.qt\aqt-settings.ini"
-          New-Item -ItemType Directory -Force "$PWD\.qt" | Out-Null
-          @"
-          [requests]
-          INSECURE_NOT_FOR_PRODUCTION_ignore_hash : True
-          "@ | Out-File -FilePath $aqtCfg -Encoding ascii
-
-          function Invoke-Aqt {
-            param([string[]] $Arguments)
-            Write-Host "Running: python -m aqt -c `"$aqtCfg`" $($Arguments -join ' ')"
-            & python -m aqt "-c" $aqtCfg @Arguments
-            if ($LASTEXITCODE -ne 0) {
-              throw "aqt $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
-            }
-          }
-
+          # aqtinstall's list-qt commands consistently fail on Windows GHA
+          # runners (cannot verify Updates.xml checksum).  Bypass discovery
+          # and use the standard MSVC 2022 x64 architecture directly.
           $qtHost = "windows"
-          $archOutput = & python -m aqt "-c" $aqtCfg "list-qt" $qtHost "desktop" "--arch" $env:QT_VERSION 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "list-qt --arch failed with exit code $LASTEXITCODE" }
-          $archs = ($archOutput -join " ") -split '\s+' | Where-Object { $_ -ne '' }
-
-          $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' } | Select-Object -First 1
-          if (-not $qtArch) {
-            $qtArch = $archs | Where-Object { $_ -match '64' } | Select-Object -First 1
-          }
+          $qtArch = "win64_msvc2022_64"
           $qtPlatform = "windows-x64"
 
-          if (-not $qtArch) {
-            throw "Unable to resolve Qt architecture for windows/x64. Available: $($archs -join ', ')"
-          }
-
-          $modulesOutput = & python -m aqt "-c" $aqtCfg "list-qt" $qtHost "desktop" "--modules" $env:QT_VERSION $qtArch 2>&1
-          if ($LASTEXITCODE -ne 0) { throw "list-qt --modules failed with exit code $LASTEXITCODE" }
-          if ($modulesOutput -match '\bqtsvg\b') {
-            Write-Host "Installing Qt with optional module qtsvg"
-            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-m", "qtsvg", "-O", "$PWD\\.qt")
-          } else {
-            Write-Host "qtsvg module not available for $qtHost/$qtArch on Qt $env:QT_VERSION; installing base Qt only"
-            Invoke-Aqt -Arguments @("install-qt", $qtHost, "desktop", $env:QT_VERSION, $qtArch, "-O", "$PWD\\.qt")
-          }
+          Write-Host "Installing Qt $env:QT_VERSION for $qtArch"
+          & python -m aqt install-qt --UNSAFE-ignore-hash $qtHost desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+          if ($LASTEXITCODE -ne 0) { throw "install-qt (with qtsvg) failed with exit code $LASTEXITCODE" }
 
           $qtRoot = "$PWD\\.qt\\$env:QT_VERSION"
           $qtDir = Join-Path $qtRoot $qtArch
