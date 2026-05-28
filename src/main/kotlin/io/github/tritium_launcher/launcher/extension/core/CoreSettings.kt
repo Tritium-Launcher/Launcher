@@ -907,6 +907,12 @@ internal object CoreSettings {
             )
         }
 
+        toggle(minecraft.path, "mods.cache_enabled") {
+            title = "Mod Cache"
+            description = "Cache downloaded mod jars in a shared directory (~/.tritium/mod-cache/) for reuse across projects."
+            defaultValue = false
+        }
+
         widget(ui.path, "ui.dashboard.window_size") {
             title = "Dashboard Window Size"
             description = "Fixed dashboard window size represented as WIDTH x HEIGHT."

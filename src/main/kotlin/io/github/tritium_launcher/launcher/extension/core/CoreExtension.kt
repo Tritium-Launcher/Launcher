@@ -108,6 +108,7 @@ internal object CoreExtension : Extension {
 
             sidePanels.register(ProjectFilesSidePanelProvider())
             sidePanels.register(ProjectModpackSidePanelProvider())
+            sidePanels.register(ProjectInstalledModsSidePanelProvider())
             sidePanels.register(ProjectRegistryBrowserSidePanelProvider())
             sidePanels.register(ProjectLogsSidePanelProvider())
             sidePanels.register(ProjectNotificationsSidePanelProvider())

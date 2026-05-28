@@ -1,6 +1,9 @@
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.launcher.core.mod.*
 import io.github.tritium_launcher.launcher.core.project.ModpackMeta
 import io.github.tritium_launcher.launcher.core.project.Project
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
@@ -30,22 +33,24 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.qt.core.QSize
 import io.qt.core.Qt
-import io.qt.gui.QIcon
-import io.qt.gui.QPixmap
+import io.qt.gui.*
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import org.commonmark.ext.gfm.tables.TablesExtension
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.time.Duration.Companion.milliseconds
+import java.util.concurrent.Semaphore
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, file) {
     override val allowAutoSave: Boolean = false
 
     companion object {
         private const val PAGE_SIZE = 25
-        private const val DETAIL_PREFETCH_DELAY_MS = 900L
+        private const val DETAIL_PREFETCH_CONCURRENCY = 4
+        private const val ICON_LOAD_CONCURRENCY = 8
         const val FILE_NAME = "mod-browser.trtab"
         private val EMPTY_ICON = QIcon(TIcons.Search)
 
@@ -77,8 +82,10 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
     private val queuedDownloads = linkedMapOf<String, QueuedDownload>()
     private val manuallyQueuedIds = linkedSetOf<String>()
     private val iconCache = ConcurrentHashMap<String, QIcon>()
-    private val detailPrefetchQueue = ArrayDeque<String>()
+    private val dominantColorCache = ConcurrentHashMap<String, Triple<Int, Int, Int>>()
     private val queuedDetailIds = ConcurrentHashMap.newKeySet<String>()
+    private val prefetchSemaphore = Semaphore(DETAIL_PREFETCH_CONCURRENCY)
+    private val iconLoadSemaphore = Semaphore(ICON_LOAD_CONCURRENCY)
     private val navigationBackStack = ArrayDeque<String>()
     private val navigationForwardStack = ArrayDeque<String>()
     private val detailRequestsInFlight = ConcurrentHashMap<String, Deferred<ModDetails>>()
@@ -102,9 +109,10 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
     private var lastExcludedCategories: Set<String> = emptySet()
     private var isLoadingPage: Boolean = false
     private var hasMoreResults: Boolean = false
+    private var lastPageLoadMs: Long = 0L
+    private var searchGeneration: Int = 0
     private var searchJob: Job? = null
     private var detailsJob: Job? = null
-    private var detailPrefetchJob: Job? = null
     private var currentSupportMessage: String? = null
     private var suppressSelectionEvents: Boolean = false
     private var dependencyStripSignature: String = ""
@@ -114,7 +122,9 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
     private val searchField = QLineEdit()
     private val searchButton = pushButton { text = "Search" }
     private val categoryCombo = TMultiStateCategoryComboBox()
-    private val availableList = QListWidget()
+    private val availableList = QListWidget().apply {
+        setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+    }
     private val queuedList = QListWidget()
     private val iconLabel = label {
         setFixedSize(64, 64)
@@ -280,7 +290,9 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
             list.horizontalScrollBarPolicy = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         }
         availableList.apply {
-            selectionMode = QAbstractItemView.SelectionMode.SingleSelection
+            objectName = "availableModList"
+            selectionMode = QAbstractItemView.SelectionMode.NoSelection
+            verticalScrollMode = QAbstractItemView.ScrollMode.ScrollPerPixel
         }
         queuedList.selectionMode = QAbstractItemView.SelectionMode.SingleSelection
         versionCombo.isEnabled = false
@@ -359,8 +371,11 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
             removeQueuedButton.isEnabled = queuedList.currentRow() >= 0
         }
         availableList.verticalScrollBar()?.valueChanged?.connect { value ->
+            val now = System.currentTimeMillis()
+            if (now - lastPageLoadMs < 350) return@connect
             val bar = availableList.verticalScrollBar()
             if (bar != null && bar.maximum() > 0 && value >= bar.maximum() - 2) {
+                lastPageLoadMs = now
                 loadNextPage()
             }
         }
@@ -437,7 +452,6 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
     override fun onClose() {
         searchJob?.cancel()
         detailsJob?.cancel()
-        detailPrefetchJob?.cancel()
         ioScope.cancel()
         httpClient.close()
     }
@@ -477,8 +491,8 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
         selectedResultId = null
         selectedDetails = null
         versionsById.clear()
-        detailPrefetchQueue.clear()
         queuedDetailIds.clear()
+        searchGeneration++
         navigationBackStack.clear()
         navigationForwardStack.clear()
         availableList.clear()
@@ -572,6 +586,7 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
 
     private fun selectResult(resultId: String?, syncLists: Boolean = true) {
         selectedResultId = resultId
+        updateSelectedRowGradient()
         versionsById.clear()
         versionCombo.clear()
         versionCombo.isEnabled = false
@@ -705,28 +720,30 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
 
     private fun queueDetailPrefetch(modId: String) {
         if (queuedDetailIds.contains(modId)) return
-        if (detailsCache.containsKey(modId) || versionsCache.containsKey(modId)) return
+        if (detailsCache.containsKey(modId) && versionsCache.containsKey(modId)) return
         queuedDetailIds += modId
-        detailPrefetchQueue += modId
-        if (detailPrefetchJob?.isActive == true) return
-        detailPrefetchJob = ioScope.launch {
-            while (detailPrefetchQueue.isNotEmpty()) {
-                val nextId = detailPrefetchQueue.removeFirstOrNull() ?: continue
-                queuedDetailIds.remove(nextId)
-                val context = activeContext ?: break
-                val source = activeSource ?: break
-                val needsDetails = !detailsCache.containsKey(nextId)
-                val needsVersions = !versionsCache.containsKey(nextId)
-                if (!needsDetails && !needsVersions) continue
+        val generation = searchGeneration
+        ioScope.launch {
+            var acquired = false
+            try {
+                prefetchSemaphore.acquire()
+                acquired = true
+                if (generation != searchGeneration) return@launch
+                queuedDetailIds.remove(modId)
+                val context = activeContext ?: return@launch
+                val source = activeSource ?: return@launch
                 runCatching {
-                    coroutineScope {
-                        if (needsDetails) launch { cachedOrFetchDetails(context, source, nextId) }
-                        if (needsVersions) launch { cachedOrFetchVersions(context, source, nextId) }
+                    if (!detailsCache.containsKey(modId)) {
+                        cachedOrFetchDetails(context, source, modId)
+                    }
+                    if (!versionsCache.containsKey(modId)) {
+                        cachedOrFetchVersions(context, source, modId)
                     }
                 }.onFailure {
-                    logger.debug("Mod detail prefetch skipped for '{}': {}", nextId, it.message)
+                    logger.debug("Mod detail prefetch skipped for '{}': {}", modId, it.message)
                 }
-                delay(DETAIL_PREFETCH_DELAY_MS.milliseconds)
+            } finally {
+                if (acquired) prefetchSemaphore.release()
             }
         }
     }
@@ -738,7 +755,6 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
             logger.debug("Fetching mod details from {} for {}", source.id, modId)
             source.details(context, modId).also { details ->
                 detailsCache[modId] = details
-                registerResultFromDetails(details)
             }
         }
         val request = detailRequestsInFlight.putIfAbsent(modId, newRequest) ?: newRequest
@@ -890,6 +906,7 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
         return planned.values.toList()
     }
 
+    @OptIn(ExperimentalTime::class)
     private fun downloadQueue() {
         val context = activeContext ?: return
         val source = activeSource ?: return
@@ -913,13 +930,94 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
             val outcome = runCatching {
                 val modsDir = project.projectDir.resolve("mods")
                 modsDir.mkdirs()
-                queued.forEachIndexed { idx, queuedMod ->
-                    ProjectTaskMngr.update(taskId, detail = "Downloading ${queuedMod.title}")
-                    ProjectTaskMngr.updateProgress(taskId, ((idx.toDouble() / queued.size) * 100.0))
-                    val plan = source.resolveInstall(context, queuedMod.projectId, queuedMod.versionId)
-                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
-                    modsDir.resolve(plan.fileName).writeBytesAtomic(bytes)
-                    logger.info("Downloaded queued mod '{}' as '{}'", queuedMod.projectId, plan.fileName)
+                val cacheEnabled = CoreSettingValues.modCacheEnabled
+                val dependencyRelations = mutableListOf<Pair<String, List<String>>>()
+                val registryEntries = mutableListOf<ModRegistryEntry>()
+                ModDatabase(project.projectDir).use { db ->
+                    queued.forEachIndexed { idx, queuedMod ->
+                        ProjectTaskMngr.update(taskId, detail = "Downloading ${queuedMod.title}")
+                        ProjectTaskMngr.updateProgress(taskId, ((idx.toDouble() / queued.size) * 100.0))
+                        val plan = source.resolveInstall(context, queuedMod.projectId, queuedMod.versionId)
+                        val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                        val jarPath = modsDir.resolve(plan.fileName)
+                        jarPath.writeBytesAtomic(bytes)
+                        logger.info("Downloaded queued mod '{}' as '{}'", queuedMod.projectId, plan.fileName)
+
+                        val jarInfo = readModJarInfo(jarPath)
+                        val modId = jarInfo?.modId ?: queuedMod.projectId
+                        val displayName = jarInfo?.displayName ?: queuedMod.title
+                        val side = jarInfo?.side ?: "BOTH"
+
+                        val fileHash = ModDatabase.sha1(bytes)
+
+                        val iconBytes = runCatching {
+                            queuedMod.iconUrl?.let { url ->
+                                httpClient.get(url).bodyAsBytes()
+                            }
+                        }.getOrNull()
+                        val iconPath: String? = if (iconBytes != null) {
+                            val iconFile = ModDatabase.iconPathFor(queuedMod.projectId)
+                            iconFile.writeBytesAtomic(iconBytes)
+                            iconFile.toAbsolute().toString()
+                        } else {
+                            val jarIcon = readModJarIcon(jarPath)
+                            if (jarIcon != null) {
+                                val iconFile = ModDatabase.iconPathFor(queuedMod.projectId)
+                                iconFile.writeBytesAtomic(jarIcon)
+                                iconFile.toAbsolute().toString()
+                            } else null
+                        }
+
+                        if (cacheEnabled) {
+                            val cacheFile = ModDatabase.cachePathFor(fileHash)
+                            cacheFile.parent().mkdirs()
+                            cacheFile.writeBytesAtomic(bytes)
+                        }
+
+                        val depIds = queuedMod.dependencies.filter { it.required }.map { it.projectId }
+
+                        db.install(
+                            InstalledMod(
+                                projectId = queuedMod.projectId,
+                                modId = modId,
+                                fileName = plan.fileName,
+                                displayName = displayName,
+                                side = side,
+                                releaseType = plan.releaseType?.name?.lowercase() ?: "release",
+                                source = source.id,
+                                versionId = plan.versionId,
+                                versionLabel = plan.versionLabel,
+                                iconPath = iconPath,
+                                projectUrl = null,
+                                fileHash = fileHash,
+                                installedAt = Clock.System.now()
+                            )
+                        )
+                        dependencyRelations.add(queuedMod.projectId to depIds)
+                        registryEntries.add(
+                            ModRegistryEntry(
+                                projectId = queuedMod.projectId,
+                                modId = modId,
+                                displayName = displayName,
+                                fileName = plan.fileName,
+                                source = source.id,
+                                versionId = plan.versionId,
+                                versionLabel = plan.versionLabel,
+                                iconPath = iconPath,
+                                fileHash = fileHash,
+                                installedAt = Clock.System.now().toEpochMilliseconds(),
+                                side = side,
+                                releaseType = plan.releaseType?.name?.lowercase() ?: "release",
+                                dependencies = depIds,
+                            )
+                        )
+                    }
+                    dependencyRelations.forEach { (projectId, depIds) ->
+                        db.setDependencies(projectId, depIds)
+                    }
+                }
+                ModRegistryStore(project.projectDir).let { store ->
+                    registryEntries.forEach { store.updateEntry(it) }
                 }
                 "Downloaded ${queued.size} mod(s)"
             }
@@ -927,6 +1025,7 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
             if (outcome.isSuccess) {
                 queuedDownloads.clear()
                 manuallyQueuedIds.clear()
+                TritiumEventBus.publish(TritiumEvent.ModsInstalled)
                 runOnGuiThread {
                     modified = false
                     renderQueuedDownloads()
@@ -993,33 +1092,47 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
         }
 
         ioScope.launch {
-            val icon = runCatching {
-                val bytes = httpClient.get(url).bodyAsBytes()
-                bytes
-            }.getOrElse {
-                logger.debug("Mod icon load failed from {}: {}", url, it.message)
-                null
-            }
-            runOnGuiThread {
-                val icon = if (icon != null) {
-                    runCatching {
-                        val pixmap = QPixmap()
-                        if (!pixmap.loadFromData(icon)) error("Failed to decode icon from $url")
-                        QIcon(pixmap)
-                    }.getOrElse {
-                        logger.debug("Mod icon decode failed from {}: {}", url, it.message)
+            var acquired = false
+            try {
+                iconLoadSemaphore.acquire()
+                acquired = true
+                val icon = runCatching {
+                    val bytes = httpClient.get(url).bodyAsBytes()
+                    bytes
+                }.getOrElse {
+                    logger.debug("Mod icon load failed from {}: {}", url, it.message)
+                    null
+                }
+                runOnGuiThread {
+                    val iconObj = if (icon != null) {
+                        runCatching {
+                            val pixmap = QPixmap()
+                            if (!pixmap.loadFromData(icon)) error("Failed to decode icon from $url")
+                            QIcon(pixmap)
+                        }.getOrElse {
+                            logger.debug("Mod icon decode failed from {}: {}", url, it.message)
+                            EMPTY_ICON
+                        }
+                    } else {
                         EMPTY_ICON
                     }
-                } else {
-                    EMPTY_ICON
+                    iconCache[url] = iconObj
+                    if (iconObj !== EMPTY_ICON && !dominantColorCache.containsKey(url)) {
+                        val color = extractDominantColor(iconObj.pixmap(40, 40))
+                        if (color != null) {
+                            dominantColorCache[url] = color
+                            if (key == selectedResultId) updateSelectedRowGradient()
+                        }
+                    }
+                    availableRowWidgets[key]?.iconLabel?.pixmap = iconObj.pixmap(40, 40)
+                    queuedRowWidgets[key]?.iconLabel?.pixmap = iconObj.pixmap(40, 40)
+                    if (targetLabel != null) targetLabel.pixmap = iconObj.pixmap(64, 64)
+                    if (currentDependencyIds().contains(key)) {
+                        renderDependencyStrip()
+                    }
                 }
-                iconCache[url] = icon
-                availableRowWidgets[key]?.iconLabel?.pixmap = icon.pixmap(40, 40)
-                queuedRowWidgets[key]?.iconLabel?.pixmap = icon.pixmap(40, 40)
-                if (targetLabel != null) targetLabel.pixmap = icon.pixmap(64, 64)
-                if (currentDependencyIds().contains(key)) {
-                    renderDependencyStrip()
-                }
+            } finally {
+                if (acquired) iconLoadSemaphore.release()
             }
         }
     }
@@ -1030,6 +1143,44 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
         } else {
             iconCache[url]?.pixmap(64, 64) ?: TIcons.Search.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio)
         }
+    }
+
+    private fun extractDominantColor(pixmap: QPixmap): Triple<Int, Int, Int>? {
+        val small = pixmap.scaled(4, 4, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        if (small.isNull) return null
+        val image = small.toImage() ?: return null
+        if (image.isNull) return null
+        for (y in 0 until image.height()) {
+            for (x in 0 until image.width()) {
+                val argb = image.pixel(x, y)
+                val alpha = (argb ushr 24) and 0xFF
+                if (alpha >= 128) {
+                    return Triple(
+                        (argb ushr 16) and 0xFF,
+                        (argb ushr 8) and 0xFF,
+                        argb and 0xFF
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    private fun updateSelectedRowGradient() {
+        for (i in 0 until availableList.count()) {
+            availableList.item(i)?.setBackground(QBrush())
+        }
+        val id = selectedResultId ?: return
+        val result = resultsById[id] ?: return
+        val iconUrl = result.iconUrl ?: return
+        val (r, g, b) = dominantColorCache[iconUrl] ?: return
+        val item = resultItemsById[id] ?: return
+        val gradient = QLinearGradient(0.0, 0.0, 1.0, 0.0).apply {
+            setCoordinateMode(QGradient.CoordinateMode.ObjectBoundingMode)
+            setColorAt(0.0, QColor(r, g, b, 180))
+            setColorAt(1.0, QColor(0, 0, 0, 0))
+        }
+        item.setBackground(QBrush(gradient))
     }
 
     private fun renderEmptyState() {
@@ -1105,7 +1256,7 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
             hBoxLayout(widget) {
                 setContentsMargins(6, 4, 6, 4)
                 setSpacing(8)
-                addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+                addWidget(icon, 0, Qt.AlignmentFlag.AlignVCenter)
                 addWidget(qWidget().also { textCol ->
                     vBoxLayout(textCol) {
                         setContentsMargins(0, 0, 0, 0)
@@ -1403,23 +1554,6 @@ class ModBrowserPane(project: ProjectBase, file: VPath) : EditorPane(project, fi
         } else {
             list.clearSelection()
             list.currentRow = -1
-        }
-    }
-
-    private fun registerResultFromDetails(details: ModDetails) {
-        runOnGuiThread {
-            resultsById.putIfAbsent(
-                details.id,
-                ModSearchResult(
-                    id = details.id,
-                    title = details.title,
-                    summary = details.summary,
-                    author = details.author,
-                    downloads = details.downloads,
-                    categories = details.categories,
-                    iconUrl = details.iconUrl
-                )
-            )
         }
     }
 

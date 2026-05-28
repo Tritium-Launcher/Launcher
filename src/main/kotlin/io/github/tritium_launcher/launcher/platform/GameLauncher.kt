@@ -3,6 +3,7 @@ package io.github.tritium_launcher.launcher.platform
 import io.github.tritium_launcher.launcher.TConstants
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
 import io.github.tritium_launcher.launcher.accounts.ProfileMngr
+import io.github.tritium_launcher.launcher.core.mod.ModDatabase
 import io.github.tritium_launcher.launcher.core.modloader.LaunchContext
 import io.github.tritium_launcher.launcher.core.modloader.ModLoader
 import io.github.tritium_launcher.launcher.core.project.ModpackMeta
@@ -320,6 +321,7 @@ object GameLauncher {
             launchJvmArgs.size,
             gameArgs.size
         )
+        val disabledModState = prepareDisabledMods(project.projectDir)
         try {
             val processBuilder = ProcessBuilder(command)
                 .directory(project.projectDir.toJFile())
@@ -347,9 +349,11 @@ object GameLauncher {
                 outputJob.join()
                 logger.info("Minecraft exited with code {}", exit)
                 CompanionBridge.clearSessionToken()
+                restoreDisabledMods(disabledModState)
             }
         } catch (t: Throwable) {
             CompanionBridge.clearSessionToken()
+            restoreDisabledMods(disabledModState)
             logger.error("Failed to start Minecraft process", t)
         }
     }
@@ -1234,6 +1238,40 @@ object GameLauncher {
 
     private fun emitRuntimePreparation(event: RuntimePreparationEvent) {
         _runtimePreparationEvents.tryEmit(event)
+    }
+
+    private fun prepareDisabledMods(projectDir: VPath): List<Pair<File, String>> {
+        val renamed = mutableListOf<Pair<File, String>>()
+        try {
+            ModDatabase(projectDir).use { db ->
+                val allMods = db.getAll()
+                val disabled = allMods.filter { !it.enabled }
+                val modsDir = projectDir.resolve("mods").toJFile()
+                if (!modsDir.isDirectory) return@use
+                for (mod in disabled) {
+                    if (mod.fileName.isBlank()) continue
+                    val jar = File(modsDir, mod.fileName)
+                    if (!jar.exists()) continue
+                    val disabledFile = File(modsDir, "${mod.fileName}.disabled")
+                    if (jar.renameTo(disabledFile)) {
+                        renamed.add(jar to mod.fileName)
+                        logger.info("Disabled mod: {} -> {}.disabled", mod.fileName, mod.fileName)
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            logger.warn("Failed to prepare disabled mods for launch", t)
+        }
+        return renamed
+    }
+
+    private fun restoreDisabledMods(state: List<Pair<File, String>>) {
+        for ((originalFile, originalName) in state) {
+            val disabledFile = File(originalFile.parentFile, "$originalName.disabled")
+            if (disabledFile.exists() && disabledFile.renameTo(originalFile)) {
+                logger.info("Restored disabled mod: {} <- {}.disabled", originalName, originalName)
+            }
+        }
     }
 
     private fun scopeOf(path: VPath): String {

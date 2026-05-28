@@ -89,7 +89,8 @@ data class ModVersionOption(
     val loaders: List<String> = emptyList(),
     val featured: Boolean = false,
     val downloads: Long? = null,
-    val dependencies: List<ModDependencyRef> = emptyList()
+    val dependencies: List<ModDependencyRef> = emptyList(),
+    val releaseType: ReleaseType? = null,
 )
 
 data class ModDependencyRef(
@@ -103,5 +104,7 @@ data class ModInstallPlan(
     val versionId: String,
     val versionLabel: String,
     val fileName: String,
-    val downloadUrl: String
+    val downloadUrl: String,
+    val releaseType: ReleaseType? = null,
+    val fileHash: String? = null,
 )

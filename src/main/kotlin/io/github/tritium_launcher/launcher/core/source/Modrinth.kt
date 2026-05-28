@@ -136,7 +136,8 @@ class Modrinth : ModSource(), Registrable {
                             else -> null
                         }
                     }
-                }.distinctBy { "${it.projectId}:${it.required}:${it.incompatible}" }
+                }.distinctBy { "${it.projectId}:${it.required}:${it.incompatible}" },
+                releaseType = version.version_type,
             )
         }
     }
@@ -154,7 +155,9 @@ class Modrinth : ModSource(), Registrable {
             versionId = version.id,
             versionLabel = version.name.ifBlank { version.version_number },
             fileName = file.filename,
-            downloadUrl = file.url
+            downloadUrl = file.url,
+            releaseType = version.version_type,
+            fileHash = file.hashes.sha1,
         )
     }
 

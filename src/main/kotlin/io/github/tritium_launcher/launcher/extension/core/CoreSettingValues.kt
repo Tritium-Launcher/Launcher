@@ -39,6 +39,7 @@ internal object CoreSettingKeys {
     val SeasonalEventsEnabled: NamespacedId = NamespacedId("tritium", "ui.seasonal_events")
     val UiBackgroundImage: NamespacedId = NamespacedId("tritium", "ui.background_image")
     val KeymapActionsOverview: NamespacedId = NamespacedId("tritium", "keymap.actions_overview")
+    val ModCacheEnabled: NamespacedId = NamespacedId("tritium", "mods.cache_enabled")
 
     val GlobalFont: NamespacedId = NamespacedId("tritium", "ui.global_font")
     val EditorFont: NamespacedId = NamespacedId("tritium", "ui.editor_font")
@@ -143,6 +144,11 @@ internal object CoreSettingValues {
      * Whether seasonal events changes are active.
      */
     val seasonalEventsEnabled by setting(CoreSettingKeys.SeasonalEventsEnabled, true)
+
+    /**
+     * Whether downloaded mod jars are cached in a shared directory.
+     */
+    val modCacheEnabled by setting(CoreSettingKeys.ModCacheEnabled, false)
 
     /**
      * Whether dashboard should close when opening a project window.

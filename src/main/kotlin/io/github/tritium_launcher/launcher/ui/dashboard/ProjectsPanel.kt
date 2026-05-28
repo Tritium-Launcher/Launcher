@@ -8,6 +8,7 @@ import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard.Companion.bgDashboardLogger
+import io.github.tritium_launcher.launcher.ui.importing.ImportProjectDialog
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
@@ -339,7 +340,7 @@ class ProjectsPanel internal constructor(): QWidget() {
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             icon = QIcon(TIcons.Import)
             iconSize = qs(32, 32)
-            onClicked { showImportProjectDialog() }
+            onClicked { ImportProjectDialog(this).exec() }
         }
 
         val cloneFromGit = TPushButton {

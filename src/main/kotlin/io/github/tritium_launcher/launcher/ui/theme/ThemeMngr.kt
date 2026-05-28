@@ -25,6 +25,7 @@ import kotlinx.serialization.json.*
 import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.jar.JarFile
 import java.util.prefs.Preferences
@@ -54,7 +55,13 @@ object ThemeMngr {
     private val schemaFile: VPath = userThemesDir.resolve("schema.json")
     private var themeWatcher: VPathWatcher? = null
 
-    private val iconCache = ConcurrentHashMap<Quadruple<String, String, Int, Int>, QIcon>()
+    private const val MAX_CACHE_ENTRIES = 500
+    private val iconCache: MutableMap<Quadruple<String, String, Int, Int>, QPixmap> = Collections.synchronizedMap(
+        object : LinkedHashMap<Quadruple<String, String, Int, Int>, QPixmap>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Quadruple<String, String, Int, Int>, QPixmap>): Boolean =
+                size > MAX_CACHE_ENTRIES
+        }
+    )
 
 
     // TODO: Eventually move this to whatever the main Settings system will be
@@ -276,10 +283,16 @@ object ThemeMngr {
             logger.error("Requested theme '{}' not found", id)
             defaultTheme
         }
-        iconCache.clear()
+        val oldId = _currentThemeId.value
+        if (oldId.isNotBlank()) {
+            synchronized(iconCache) {
+                iconCache.keys.removeIf { it.second == oldId }
+            }
+        }
         _currentThemeId.value = theme.meta.id
         applyTheme(theme)
         persistSelectedThemeId(theme.meta.id)
+        loadThemeIcons()
     }
 
     /**
@@ -468,7 +481,7 @@ object ThemeMngr {
     /**
      * Get an Icon from active Theme
      */
-    fun getIcon(iconKey: String, width: Int? = null, height: Int? = null, dpr: Double = 1.0): QIcon? {
+    fun getPixmap(iconKey: String, width: Int? = null, height: Int? = null, dpr: Double = 1.0): QPixmap? {
         val theme = themes[_currentThemeId.value] ?: defaultTheme
         val mapping = theme.icons[iconKey] ?: return null
 
@@ -479,9 +492,14 @@ object ThemeMngr {
         val h = ceil(baseH * dpr).toInt().coerceAtLeast(1)
 
         val cacheKey = Quadruple(mapping, theme.meta.id, w, h)
-        return iconCache[cacheKey] ?: loadIconFromReference(mapping, theme, w, h, dpr)?.also {
-            iconCache[cacheKey] = it
-        }
+        iconCache[cacheKey]?.let { return it }
+        val pix = loadIconFromReference(mapping, theme, w, h, dpr) ?: return null
+        iconCache[cacheKey] = pix
+        return pix
+    }
+
+    fun getIcon(iconKey: String, width: Int? = null, height: Int? = null, dpr: Double = 1.0): QIcon? {
+        return getPixmap(iconKey, width, height, dpr)?.let { QIcon(it) }
     }
 
     /**
@@ -522,7 +540,7 @@ object ThemeMngr {
     /**
      * Loads an Icon from a provided Theme
      */
-    private fun loadIconFromReference(ref: String, theme: ThemeFile, physW: Int, physH: Int, dpr: Double = 1.0): QIcon? {
+    private fun loadIconFromReference(ref: String, theme: ThemeFile, physW: Int, physH: Int, dpr: Double = 1.0): QPixmap? {
         try {
 
             val tried = mutableListOf<String>()
@@ -676,7 +694,7 @@ object ThemeMngr {
                 }
 
                 pix.setDevicePixelRatio(dpr)
-                return QIcon(pix)
+                return pix
             } else {
                 val pix = QPixmap()
                 val loaded = pix.loadFromData(raw)
@@ -689,7 +707,7 @@ object ThemeMngr {
                 } else pix
                 try { finalPix.setDevicePixelRatio(dpr) } catch (_: Throwable) {}
 
-                return QIcon(finalPix)
+                return finalPix
             }
         } catch (e: Exception) {
             logger.error("Failed to load icon reference '$ref': ${e.message}")
@@ -961,6 +979,17 @@ object ThemeMngr {
     /**
      * Gather all available Theme IDs
      */
+    fun loadThemeIcons(sizes: List<Int> = listOf(16, 32), dpr: Double = 1.0) {
+        Thread {
+            val theme = themes[_currentThemeId.value] ?: return@Thread
+            for (key in theme.icons.keys) {
+                for (size in sizes) {
+                    getPixmap(key, size, size, dpr)
+                }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
     fun availableThemeIds(): List<String> = themes.keys.toList()
 
     /**

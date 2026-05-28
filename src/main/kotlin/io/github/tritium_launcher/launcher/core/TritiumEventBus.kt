@@ -24,4 +24,9 @@ sealed interface TritiumEvent {
      * Request to focus the Registry Browser on a specific ID.
      */
     data class RegistryFocusRequest(val id: String) : TritiumEvent
+
+    /**
+     * Fired after the mod browser finishes downloading queued mods.
+     */
+    data object ModsInstalled : TritiumEvent
 }

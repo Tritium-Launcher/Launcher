@@ -25,7 +25,7 @@ private fun Extension.scaledIconPixmap(size: Int, dprWidget: QWidget? = null): Q
     val src = icon?.pixmap(qs(256, 256))?.takeIf { !it.isNull }
     if (src != null) return loadScaledPixmap(src.toImage(), s, dprWidget)
     val dpr = QGuiApplication.primaryScreen()?.devicePixelRatio() ?: 1.0
-    return ThemeMngr.getIcon("ui/question", size, size, dpr)?.pixmap(s) ?: QPixmap()
+    return ThemeMngr.getPixmap("ui/question", size, size, dpr) ?: QPixmap()
 }
 
 class ExtensionsPanel internal constructor() : QWidget() {

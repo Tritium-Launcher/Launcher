@@ -2,28 +2,15 @@ package io.github.tritium_launcher.launcher.ui.theme
 
 import io.github.tritium_launcher.launcher.currentDpr
 import io.github.tritium_launcher.launcher.referenceWidget
-import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.file.Files
-import java.util.concurrent.ConcurrentHashMap
+
 
 /**
  * Default icons used throughout Tritium, including get methods.
  */
 object TIcons {
-    private val cached = ConcurrentHashMap<String, QIcon>()
-
-    init {
-        CoroutineScope(Dispatchers.Main).launch {
-            ThemeMngr.currentThemeId.collect {
-                cached.clear()
-            }
-        }
-    }
 
     val Tritium get() = pix("ui/tritium", 16, 16)
     val TritiumGrayscale get() = pix("ui/tritium_grayscale", 16, 16)
@@ -66,8 +53,12 @@ object TIcons {
     val CurseForge get() = pix("ui/curseforge", 16, 16)
     val Modrinth   get() = pix("ui/modrinth", 16, 16)
 
-    val Fabric get() = pix("ui/fabric", 16, 16)
+    val Fabric   get() = pix("ui/fabric", 16, 16)
     val NeoForge get() = pix("ui/neoforge", 16, 16)
+
+    val Prism get() = pix("ui/prism_launcher", 16, 16)
+    val GDL   get() = pix("ui/gd_launcher", 16, 16)
+    val ATL   get() = pix("ui/at_launcher", 16, 16)
 
     val QuestionMark get() = pix("ui/question", 16, 16)
 
@@ -99,18 +90,11 @@ object TIcons {
      * Creates a [QPixmap] from specified Icon paths
      */
     private fun pix(keyOrPath: String, width: Int, height: Int, useDpr: Boolean = true): QPixmap {
-        if(!useDpr) {
-            val icon = ThemeMngr.getIcon(keyOrPath, width, height, 1.0) ?: return QPixmap()
-            return icon.pixmap(width, height)
-        }
+        val dpr = if (useDpr) {
+            try { currentDpr(referenceWidget) } catch (_: Throwable) { 1.0 }
+        } else 1.0
 
-        val dpr = try {
-            currentDpr(referenceWidget)
-        } catch (_: Throwable) { 1.0 }
-
-        val icon = ThemeMngr.getIcon(keyOrPath, width, height, dpr) ?: return QPixmap()
-
-        return icon.pixmap(width, height).also { it.setDevicePixelRatio(dpr) }
+        return ThemeMngr.getPixmap(keyOrPath, width, height, dpr) ?: QPixmap()
     }
 
     fun pixForKey(key: String, width: Int, height: Int) = pix(key, width, height)
@@ -142,7 +126,7 @@ object TIcons {
      */
     private fun renderFolderIconToTempPng(): String? {
         return try {
-            val pix = ThemeMngr.getIcon("file/folder", 16, 16, 1.0)?.pixmap(16, 16)
+            val pix = ThemeMngr.getPixmap("file/folder", 16, 16, 1.0)
             if(pix == null || pix.isNull) {
                 null
             } else {

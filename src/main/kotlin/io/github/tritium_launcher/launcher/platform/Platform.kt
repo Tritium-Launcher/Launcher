@@ -7,6 +7,7 @@ import kotlinx.io.IOException
 import org.slf4j.Logger
 import java.awt.Desktop
 import java.io.File
+import java.lang.ProcessBuilder.Redirect.DISCARD
 import java.util.concurrent.TimeUnit
 
 enum class Platform {
@@ -74,6 +75,23 @@ enum class Platform {
                 throw IllegalStateException("Failed to open browser for URL: $url", e)
             }
 
+            return false
+        }
+
+        fun linuxTrash(path: VPath): Boolean {
+            if (current == Linux) {
+                return try {
+                    val process = ProcessBuilder("gio", "trash", path.toAbsoluteString())
+                        .redirectError(DISCARD)
+                        .redirectOutput(DISCARD)
+                        .start()
+
+                    val exited = process.waitFor(5, TimeUnit.SECONDS)
+                    exited && process.exitValue() == 0
+                } catch (_: Exception) {
+                    false
+                }
+            }
             return false
         }
 
