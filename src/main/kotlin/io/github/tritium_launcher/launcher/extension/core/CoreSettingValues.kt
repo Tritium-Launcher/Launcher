@@ -43,6 +43,7 @@ internal object CoreSettingKeys {
 
     val GlobalFont: NamespacedId = NamespacedId("tritium", "ui.global_font")
     val EditorFont: NamespacedId = NamespacedId("tritium", "ui.editor_font")
+    val SmartRerun: NamespacedId = NamespacedId("tritium", "game.smart_rerun")
 }
 
 /**
@@ -240,6 +241,8 @@ internal object CoreSettingValues {
      * Whether game launch should prefer maximized window behavior.
      */
     val gameLaunchMaximized by setting(CoreSettingKeys.GameLaunchMaximized, false)
+
+    val smartRerun by setting(CoreSettingKeys.SmartRerun, true)
 
     /**
      * Default WIDTHxHEIGHT resolution used by game launch token replacement.

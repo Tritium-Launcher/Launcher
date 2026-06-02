@@ -11,7 +11,7 @@ import java.util.jar.JarFile
 data class ModJarInfo(
     val modId: String,
     val displayName: String,
-    val side: String,
+    val side: ModSide,
 )
 
 object ModJarReader
@@ -37,9 +37,9 @@ private fun readFabricLike(jar: JarFile): ModJarInfo? {
     val name = obj["name"]?.jsonPrimitive?.content ?: id
     val env = obj["environment"]?.jsonPrimitive?.content
     val side = when (env) {
-        "client" -> "CLIENT"
-        "server" -> "SERVER"
-        else -> "BOTH"
+        "client" -> ModSide.CLIENT
+        "server" -> ModSide.SERVER
+        else -> ModSide.BOTH
     }
     return ModJarInfo(modId = id, displayName = name, side = side)
 }
@@ -54,9 +54,9 @@ private fun readQuiltLike(jar: JarFile): ModJarInfo? {
     val name = metadata?.get("name")?.jsonPrimitive?.content ?: id
     val env = loader["environment"]?.jsonPrimitive?.content
     val side = when (env) {
-        "client" -> "CLIENT"
-        "server" -> "SERVER"
-        else -> "BOTH"
+        "client" -> ModSide.CLIENT
+        "server" -> ModSide.SERVER
+        else -> ModSide.BOTH
     }
     return ModJarInfo(modId = id, displayName = name, side = side)
 }
@@ -71,7 +71,12 @@ private fun readForgeLike(jar: JarFile): ModJarInfo? {
     val sideRegex = Regex("""side\s*=\s*"([^"]+)""")
     val modId = modIdRegex.find(text)?.groupValues?.getOrNull(1) ?: return null
     val name = nameRegex.find(text)?.groupValues?.getOrNull(1) ?: modId
-    val side = sideRegex.find(text)?.groupValues?.getOrNull(1)?.uppercase() ?: "BOTH"
+    val textSide = sideRegex.find(text)?.groupValues?.getOrNull(1)?.uppercase()
+    val side = when (textSide) {
+        "CLIENT" -> ModSide.CLIENT
+        "SERVER" -> ModSide.SERVER
+        else -> ModSide.BOTH
+    }
     return ModJarInfo(modId = modId, displayName = name, side = side)
 }
 

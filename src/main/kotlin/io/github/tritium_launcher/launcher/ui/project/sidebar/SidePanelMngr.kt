@@ -8,6 +8,7 @@ import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
+import io.github.tritium_launcher.launcher.ui.project.editor.EditorArea
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
@@ -35,8 +36,8 @@ import kotlin.math.abs
 class SidePanelMngr(
     private val project: ProjectBase,
     private val parent: QMainWindow,
+    private val editorArea: EditorArea,
     private val onStateChanged: () -> Unit = {},
-    private val onDockCreated: (String, DockWidget) -> Unit = { _, _ -> },
     private val onAllProvidersBuilt: () -> Unit = {},
 ) {
     data class PersistedDockState(
@@ -51,6 +52,8 @@ class SidePanelMngr(
     private val docks = LinkedHashMap<String, DockWidget>()
     private val providersById = LinkedHashMap<String, SidePanelProvider>()
     private val dockStyleDisposers = mutableMapOf<DockWidget, () -> Unit>()
+
+    fun getDock(id: String): DockWidget? = docks[id]
 
     private val leftBar   = createSidebar(Qt.ToolBarArea.LeftToolBarArea)
     private val rightBar  = createSidebar(Qt.ToolBarArea.RightToolBarArea)
@@ -233,12 +236,19 @@ class SidePanelMngr(
                     if (p.allowedDockAreas.contains(pref)) pref else p.allowedDockAreas.firstOrNull() ?: normalizeDockArea(pref)
                 }
 
-                val action = QAction(p.icon, "").apply {
+                val action = QAction(p.icon ?: QIcon(), "").apply {
                     toolTip = p.displayName
                     isCheckable = true
                     isChecked = persisted?.visible ?: dock.isVisible
                     triggered.connect { checked ->
                         if(checked) {
+                            val area = parent.dockWidgetArea(dock)
+                            docks.values.forEach { otherDock ->
+                                if (otherDock != dock && parent.dockWidgetArea(otherDock) == area && otherDock.isVisible) {
+                                    val otherProvider = providersById[otherDock.objectName]
+                                    if (otherProvider?.allowSplit == false || !p.allowSplit) otherDock.hide()
+                                }
+                            }
                             dock.show()
                             dock.raise()
                         } else {
@@ -254,17 +264,17 @@ class SidePanelMngr(
 
                 parent.addDockWidget(initialArea, dock)
                 addDockActionToToolbar(initialArea, action, p.id)
-                setDockVisibility(dock, action, persisted?.visible ?: true)
+                setDockVisibility(dock, action, persisted?.visible ?: p.defaultVisible)
 
                 dock.objectName = p.id
                 applyDockAreaChrome(dock)
-                dock.applyIcon(p.icon)
+                p.icon?.let { dock.applyIcon(it) }
 
                 setupTitleBar(dock, p, initialArea)
                 dock.destroyed.connect {
                     dockStyleDisposers.remove(dock)?.invoke()
                 }
-                onDockCreated(p.id, dock)
+                p.onDockCreated(project, editorArea, dock, onStateChanged)
                 onStateChanged()
             } catch (t: Throwable) {
                 logger.warn("Failed to create side panel {}", p.id, t)
@@ -282,7 +292,7 @@ class SidePanelMngr(
             widgetSpacing = 5
         }
 
-        layout.addWidget(label { pixmap = provider.icon.pixmap(16,16) ?: QPixmap() })
+        layout.addWidget(label { objectName = "dockTitleBarIcon"; pixmap = provider.icon?.pixmap(16, 16) ?: QPixmap() })
         layout.addWidget(label(provider.displayName) { objectName = "dockTitleLabel" })
         layout.addStretch()
 
@@ -571,6 +581,14 @@ class SidePanelMngr(
         val dock = docks[dockId] ?: return
         val provider = providersById[dockId] ?: return
         moveDock(dock, provider, area)
+    }
+
+    /**
+     * Toggles a dock widget by its provider ID
+     */
+    fun toggleDock(id: String) {
+        val action = dockActions[id] ?: return
+        action.trigger()
     }
 
     /**

@@ -13,12 +13,13 @@ import io.qt.gui.QIcon
 class ProjectNotificationsSidePanelProvider : SidePanelProvider {
     override val id: String = "notifications"
     override val displayName: String = "Notifications"
-    override val icon: QIcon = TIcons.QuestionMark.icon
+    override var icon: QIcon? = TIcons.QuestionMark.icon
     override val order: Int = 20
 
     override val closeable: Boolean = false
     override val floatable: Boolean = false
     override val preferredArea: Qt.DockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea
+    override val allowSplit: Boolean = false
 
     override fun create(project: ProjectBase): DockWidget {
         val dock = DockWidget(displayName, null)

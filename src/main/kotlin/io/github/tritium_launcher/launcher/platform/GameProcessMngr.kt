@@ -1,5 +1,7 @@
 package io.github.tritium_launcher.launcher.platform
 
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
@@ -209,6 +211,18 @@ object GameProcessMngr {
 
     private fun emit(event: GameProcessEvent) {
         _events.tryEmit(event)
+        when (event) {
+            is GameProcessEvent.Attached -> TritiumEventBus.publish(
+                TritiumEvent.GameAttached(event.context.projectScope, event.context.projectName, event.context.pid)
+            )
+            is GameProcessEvent.Detached -> TritiumEventBus.publish(
+                TritiumEvent.GameDetached(event.context.projectScope, event.context.projectName, event.context.pid)
+            )
+            is GameProcessEvent.Exited -> TritiumEventBus.publish(
+                TritiumEvent.GameExited(event.context.projectScope, event.context.projectName, event.context.pid, event.exitCode)
+            )
+            else -> {}
+        }
     }
 
     private fun scopeOf(path: VPath): String {

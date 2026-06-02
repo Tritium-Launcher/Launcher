@@ -1,6 +1,8 @@
 package io.github.tritium_launcher.launcher.ui.project.sidebar
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectDirWatcher
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
@@ -9,9 +11,8 @@ import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
-import io.github.tritium_launcher.launcher.settings.SettingValueChangedEvent
-import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.launcher.ui.project.editor.EditorArea
 import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
@@ -24,7 +25,9 @@ import io.qt.gui.QCursor
 import io.qt.gui.QDropEvent
 import io.qt.gui.QIcon
 import io.qt.widgets.*
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.*
@@ -179,11 +182,12 @@ class ProjectFilesSidePanelProvider: SidePanelProvider, SidePanelTitleBarAccesso
 
     override val id: String = "project_files"
     override val displayName: String = "Project Files"
-    override val icon: QIcon = TIcons.Folder.icon
+    override var icon: QIcon? = TIcons.Folder.icon
     override val order: Int = 0
 
     override val closeable: Boolean = false
     override val floatable: Boolean = false
+    override val defaultVisible: Boolean = true
 
     override fun create(project: ProjectBase): DockWidget {
         val dock = DockWidget(displayName, null)
@@ -216,8 +220,32 @@ class ProjectFilesSidePanelProvider: SidePanelProvider, SidePanelTitleBarAccesso
         return controller.createViewSelector(onStateChanged)
     }
 
+    override fun onDockCreated(project: ProjectBase, editorArea: EditorArea, dock: DockWidget, onStateChanged: () -> Unit) {
+        val tree = dock.widget() as? QTreeWidget ?: dock.findChild(QTreeWidget::class.java)
+        tree?.itemDoubleClicked?.connect { item, _ ->
+            val path = item?.data(0, UserRole) as? VPath
+            if (path != null && !path.isDir()) {
+                editorArea.openFile(path)
+            }
+        }
+        tree?.itemExpanded?.connect { onStateChanged() }
+        tree?.itemCollapsed?.connect { onStateChanged() }
+        tree?.currentItemChanged?.connect { _, _ -> onStateChanged() }
+
+        val pendingState = pendingInitialDockState
+        if (pendingState != null) {
+            pendingInitialDockState = null
+            restoreDockTreeState(dock, pendingState)
+        }
+    }
+
     companion object {
         private val controllers = WeakHashMap<DockWidget, Controller>()
+        private var pendingInitialDockState: DockState? = null
+
+        fun setPendingInitialDockState(state: DockState) {
+            pendingInitialDockState = state
+        }
 
         fun captureDockTreeState(dock: QDockWidget?): DockState {
             val typedDock = dock as? DockWidget ?: return DockState("project_files", emptyList())
@@ -228,12 +256,6 @@ class ProjectFilesSidePanelProvider: SidePanelProvider, SidePanelTitleBarAccesso
             val typedDock = dock as? DockWidget ?: return
             controllers[typedDock]?.restoreState(state)
         }
-
-        fun legacyDockState(state: TreeState): DockState =
-            DockState(
-                activeViewId = "project_files",
-                viewStates = listOf(ViewState("project_files", state))
-            )
 
         internal fun refreshDock(dock: DockWidget) {
             controllers[dock]?.refresh()
@@ -519,7 +541,6 @@ class ProjectFilesSidePanelProvider: SidePanelProvider, SidePanelTitleBarAccesso
         private var selectorButton: QToolButton? = null
         private var titleBarStateChanged: (() -> Unit)? = null
         private val scope = CoroutineScope(Dispatchers.Main)
-        private var settingsJob: Job? = null
 
         private val watcher = ProjectDirWatcher(project.projectDir)
 
@@ -563,15 +584,10 @@ class ProjectFilesSidePanelProvider: SidePanelProvider, SidePanelTitleBarAccesso
                 contextActions = snapshot.sortedBy { it.order }
             }
 
-            settingsJob = scope.launch {
-                SettingsMngr.events.collect { event ->
-                    if (event is SettingValueChangedEvent<*>) {
-                        when (event.node.key) {
-                            CoreSettingKeys.ProjectFilesConfigSort -> {
-                                runOnGuiThread { refresh() }
-                            }
-                        }
-                    }
+            scope.onEvent<TritiumEvent.SettingChanged> { event ->
+                val key = "${event.namespace}:${event.nodeKey}"
+                if (key == CoreSettingKeys.ProjectFilesConfigSort.toString()) {
+                    runOnGuiThread { refresh() }
                 }
             }
             watcher.start(::refresh)
@@ -669,7 +685,6 @@ class ProjectFilesSidePanelProvider: SidePanelProvider, SidePanelTitleBarAccesso
         }
 
         fun dispose() {
-            settingsJob?.cancel()
             scope.cancel()
             watcher.stop()
         }

@@ -1,9 +1,10 @@
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.matches
-import io.github.tritium_launcher.launcher.settings.SettingValueChangedEvent
 import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.project.editor.EditorPane
@@ -13,29 +14,22 @@ import io.github.tritium_launcher.launcher.ui.settings.SettingsView
 import io.qt.widgets.QWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 
 /**
  * Settings editor panes for project-scoped settings files.
  *
  * @param project Active project context.
- * @param file Backing file used only for provider matching.
  * @see SettingsView
  * @see SettingsMngr
  */
-class SettingsEditorPane(project: ProjectBase, file: VPath) : EditorPane(project, file) {
+class SettingsEditorPane(project: ProjectBase) : EditorPane(project) {
     private val view = SettingsView()
     private val scope = CoroutineScope(Dispatchers.Main)
-    private var unsubscribe: Job? = null
 
     init {
-        unsubscribe = scope.launch {
-            SettingsMngr.events.collect { event ->
-                if (event is SettingValueChangedEvent<*>) {
-                    runOnGuiThread { modified = true }
-                }
-            }
+        scope.onEvent<TritiumEvent.SettingChanged> {
+            runOnGuiThread { modified = true }
         }
     }
 
@@ -45,14 +39,14 @@ class SettingsEditorPane(project: ProjectBase, file: VPath) : EditorPane(project
     override fun widget(): QWidget = view
 
     /**
-     * Reloads category and setting rows when the panes is opened.
+     * Reloads category and setting rows when the panes are opened.
      */
     override fun onOpen() {
         view.reload()
     }
 
     override fun onClose() {
-        unsubscribe?.cancel()
+        scope.cancel()
     }
 
     /**
@@ -100,7 +94,7 @@ class SettingsEditorPaneProvider : EditorPaneProvider {
      * @param file File being opened.
      * @return Settings editor panes instance.
      */
-    override fun create(project: ProjectBase, file: VPath): EditorPane = SettingsEditorPane(project, file)
+    override fun create(project: ProjectBase, file: VPath): EditorPane = SettingsEditorPane(project)
 
     /**
      * Checks whether [file] looks like a settings file in `.tr`/`.tritium` directories.

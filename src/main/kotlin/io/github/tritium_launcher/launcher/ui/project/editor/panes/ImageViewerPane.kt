@@ -31,6 +31,7 @@ import io.qt.widgets.*
  * @see EditorPane
  */
 class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, file) {
+    private val paneFile: VPath = file
     private var originalPixmap: QPixmap? = null
     private var scaledPixmap: QPixmap? = null
     private var movie: QMovie? = null
@@ -175,7 +176,7 @@ class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, fi
     }
 
     override fun onOpen() {
-        val path = file.toAbsoluteString()
+        val path = paneFile.toAbsoluteString()
         val m = QMovie(path)
 
         if(m.isValid) {
@@ -192,13 +193,13 @@ class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, fi
         updateMovieControls()
         imageLabel.updatePixmap()
 
-        val isSvg = file.extension().matches("svg", "svgz")
+        val isSvg = paneFile.extension().matches("svg", "svgz")
         if(isSvg) {
-            svgTextEdit.plainText = file.readTextOr("")
+            svgTextEdit.plainText = paneFile.readTextOr("")
             svgTextEdit.isVisible = true
 
             val syntaxRegistry = BuiltinRegistries.SyntaxLanguage
-            val lang = syntaxRegistry.all().find { it.matches(file) }
+            val lang = syntaxRegistry.all().find { it.matches(paneFile) }
             if(lang != null) {
                 UniversalHighlighter(svgTextEdit.document!!, lang)
             }
@@ -209,7 +210,7 @@ class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, fi
         val infoFromMovie = movie != null
         val pix = if(infoFromMovie) movie!!.currentPixmap() else originalPixmap
         if(pix != null && !pix.isNull) {
-            val bytes = file.sizeOrNull() ?: 0L
+            val bytes = paneFile.sizeOrNull() ?: 0L
             val sizeStr = formatFileSize(bytes)
             val frames = movie?.frameCount() ?: 0
             val typeInfo = if(movie != null && frames > 1) ", Animation ($frames frames)" else ""

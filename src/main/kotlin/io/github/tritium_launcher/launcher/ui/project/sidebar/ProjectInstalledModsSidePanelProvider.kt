@@ -4,10 +4,20 @@ import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.TritiumEvent
 import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.core.mod.*
+import io.github.tritium_launcher.launcher.core.onEvent
+import io.github.tritium_launcher.launcher.core.project.ModpackMeta
+import io.github.tritium_launcher.launcher.core.project.Project
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectDirWatcher
+import io.github.tritium_launcher.launcher.core.source.ModBrowserContext
+import io.github.tritium_launcher.launcher.core.source.ModVersionOption
+import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.launcher.ui.project.editor.EditorArea
+import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModDetailMeta
+import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModDetailPane
+import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModDetailPaneProvider
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
@@ -16,18 +26,26 @@ import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBox
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.toolButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.qt.core.QSize
+import io.qt.core.QTimer
 import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import java.io.File
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.ExperimentalTime
 
 class ProjectInstalledModsSidePanelProvider : SidePanelProvider {
     override val id: String = "installed_mods"
     override val displayName: String = "Installed Mods"
-    override val icon: QIcon = TIcons.CSV.icon
+    override var icon: QIcon? = TIcons.CSV.icon
     override val order: Int = 6
 
     override val closeable: Boolean = false
@@ -39,16 +57,37 @@ class ProjectInstalledModsSidePanelProvider : SidePanelProvider {
         dock.setWidget(InstalledModsPanel(project))
         return dock
     }
+
+    override fun onDockCreated(project: ProjectBase, editorArea: EditorArea, dock: DockWidget, onStateChanged: () -> Unit) {
+        val panel = dock.widget() as? InstalledModsPanel
+        panel?.onOpenDetailRequested = { modId, title ->
+            ModDetailMeta.register(modId, title)
+            editorArea.openEditorPane(
+                provider = ModDetailPaneProvider,
+                title = title,
+                paneFactory = { ModDetailPane(it, modId = modId) }
+            )
+        }
+    }
 }
 
-private class InstalledModsPanel(
+class InstalledModsPanel(
     private val project: ProjectBase
 ) : QWidget() {
+    var onOpenDetailRequested: ((modId: String, title: String) -> Unit)? = null
     private val logger = logger()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val listWidget = QListWidget()
     private val dominantColorMap = HashMap<String, Triple<Int, Int, Int>>()
     private val watcher = ProjectDirWatcher(project.projectDir.resolve("mods"))
+    private val updateAvailability = HashMap<String, ModVersionOption>()
+    private val httpClient = HttpClient(CIO) {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 10_000
+            socketTimeoutMillis = 60_000
+        }
+    }
 
     init {
         objectName = "installedModsPanel"
@@ -57,9 +96,14 @@ private class InstalledModsPanel(
             setSpacing(4)
         }
 
+        val checkUpdatesButton = toolButton {
+            icon = TIcons.Download.icon
+            autoRaise = true
+            toolTip = "Check for updates"
+        }
+
         val refreshButton = toolButton {
             icon = TIcons.Rerun.icon
-            iconSize = QSize(16, 16)
             autoRaise = true
             toolTip = "Refresh"
         }
@@ -69,6 +113,7 @@ private class InstalledModsPanel(
             setContentsMargins(0, 0, 0, 0)
             setSpacing(4)
             addStretch(1)
+            addWidget(checkUpdatesButton)
             addWidget(refreshButton)
         }
 
@@ -107,19 +152,38 @@ private class InstalledModsPanel(
         }
 
         refreshButton.clicked.connect { refreshMods() }
+        checkUpdatesButton.clicked.connect { checkUpdates() }
+
         project.projectDir.resolve("mods").mkdirs()
         watcher.start(::refreshMods)
-        scope.launch {
-            TritiumEventBus.events.collect { event ->
-                if (event is TritiumEvent.ModsInstalled) refreshMods()
-            }
-        }
+        scope.onEvent<TritiumEvent.ModsInstalled> { refreshMods() }
+        scope.onEvent<TritiumEvent.UpdateCheckRequested> { checkUpdates() }
         listWidget.currentItemChanged.connect { current, _ ->
             updateSelectedRowGradient(current?.data(Qt.ItemDataRole.UserRole) as? String)
         }
+
+        listWidget.itemDoubleClicked.connect { item ->
+            val projectId = item?.data(Qt.ItemDataRole.UserRole) as? String ?: return@connect
+            scope.launch {
+                val mod = withContext(Dispatchers.IO) {
+                    ModDatabase(project.projectDir).use { db -> db.getByProjectId(projectId) }
+                }
+                val title = mod?.displayName ?: projectId
+                onOpenDetailRequested?.invoke(projectId, title)
+            }
+        }
+
+        val hourlyTimer = QTimer(this).apply {
+            interval = 1.hours.inWholeMilliseconds.toInt()
+            timeout.connect { checkUpdates() }
+            start()
+        }
+
         destroyed.connect {
             watcher.stop()
+            hourlyTimer.stop()
             scope.cancel()
+            httpClient.close()
         }
         refreshMods()
     }
@@ -133,16 +197,52 @@ private class InstalledModsPanel(
                     db.getAll()
                 }
             }
+            val updates = ModUpdateChecker.checkAll(project, mods)
+            updateAvailability.clear()
+            updateAvailability.putAll(updates)
+
             listWidget.clear()
             dominantColorMap.clear()
-            mods.forEach { mod -> addModItem(mod) }
+            mods.forEach { mod ->
+                val updateOption = updateAvailability[mod.projectId]
+                addModItem(mod, updateOption)
+            }
             val labels = findChildren(QLabel::class.java)
-            labels.firstOrNull { it.objectName == "installedModsCount" }?.text = "${mods.size} mod(s) installed"
+            val updateCount = updateAvailability.size
+            val countText = "${mods.size} mod(s) installed"
+            labels.firstOrNull { it.objectName == "installedModsCount" }?.text =
+                if (updateCount > 0) "$countText | $updateCount update(s) available"
+                else countText
+        }
+    }
+
+    private fun checkUpdates() {
+        scope.launch {
+            val mods = withContext(Dispatchers.IO) {
+                ModDatabase(project.projectDir).use { db -> db.getAll() }
+            }
+            val updates = ModUpdateChecker.checkAll(project, mods)
+            updateAvailability.clear()
+            updateAvailability.putAll(updates)
+            val updateCount = updateAvailability.size
+            val labels = findChildren(QLabel::class.java)
+            labels.firstOrNull { it.objectName == "installedModsCount" }?.let { label ->
+                val current = label.text
+                val base = current.substringBefore(" | ")
+                label.text = if (updateCount > 0) "$base | $updateCount update(s) available" else base
+            }
+            for (i in 0 until listWidget.count()) {
+                val item = listWidget.item(i)
+                val projectId = item?.data(Qt.ItemDataRole.UserRole) as? String ?: continue
+                val row = listWidget.itemWidget(item) as? ModListRow ?: continue
+                row.updateUpdateOption(updateAvailability[projectId])
+            }
         }
     }
 
     @OptIn(ExperimentalTime::class)
     private fun syncFromModsDir(db: ModDatabase) {
+        ModDatabase.restoreFromRegistryIfNeeded(db, project.projectDir)
         val modsDirFile = project.projectDir.resolve("mods")
         if (!modsDirFile.isDir()) return
 
@@ -201,7 +301,6 @@ private class InstalledModsPanel(
             if (registryEntry != null && registryEntry.dependencies.isNotEmpty()) {
                 db.setDependencies(registryEntry.projectId, registryEntry.dependencies)
             }
-            registry.updateEntry(registry.entryFromInstalledMod(installedMod))
             logger.info("Imported existing mod '{}' from '{}' into mods database", info.displayName, jarFile.fileName())
         }
     }
@@ -230,10 +329,16 @@ private class InstalledModsPanel(
         }
     }
 
-    private fun addModItem(mod: InstalledMod) {
+    private suspend fun addModItem(mod: InstalledMod, updateOption: ModVersionOption? = null) {
+        val prevVersion = withContext(Dispatchers.IO) {
+            ModDatabase(project.projectDir).use { it.getPreviousVersion(mod.projectId) }
+        }
+        val skippedVersion = withContext(Dispatchers.IO) {
+            ModDatabase(project.projectDir).use { it.getSkippedVersion(mod.projectId, mod.versionId) }
+        }
         val item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, mod.projectId)
-        val row = ModListRow(mod)
+        val row = ModListRow(mod, updateOption, prevVersion, skippedVersion)
         item.setSizeHint(row.sizeHint())
         listWidget.addItem(item)
         listWidget.setItemWidget(item, row)
@@ -245,6 +350,18 @@ private class InstalledModsPanel(
         }
         row.releaseToggled.connect { modId ->
             toggleRelease(modId)
+        }
+        row.updateRequested.connect { modId ->
+            performUpdate(modId)
+        }
+        row.downgradeRequested.connect { modId ->
+            performDowngrade(modId)
+        }
+        row.skipRequested.connect { modId ->
+            performSkip(modId)
+        }
+        row.installSkippedRequested.connect { modId ->
+            performInstallSkipped(modId)
         }
         dominantColorMap[mod.projectId]?.let {} // skip if already cached
         val color = extractDominantColor(row.iconLabel.pixmap() ?: return@addModItem)
@@ -292,6 +409,206 @@ private class InstalledModsPanel(
         }
     }
 
+    private fun performUpdate(modId: String) {
+        val updateOption = updateAvailability[modId] ?: return
+        scope.launch {
+            val mod = withContext(Dispatchers.IO) {
+                ModDatabase(project.projectDir).use { db -> db.getByProjectId(modId) }
+            } ?: return@launch
+
+            withContext(Dispatchers.IO) {
+                val source = BuiltinRegistries.ModSource.all().find { it.id == mod.source } ?: return@withContext
+                val meta = (project as? Project<*>)?.typedMeta as? ModpackMeta ?: return@withContext
+                val context = ModBrowserContext(
+                    project = project,
+                    minecraftVersion = meta.minecraftVersion,
+                    modLoaderId = meta.loader
+                )
+
+                try {
+                    val plan = source.resolveInstall(context, modId, updateOption.id)
+                    val modsDir = project.projectDir.resolve("mods")
+                    modsDir.mkdirs()
+                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                    val oldJar = modsDir.resolve(mod.fileName)
+                    if (oldJar.exists()) oldJar.moveToTrash()
+
+                    val jarPath = modsDir.resolve(plan.fileName)
+                    jarPath.writeBytesAtomic(bytes)
+
+                    val fileHash = ModDatabase.sha1(bytes)
+                    ModDatabase(project.projectDir).use { db ->
+                        db.recordVersionChange(
+                            projectId = modId,
+                            oldVersionId = mod.versionId,
+                            oldVersionLabel = mod.versionLabel,
+                            oldFileHash = mod.fileHash,
+                            newVersionId = plan.versionId,
+                            newVersionLabel = plan.versionLabel
+                        )
+                        db.install(mod.copy(
+                            fileName = plan.fileName,
+                            versionId = plan.versionId,
+                            versionLabel = plan.versionLabel,
+                            fileHash = fileHash,
+                            installedAt = Clock.System.now()
+                        ))
+                    }
+                    TritiumEventBus.publish(TritiumEvent.ModUpdated(project, modId, mod.displayName, mod.versionId, plan.versionId))
+                    TritiumEventBus.publish(TritiumEvent.ModInstalled(project, modId, mod.modId, mod.displayName, plan.versionId, plan.versionLabel))
+                } catch (t: Throwable) {
+                    logger.warn("Failed to update mod '{}'", mod.displayName, t)
+                }
+            }
+            refreshMods()
+        }
+    }
+
+    private fun performDowngrade(modId: String) {
+        scope.launch {
+            val mod = withContext(Dispatchers.IO) {
+                ModDatabase(project.projectDir).use { db -> db.getByProjectId(modId) }
+            } ?: return@launch
+
+            withContext(Dispatchers.IO) {
+                val source = BuiltinRegistries.ModSource.all().find { it.id == mod.source } ?: return@withContext
+                val meta = (project as? Project<*>)?.typedMeta as? ModpackMeta ?: return@withContext
+                val context = ModBrowserContext(
+                    project = project,
+                    minecraftVersion = meta.minecraftVersion,
+                    modLoaderId = meta.loader
+                )
+
+                try {
+                    val prev = ModDatabase(project.projectDir).use { it.getPreviousVersion(modId) } ?: return@withContext
+                    val plan = source.resolveInstall(context, modId, prev.oldVersionId)
+                    val modsDir = project.projectDir.resolve("mods")
+                    modsDir.mkdirs()
+                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                    val oldJar = modsDir.resolve(mod.fileName)
+                    if (oldJar.exists()) oldJar.moveToTrash()
+
+                    val jarPath = modsDir.resolve(plan.fileName)
+                    jarPath.writeBytesAtomic(bytes)
+
+                    val fileHash = ModDatabase.sha1(bytes)
+                    ModDatabase(project.projectDir).use { db ->
+                        db.recordVersionChange(
+                            projectId = modId,
+                            oldVersionId = mod.versionId,
+                            oldVersionLabel = mod.versionLabel,
+                            oldFileHash = mod.fileHash,
+                            newVersionId = prev.oldVersionId,
+                            newVersionLabel = prev.oldVersionLabel
+                        )
+                        db.install(mod.copy(
+                            fileName = plan.fileName,
+                            versionId = prev.oldVersionId,
+                            versionLabel = prev.oldVersionLabel,
+                            fileHash = fileHash,
+                            installedAt = Clock.System.now()
+                        ))
+                    }
+                    TritiumEventBus.publish(TritiumEvent.ModDowngraded(project, modId, mod.displayName, mod.versionId, prev.oldVersionId))
+                    TritiumEventBus.publish(TritiumEvent.ModInstalled(project, modId, mod.modId, mod.displayName, prev.oldVersionId, prev.oldVersionLabel))
+                } catch (t: Throwable) {
+                    logger.warn("Failed to downgrade mod '{}'", mod.displayName, t)
+                }
+            }
+            refreshMods()
+        }
+    }
+
+    private fun performSkip(modId: String) {
+        val updateOption = updateAvailability[modId] ?: return
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                val mod = ModDatabase(project.projectDir).use { db -> db.getByProjectId(modId) }
+                if (mod != null) {
+                    ModDatabase(project.projectDir).use { db ->
+                        db.recordVersionChange(
+                            projectId = modId,
+                            oldVersionId = mod.versionId,
+                            oldVersionLabel = mod.versionLabel,
+                            oldFileHash = mod.fileHash,
+                            newVersionId = updateOption.id,
+                            newVersionLabel = updateOption.label,
+                            skipped = true
+                        )
+                    }
+                    TritiumEventBus.publish(TritiumEvent.ModSkipped(project, modId, mod.displayName, updateOption.id, updateOption.label))
+                }
+            }
+            updateAvailability.remove(modId)
+            for (i in 0 until listWidget.count()) {
+                val item = listWidget.item(i)
+                val pid = item?.data(Qt.ItemDataRole.UserRole) as? String ?: continue
+                if (pid == modId) {
+                    val row = listWidget.itemWidget(item) as? ModListRow ?: continue
+                    row.updateUpdateOption(null)
+                    break
+                }
+            }
+        }
+    }
+
+    private fun performInstallSkipped(modId: String) {
+        scope.launch {
+            val mod = withContext(Dispatchers.IO) {
+                ModDatabase(project.projectDir).use { db -> db.getByProjectId(modId) }
+            } ?: return@launch
+
+            val skippedRecord = withContext(Dispatchers.IO) {
+                ModDatabase(project.projectDir).use { it.getSkippedVersion(modId, mod.versionId) }
+            } ?: return@launch
+
+            withContext(Dispatchers.IO) {
+                val source = BuiltinRegistries.ModSource.all().find { it.id == mod.source } ?: return@withContext
+                val meta = (project as? Project<*>)?.typedMeta as? ModpackMeta ?: return@withContext
+                val context = ModBrowserContext(
+                    project = project,
+                    minecraftVersion = meta.minecraftVersion,
+                    modLoaderId = meta.loader
+                )
+
+                try {
+                    val plan = source.resolveInstall(context, modId, skippedRecord.newVersionId)
+                    val modsDir = project.projectDir.resolve("mods")
+                    modsDir.mkdirs()
+                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                    val oldJar = modsDir.resolve(mod.fileName)
+                    if (oldJar.exists()) oldJar.moveToTrash()
+
+                    val jarPath = modsDir.resolve(plan.fileName)
+                    jarPath.writeBytesAtomic(bytes)
+
+                    val fileHash = ModDatabase.sha1(bytes)
+                    ModDatabase(project.projectDir).use { db ->
+                        db.recordVersionChange(
+                            projectId = modId,
+                            oldVersionId = mod.versionId,
+                            oldVersionLabel = mod.versionLabel,
+                            oldFileHash = mod.fileHash,
+                            newVersionId = skippedRecord.newVersionId,
+                            newVersionLabel = skippedRecord.newVersionLabel
+                        )
+                        db.install(mod.copy(
+                            fileName = plan.fileName,
+                            versionId = skippedRecord.newVersionId,
+                            versionLabel = skippedRecord.newVersionLabel,
+                            fileHash = fileHash,
+                            installedAt = Clock.System.now()
+                        ))
+                    }
+                    TritiumEventBus.publish(TritiumEvent.ModInstalled(project, modId, mod.modId, mod.displayName, skippedRecord.newVersionId, skippedRecord.newVersionLabel))
+                } catch (t: Throwable) {
+                    logger.warn("Failed to install skipped version for mod '{}'", mod.displayName, t)
+                }
+            }
+            refreshMods()
+        }
+    }
+
     private fun confirmAndUninstall(projectId: String) {
         scope.launch {
             val mod = withContext(Dispatchers.IO) {
@@ -314,7 +631,7 @@ private class InstalledModsPanel(
                         withContext(Dispatchers.IO) {
                             project.projectDir.resolve("mods").resolve(mod.fileName).moveToTrash()
                             ModDatabase(project.projectDir).use { db -> db.uninstall(projectId) }
-                            ModRegistryStore(project.projectDir).removeEntry(projectId)
+                            TritiumEventBus.publish(TritiumEvent.ModUninstalled(project, projectId, mod.modId, mod.displayName))
                         }
                         refreshMods()
                     }
@@ -325,58 +642,138 @@ private class InstalledModsPanel(
 
     private fun toggleEnabled(projectId: String) {
         scope.launch {
+            var enabled = false
             withContext(Dispatchers.IO) {
-                val registry = ModRegistryStore(project.projectDir)
                 ModDatabase(project.projectDir).use { db ->
                     val mod = db.getByProjectId(projectId) ?: return@use
-                    db.setEnabled(projectId, !mod.enabled)
-                }
-                registry.getEntry(projectId)?.let { entry ->
-                    registry.updateEntry(entry.copy(enabled = !entry.enabled))
+                    enabled = !mod.enabled
+                    db.setEnabled(projectId, enabled)
                 }
             }
+            TritiumEventBus.publish(TritiumEvent.ModEnabledToggled(project, projectId, enabled))
             refreshMods()
         }
     }
 
     private fun toggleRelease(projectId: String) {
         scope.launch {
+            var excluded = false
             withContext(Dispatchers.IO) {
-                val registry = ModRegistryStore(project.projectDir)
                 ModDatabase(project.projectDir).use { db ->
                     val mod = db.getByProjectId(projectId) ?: return@use
-                    db.setExcludedFromRelease(projectId, !mod.excludedFromRelease)
-                }
-                registry.getEntry(projectId)?.let { entry ->
-                    registry.updateEntry(entry.copy(excludedFromRelease = !entry.excludedFromRelease))
+                    excluded = !mod.excludedFromRelease
+                    db.setExcludedFromRelease(projectId, excluded)
                 }
             }
+            TritiumEventBus.publish(TritiumEvent.ModReleaseToggled(project, projectId, excluded))
             refreshMods()
         }
     }
 }
 
 private class ModListRow(
-    private val mod: InstalledMod
+    private val mod: InstalledMod,
+    private var updateOption: ModVersionOption? = null,
+    private var previousVersion: VersionHistoryRecord? = null,
+    private var skippedVersion: VersionHistoryRecord? = null
 ) : QWidget() {
     val removeRequested = Signal1<String>()
     val enableToggled = Signal1<String>()
     val releaseToggled = Signal1<String>()
+    val updateRequested = Signal1<String>()
+    val downgradeRequested = Signal1<String>()
+    val skipRequested = Signal1<String>()
+    val installSkippedRequested = Signal1<String>()
     val iconLabel: QLabel
+    private val nameLabel: QLabel
+    private val metaLabel: QLabel
+    private val menu: QMenu
+    private val updateAction: QAction?
+    private val downgradeAction: QAction?
+    private val skipAction: QAction?
+    private val installSkippedAction: QAction?
 
-    override fun sizeHint(): QSize = QSize(200, 48)
+    override fun sizeHint(): QSize = QSize(200, 54)
+
+    fun updateUpdateOption(option: ModVersionOption?) {
+        updateOption = option
+        refreshMenuActions()
+    }
+
+    fun updatePreviousVersion(prev: VersionHistoryRecord?) {
+        previousVersion = prev
+        refreshMenuActions()
+    }
+
+    fun updateSkippedVersion(version: VersionHistoryRecord?) {
+        skippedVersion = version
+        refreshMenuActions()
+    }
+
+    private fun refreshMenuActions() {
+        updateAction?.let {
+            if (updateOption != null) {
+                it.text = "Update to v${updateOption!!.label}"
+                it.enabled = true
+                it.toolTip = ""
+                it.visible = true
+            } else {
+                it.text = "Up to date"
+                it.enabled = false
+                it.toolTip = "No updates available"
+                it.visible = true
+            }
+        }
+        downgradeAction?.let {
+            if (previousVersion != null) {
+                it.text = "Downgrade to v${previousVersion!!.oldVersionLabel}"
+                it.enabled = true
+                it.toolTip = ""
+                it.visible = true
+            } else {
+                it.visible = false
+            }
+        }
+        skipAction?.let {
+            if (updateOption != null) {
+                it.text = "Skip v${updateOption!!.label}"
+                it.enabled = true
+                it.visible = true
+            } else {
+                it.visible = false
+            }
+        }
+        installSkippedAction?.let {
+            if (skippedVersion != null) {
+                it.text = "Install Skipped v${skippedVersion!!.newVersionLabel}"
+                it.enabled = true
+                it.visible = true
+            } else {
+                it.visible = false
+            }
+        }
+        val hasUpdateIcon = updateOption != null
+        if (hasUpdateIcon) {
+            nameLabel.objectName = "modListNameUpdate"
+        } else if (!mod.enabled) {
+            nameLabel.objectName = "modListNameDisabled"
+        } else {
+            nameLabel.objectName = "modListName"
+        }
+        nameLabel.style()?.unpolish(nameLabel)
+        nameLabel.style()?.polish(nameLabel)
+    }
 
     init {
         objectName = "modListRow"
         val layout = QHBoxLayout(this).apply {
-            setContentsMargins(4, 4, 4, 4)
+            setContentsMargins(4, 2, 4, 2)
             setSpacing(8)
         }
 
         val iconFile = mod.iconPath?.takeIf { it.isNotBlank() }?.let { File(it) }
         iconLabel = QLabel().apply {
             setFixedSize(32, 32)
-            scaledContents = true
             setAlignment(Qt.AlignmentFlag.AlignCenter)
             val pix = if (iconFile != null && iconFile.exists()) {
                 QPixmap(iconFile.absolutePath)
@@ -392,24 +789,27 @@ private class ModListRow(
             setSpacing(2)
         }
 
-        val nameLabel = QLabel(mod.displayName).apply {
+        nameLabel = QLabel(mod.displayName).apply {
             val f = QFont(font())
             f.setBold(true)
             font = f
             objectName = "modListName"
         }
-        if (!mod.enabled) {
+        if (updateOption != null) {
+            nameLabel.objectName = "modListNameUpdate"
+        } else if (!mod.enabled) {
             nameLabel.objectName = "modListNameDisabled"
         }
         val metaText = buildString {
             append(mod.modId)
             if (mod.versionLabel.isNotBlank()) append(" · ${mod.versionLabel}")
-            if (mod.side != "BOTH") append(" · ${mod.side}")
+            if (updateOption != null) append(" · v${updateOption!!.label} available")
+            if (mod.side != ModSide.BOTH) append(" · ${mod.side.name}")
             append(" · ${mod.releaseType}")
             if (!mod.enabled) append(" · DISABLED")
             if (mod.excludedFromRelease) append(" · DEV")
         }
-        val metaLabel = QLabel(metaText).apply {
+        metaLabel = QLabel(metaText).apply {
             val f = QFont(font())
             f.setPointSize(9)
             font = f
@@ -426,11 +826,49 @@ private class ModListRow(
             toolTip = "Mod actions"
         }
 
-        val menu = QMenu(this)
-        menu.addAction("Update Mod")?.let {
-            it.enabled = false
-            it.toolTip = "TODO" // TODO
+        menu = QMenu(this)
+
+        updateAction = menu.addAction("")?.apply {
+            if (updateOption != null) {
+                text = "Update to v${updateOption!!.label}"
+                enabled = true
+            } else {
+                text = "Up to date"
+                enabled = false
+                toolTip = "No updates available"
+            }
+            triggered.connect { updateRequested.emit(mod.projectId) }
         }
+
+        skipAction = menu.addAction("")?.apply {
+            if (updateOption != null) {
+                text = "Skip v${updateOption!!.label}"
+                visible = true
+            } else {
+                visible = false
+            }
+            triggered.connect { skipRequested.emit(mod.projectId) }
+        }
+
+        downgradeAction = menu.addAction("")?.apply {
+            if (previousVersion != null) {
+                text = "Downgrade to v${previousVersion!!.oldVersionLabel}"
+                visible = true
+            } else {
+                visible = false
+            }
+            triggered.connect { downgradeRequested.emit(mod.projectId) }
+        }
+
+        installSkippedAction = menu.addAction("")?.apply {
+            if (skippedVersion != null) {
+                text = "Install Skipped v${skippedVersion!!.newVersionLabel}"
+                visible = true
+            } else {
+                visible = false
+            }
+            triggered.connect { installSkippedRequested.emit(mod.projectId) }
+        }!!
 
         menu.addSeparator()
 
@@ -463,6 +901,9 @@ private class ModListRow(
             }
             selector("#modListNameDisabled") {
                 color(TColors.Surface2)
+            }
+            selector("#modListNameUpdate") {
+                color(TColors.Green)
             }
             selector("#modListMeta") {
                 color(TColors.Subtext)

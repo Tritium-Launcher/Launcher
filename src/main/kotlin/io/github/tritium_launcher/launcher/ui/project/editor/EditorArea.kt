@@ -1,18 +1,22 @@
 package io.github.tritium_launcher.launcher.ui.project.editor
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
-import io.github.tritium_launcher.launcher.settings.SettingValueChangedEvent
-import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
 import io.github.tritium_launcher.launcher.ui.project.editor.panes.TextEditorPane
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.QTimer
 import io.qt.gui.QIcon
@@ -35,16 +39,18 @@ class EditorArea(
     private val tabDescriptors = mutableMapOf<Int, TabDescriptor>()
 
     data class TabDescriptor(
-        val file: VPath,
+        val file: VPath?,
         val icon: QIcon?,
         val title: String,
         val placeholder: QWidget,
+        val providerId: String? = null,
         var pane: EditorPane? = null
     )
     private val providerRegistry = BuiltinRegistries.EditorPane
     private val syntaxRegistry = BuiltinRegistries.SyntaxLanguage
     private var providersSnapshot: List<EditorPaneProvider> = emptyList()
 
+    private val emptyStateWidget = createEmptyStateWidget()
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val autoSaveTimer = QTimer(container)
 
@@ -92,7 +98,9 @@ class EditorArea(
         mainLayout.setSpacing(0)
         stack.frameShape = QFrame.Shape.NoFrame
         mainLayout.addWidget(tabBar)
-        mainLayout.addWidget(stack)
+        mainLayout.addWidget(stack, 1)
+        mainLayout.addWidget(emptyStateWidget, 1)
+        updateEmptyStateVisibility()
         DeferredRegistryBuilder(providerRegistry) { list ->
             providersSnapshot = list.sortedBy { it.order }
         }
@@ -104,13 +112,10 @@ class EditorArea(
         }
         updateAutoSaveTimer()
         val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-        scope.launch {
-            SettingsMngr.events.collect { event ->
-                if (event is SettingValueChangedEvent<*>) {
-                    if (event.node.key == CoreSettingKeys.EditorAutoSave || event.node.key == CoreSettingKeys.EditorAutoSaveInterval) {
-                        updateAutoSaveTimer()
-                    }
-                }
+        scope.onEvent<TritiumEvent.SettingChanged> { event ->
+            val key = "${event.namespace}:${event.nodeKey}"
+            if (key == CoreSettingKeys.EditorAutoSave.toString() || key == CoreSettingKeys.EditorAutoSaveInterval.toString()) {
+                updateAutoSaveTimer()
             }
         }
         container.destroyed.connect { scope.cancel() }
@@ -129,7 +134,9 @@ class EditorArea(
         val pane = tabDescriptors[current]?.pane ?: return
         if (pane.modified) {
             scope.launch {
-                pane.save()
+                if (pane.save()) {
+                    TritiumEventBus.publish(TritiumEvent.FileSaved(null, pane.file?.toAbsolute()?.toString()))
+                }
             }
         }
     }
@@ -137,7 +144,9 @@ class EditorArea(
     fun saveAll() {
         tabDescriptors.values.mapNotNull { it.pane }.filter { it.modified }.forEach { pane ->
             scope.launch {
-                pane.save()
+                if (pane.save()) {
+                    TritiumEventBus.publish(TritiumEvent.FileSaved(null, pane.file?.toAbsolute()?.toString()))
+                }
             }
         }
     }
@@ -145,7 +154,9 @@ class EditorArea(
     private fun autoSaveAll() {
         tabDescriptors.values.mapNotNull { it.pane }.filter { it.modified && it.allowAutoSave }.forEach { pane ->
             scope.launch {
-                pane.save()
+                if (pane.save()) {
+                    TritiumEventBus.publish(TritiumEvent.FileSaved(null, pane.file?.toAbsolute()?.toString()))
+                }
             }
         }
     }
@@ -154,7 +165,7 @@ class EditorArea(
 
     fun openFile(file: VPath): EditorPane? {
         val absolute = file.toAbsolute()
-        val existingEntry = tabDescriptors.entries.firstOrNull { it.value.file.toAbsolute() == absolute }
+        val existingEntry = tabDescriptors.entries.firstOrNull { it.value.file?.toAbsolute() == absolute }
 
         if(existingEntry != null) {
             val idx = existingEntry.key
@@ -167,6 +178,17 @@ class EditorArea(
         val chosen = providersSnapshot.firstOrNull { it.canOpen(file, project) }
         val tabTitle = chosen?.tabTitle(file, project) ?: file.fileName()
         val resolvedTabIcon = chosen?.tabIcon(file, project) ?: fileIcon
+
+        val singletonGroup = chosen?.singletonGroup
+        if (singletonGroup != null) {
+            val existingSingleton = tabDescriptors.entries.firstOrNull { (_, desc) ->
+                val provider = resolveProvider(desc)
+                provider?.singletonGroup == singletonGroup
+            }
+            if (existingSingleton != null) {
+                closeTabInternal(existingSingleton.key)
+            }
+        }
 
         // Create a placeholder widget for the stacked widget
         val placeholder = QWidget()
@@ -184,18 +206,86 @@ class EditorArea(
             ensurePaneInstantiated(idx)
         }
 
+        updateEmptyStateVisibility()
         onOpenFilesChanged?.invoke()
+        TritiumEventBus.publish(TritiumEvent.EditorOpened(null, file.toAbsolute().toString()))
         return descriptor.pane
+    }
+
+    fun openEditorPane(
+        provider: EditorPaneProvider,
+        title: String,
+        icon: QIcon? = null,
+        paneFactory: (ProjectBase) -> EditorPane
+    ): EditorPane {
+        val singletonGroup = provider.singletonGroup
+        if (singletonGroup != null) {
+            val existingSingleton = tabDescriptors.entries.firstOrNull { (_, desc) ->
+                val p = resolveProvider(desc)
+                p?.singletonGroup == singletonGroup
+            }
+            if (existingSingleton != null) {
+                closeTabInternal(existingSingleton.key)
+            }
+        }
+
+        val pane = paneFactory(project)
+        val placeholder = QWidget()
+        val idx = stack.addWidget(placeholder)
+
+        val descriptor = TabDescriptor(
+            file = null,
+            icon = icon,
+            title = title,
+            placeholder = placeholder,
+            providerId = provider.id,
+            pane = pane
+        )
+        tabDescriptors[idx] = descriptor
+
+        stack.insertWidget(idx, pane.widget())
+        stack.removeWidget(placeholder)
+        placeholder.disposeLater()
+
+        tabBar.insertTab(idx, icon, title)
+        tabBar.setCurrentIndex(idx)
+        stack.currentIndex = idx
+
+        pane.onModifiedChanged = { modified ->
+            tabBar.setTabModifiedAt(idx, modified)
+        }
+        pane.onTitleChanged = { newTitle ->
+            tabBar.setTabText(idx, newTitle)
+        }
+        pane.onIconChanged = { newIcon ->
+            tabBar.setTabIconAt(idx, newIcon)
+        }
+
+        pane.onOpen()
+
+        updateEmptyStateVisibility()
+        onOpenFilesChanged?.invoke()
+        TritiumEventBus.publish(TritiumEvent.EditorOpened(provider.id, null))
+        return pane
+    }
+
+    private fun resolveProvider(desc: TabDescriptor): EditorPaneProvider? {
+        if (desc.providerId != null) {
+            return providersSnapshot.firstOrNull { it.id == desc.providerId }
+        }
+        val file = desc.file ?: return null
+        return providersSnapshot.firstOrNull { it.canOpen(file, project) }
     }
 
     private fun ensurePaneInstantiated(idx: Int): EditorPane? {
         val desc = tabDescriptors[idx] ?: return null
         if (desc.pane != null) return desc.pane
 
-        val chosen = providersSnapshot.firstOrNull { it.canOpen(desc.file, project) }
-        val pane = chosen?.create(project, desc.file) ?: run {
-            val lang = syntaxRegistry.all().find { it.matches(desc.file) }
-            TextEditorPane(project, desc.file, lang)
+        val file = desc.file ?: return null
+        val chosen = providersSnapshot.firstOrNull { it.canOpen(file, project) }
+        val pane = chosen?.create(project, file) ?: run {
+            val lang = syntaxRegistry.all().find { it.matches(file) }
+            TextEditorPane(project, file, lang)
         }
         
         desc.pane = pane
@@ -214,7 +304,13 @@ class EditorArea(
         pane.onModifiedChanged = { modified ->
             tabBar.setTabModifiedAt(idx, modified)
         }
-        
+        pane.onTitleChanged = { title ->
+            tabBar.setTabText(idx, title)
+        }
+        pane.onIconChanged = { icon ->
+            tabBar.setTabIconAt(idx, icon)
+        }
+
         pane.onOpen()
         return pane
     }
@@ -227,7 +323,8 @@ class EditorArea(
             val box = QMessageBox(container)
             box.icon = QMessageBox.Icon.Question
             box.windowTitle = "Unsaved Changes"
-            box.text = "File '${pane.file.fileName()}' has unsaved changes. Do you want to save them?"
+            val fileName = pane.file?.fileName() ?: pane::class.simpleName ?: "Untitled"
+            box.text = "'$fileName' has unsaved changes. Do you want to save them?"
             val saveBtn = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
             val discardBtn = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
             box.addButton(QMessageBox.StandardButton.Cancel)
@@ -257,7 +354,9 @@ class EditorArea(
         tabBar.removeTab(idx)
         tabDescriptors.remove(idx)
         rebuild()
+        updateEmptyStateVisibility()
         onOpenFilesChanged?.invoke()
+        TritiumEventBus.publish(TritiumEvent.EditorClosed(desc.providerId, desc.file?.toAbsolute()?.toString()))
     }
 
     private fun rebuild() {
@@ -278,7 +377,7 @@ class EditorArea(
         }
     }
 
-    fun openFiles(): List<String> = tabDescriptors.values.map { it.file.toAbsolute().toString() }
+    fun openFiles(): List<String> = tabDescriptors.values.mapNotNull { it.file?.toAbsolute()?.toString() }
 
     fun restoreOpenFiles(paths: List<String>) {
         var changed = false
@@ -345,6 +444,59 @@ class EditorArea(
         if (widget == null) return false
         if (widget.window() != container.window()) return false
         return widget == container || container.isAncestorOf(widget)
+    }
+
+    private fun updateEmptyStateVisibility() {
+        val hasTabs = tabBar.count > 0
+        stack.isVisible = hasTabs
+        emptyStateWidget.isVisible = !hasTabs
+    }
+
+    private fun createEmptyStateWidget(): QWidget {
+        return qWidget {
+            objectName = "editorEmptyState"
+
+            val root = vBoxLayout(this) {
+                setContentsMargins(32, 24, 32, 24)
+                setSpacing(0)
+            }
+
+            val leftHint = label("←  Select a File to edit") {
+                objectName = "emptyStateLeftHint"
+            }
+
+            val rightHint = label("Installed Mods  →") {
+                objectName = "emptyStateRightHint"
+            }
+
+            val bottomHint = label("Item Browser  ↓") {
+                objectName = "emptyStateBottomHint"
+            }
+
+            val topRow = hBoxLayout() {
+                addWidget(leftHint)
+                addStretch()
+                addWidget(rightHint)
+            }
+            root.addLayout(topRow)
+            root.addStretch(1)
+
+            val bottomRow = hBoxLayout() {
+                addWidget(bottomHint)
+                addStretch()
+            }
+            root.addLayout(bottomRow)
+
+            setThemedStyle {
+                selector("#editorEmptyState") {
+                    backgroundColor(TColors.Surface0)
+                }
+                selector("#emptyStateLeftHint, #emptyStateRightHint, #emptyStateBottomHint") {
+                    color(TColors.Subtext)
+                    fontSize(13)
+                }
+            }
+        }
     }
 
     private fun resolveFileIcon(file: VPath, project: ProjectBase): QIcon? {

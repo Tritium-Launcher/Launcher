@@ -10,6 +10,8 @@ interface EditorPaneProvider: Registrable {
     val displayName: String
     val order: Int
 
+    val singletonGroup: String? get() = null
+
     fun canOpen(file: VPath, project: ProjectBase): Boolean
 
     fun tabTitle(file: VPath, project: ProjectBase): String = file.fileName()

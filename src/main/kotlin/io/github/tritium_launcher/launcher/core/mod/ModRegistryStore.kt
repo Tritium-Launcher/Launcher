@@ -82,7 +82,7 @@ class ModRegistryStore(projectDir: VPath) {
         modId = entry.modId,
         fileName = entry.fileName,
         displayName = entry.displayName,
-        side = entry.side,
+        side = try { ModSide.valueOf(entry.side.uppercase()) } catch (_: Exception) { ModSide.BOTH },
         releaseType = entry.releaseType,
         source = entry.source,
         versionId = entry.versionId,
@@ -110,7 +110,7 @@ class ModRegistryStore(projectDir: VPath) {
         installedAt = mod.installedAt?.toEpochMilliseconds(),
         enabled = mod.enabled,
         excludedFromRelease = mod.excludedFromRelease,
-        side = mod.side,
+        side = mod.side.name,
         releaseType = mod.releaseType,
         dependencies = mod.dependencies,
     )

@@ -2,7 +2,7 @@ package io.github.tritium_launcher.launcher.ui.project.sidebar
 
 import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.currentDpr
 import io.github.tritium_launcher.launcher.extension.kubejs.KubeJSIntelligenceService
@@ -33,11 +33,12 @@ import kotlin.math.max
 class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitleBarAccessoryProvider {
     override val id: String = "registry_browser"
     override val displayName: String = "Item Browser"
-    override val icon: QIcon = TIcons.SmallGrass.icon
+    override var icon: QIcon? = TIcons.SmallGrass.icon
     override val order: Int = 15
     override val closeable: Boolean = false
     override val floatable: Boolean = false
     override val preferredArea: Qt.DockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
+    override val allowSplit: Boolean = false
     override val allowedDockAreas: Set<Qt.DockWidgetArea> = setOf(Qt.DockWidgetArea.BottomDockWidgetArea)
 
     override fun create(project: ProjectBase): DockWidget {
@@ -283,18 +284,13 @@ class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitl
             }
             searchDebounce.timeout.connect { refreshFromDatabase() }
 
-            scope.launch {
-                TritiumEventBus.events.collect { event ->
-                    if (event is TritiumEvent.RegistryFocusRequest) {
-                        searchField.text = event.id
-                        searchText = event.id
-                        currentPage = 0
-                        refreshFromDatabase()
-                        dock.show()
-                        dock.raise()
-                        dock.setFocus()
-                    }
-                }
+            scope.onEvent<TritiumEvent.RegistryFocusRequest> { event ->
+                searchField.text = event.id
+                searchText = event.id
+                currentPage = 0
+                refreshFromDatabase()
+                dock.show()
+                dock.raise()
             }
 
             scope.launch {

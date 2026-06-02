@@ -2,6 +2,7 @@ package io.github.tritium_launcher.launcher.ui.project.editor
 
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.io.VPath
+import io.qt.gui.QIcon
 import io.qt.widgets.QWidget
 
 /**
@@ -13,7 +14,7 @@ import io.qt.widgets.QWidget
  */
 abstract class EditorPane(
     val project: ProjectBase,
-    val file: VPath
+    val file: VPath? = null
 ) {
     open val allowAutoSave: Boolean = true
 
@@ -26,6 +27,8 @@ abstract class EditorPane(
         }
 
     var onModifiedChanged: ((Boolean) -> Unit)? = null
+    var onTitleChanged: ((String) -> Unit)? = null
+    var onIconChanged: ((QIcon?) -> Unit)? = null
 
     abstract fun widget(): QWidget
 

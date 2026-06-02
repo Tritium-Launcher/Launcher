@@ -29,8 +29,9 @@ import kotlinx.coroutines.*
 class TextEditorPane(
     project: ProjectBase,
     file: VPath,
-    language: SyntaxLanguage?,
+    private val lang: SyntaxLanguage?
 ): EditorPane(project, file) {
+    private val paneFile: VPath get() = file!!
     private val textEdit = DragDropTextEdit()
     private val container = QFrame()
     private val font = QFont("JetBrains Mono", 11)
@@ -62,23 +63,23 @@ class TextEditorPane(
         layout.addWidget(gutter)
         layout.addWidget(textEdit)
 
-        if (TreeSitterService.isAvailable() && isJsLanguage(language)) {
-            logger.info("TextEditorPane: using TreeSitter for {}", file.toAbsolute())
-            treeSitterAdapter = TreeSitterEditorAdapter(file, textEdit, project)
+        if (TreeSitterService.isAvailable() && isJsLanguage(lang)) {
+            logger.info("TextEditorPane: using TreeSitter for {}", paneFile.toAbsolute())
+            treeSitterAdapter = TreeSitterEditorAdapter(paneFile, textEdit, project)
             lspAdapter = null
             highlighter = null
         } else {
             logger.info("TextEditorPane: TreeSitter not used (available={}, isJsLang={}) for {}",
-                TreeSitterService.isAvailable(), isJsLanguage(language), file.toAbsolute())
+                TreeSitterService.isAvailable(), isJsLanguage(lang), paneFile.toAbsolute())
             treeSitterAdapter = null
-            val connection = LSPMngr.getOrStart(project, file)
+            val connection = LSPMngr.getOrStart(project, paneFile)
             if (connection != null) {
-                lspAdapter = LSPEditorAdapter(file, textEdit, connection)
-                highlighter = language?.let { UniversalHighlighter(textEdit.document!!, it) }
+                lspAdapter = LSPEditorAdapter(paneFile, textEdit, connection)
+                highlighter = lang?.let { UniversalHighlighter(textEdit.document!!, it) }
             } else {
                 lspAdapter = null
-                LSPInstaller.checkAndPromptInstallation(project, file)
-                highlighter = language?.let { UniversalHighlighter(textEdit.document!!, it) }
+                LSPInstaller.checkAndPromptInstallation(project, paneFile)
+                highlighter = lang?.let { UniversalHighlighter(textEdit.document!!, it) }
                 rainbowTimer = QTimer(textEdit).apply {
                     interval = 300
                     isSingleShot = true
@@ -115,8 +116,8 @@ class TextEditorPane(
         scope.launch {
             try {
                 val text = withContext(Dispatchers.IO) {
-                    if (file.exists()) {
-                        file.readTextOr("")
+                    if (paneFile.exists()) {
+                        paneFile.readTextOr("")
                     } else {
                         ""
                     }
@@ -127,7 +128,7 @@ class TextEditorPane(
                 textEdit.document!!.isModified = false
                 modified = false
             } catch (t: Throwable) {
-                logger.warn("Failed to load file {}", file.toAbsolute(), t)
+                logger.warn("Failed to load file {}", paneFile.toAbsolute(), t)
                 originalText = ""
                 textEdit.plainText = ""
                 lspAdapter?.openDocument("")
@@ -156,13 +157,13 @@ class TextEditorPane(
 
     override suspend fun save(): Boolean = try {
         val text = textEdit.toPlainText()
-        file.writeBytes(text.toByteArray())
+        paneFile.writeBytes(text.toByteArray())
         originalText = text
         textEdit.document!!.isModified = false
         modified = false
         true
     } catch (t: Throwable) {
-        logger.error("Failed saving {}", file.toAbsolute(), t)
+        logger.error("Failed saving {}", paneFile.toAbsolute(), t)
         false
     }
 

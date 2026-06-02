@@ -1,10 +1,10 @@
 package io.github.tritium_launcher.launcher.ui.widgets
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.settings.SettingValueChangedEvent
-import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.qt.Nullable
 import io.qt.core.*
@@ -14,7 +14,6 @@ import io.qt.widgets.QScrollBar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.exp
 
@@ -56,16 +55,11 @@ class AnimatedScrollController private constructor(
             area.viewport()?.installEventFilter(this)
         }
         timer.timeout.connect { tick() }
-        scope.launch {
-            SettingsMngr.events.collect { event ->
-                if (event is SettingValueChangedEvent<*>) {
-                    when (event.node.key) {
-                        CoreSettingKeys.UiAnimateScrolling -> {
-                            runOnGuiThread {
-                                if (!CoreSettingValues.uiAnimateScrolling) stop()
-                            }
-                        }
-                    }
+        scope.onEvent<TritiumEvent.SettingChanged> { event ->
+            val key = "${event.namespace}:${event.nodeKey}"
+            if (key == CoreSettingKeys.UiAnimateScrolling.toString()) {
+                runOnGuiThread {
+                    if (!CoreSettingValues.uiAnimateScrolling) stop()
                 }
             }
         }

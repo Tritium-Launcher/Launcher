@@ -114,6 +114,7 @@
     "menu/rerun": "icons/menu/rerun.svg",
     "menu/stop": "icons/menu/stop.svg",
     "menu/force_stop": "icons/menu/force_stop.svg",
-    "menu/download": "icons/menu/download.svg"
+    "menu/download": "icons/menu/download.svg",
+    "menu/settings": "icons/menu/settings.svg"
   }
 }

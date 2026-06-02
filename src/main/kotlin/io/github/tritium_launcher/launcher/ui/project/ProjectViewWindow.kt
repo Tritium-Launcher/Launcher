@@ -2,13 +2,15 @@ package io.github.tritium_launcher.launcher.ui.project
 
 import io.github.tritium_launcher.launcher.applyRainbowOverlay
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.keymap.KeymapMngr
 import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.GameProcessMngr
 import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.dashboard.SettingsDialog
@@ -18,7 +20,6 @@ import io.github.tritium_launcher.launcher.ui.notifications.NotificationMngr
 import io.github.tritium_launcher.launcher.ui.notifications.NotificationRenderContext
 import io.github.tritium_launcher.launcher.ui.notifications.Toaster
 import io.github.tritium_launcher.launcher.ui.project.editor.EditorArea
-import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModBrowserPane
 import io.github.tritium_launcher.launcher.ui.project.menu.ProjectMenuBar
 import io.github.tritium_launcher.launcher.ui.project.sidebar.ProjectFilesSidePanelProvider
 import io.github.tritium_launcher.launcher.ui.project.sidebar.SidePanelMngr
@@ -33,12 +34,15 @@ import io.github.tritium_launcher.launcher.util.SeasonalEvents
 import io.github.tritium_launcher.launcher.util.SeasonalEvents.isPrideMonth
 import io.qt.Nullable
 import io.qt.core.QByteArray
+import io.qt.core.QEvent
 import io.qt.core.QTimer
 import io.qt.core.Qt
 import io.qt.core.Qt.DockWidgetArea
-import io.qt.core.Qt.ItemDataRole.UserRole
 import io.qt.gui.*
-import io.qt.widgets.*
+import io.qt.widgets.QMainWindow
+import io.qt.widgets.QMessageBox
+import io.qt.widgets.QProgressBar
+import io.qt.widgets.QWidget
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -80,8 +84,8 @@ class ProjectViewWindow internal constructor(
     private var uiState: ProjectUIState = ProjectUIState()
     private var lastPersistedState: ProjectUIState? = null
     private var suppressStatePersistence: Boolean = false
-    private var unsubscribeGameProcessListener: Job? = null
-    private var unsubscribeRuntimePreparationListener: Job? = null
+    private val savedDockWidths = mutableMapOf<String, Int>()
+    private var gameEventScope: CoroutineScope? = null
     private var unsubscribeTaskListener: Job? = null
     private var unsubscribeKeymapListener: Job? = null
 
@@ -107,53 +111,28 @@ class ProjectViewWindow internal constructor(
         backgroundLayer = ProjectBackgroundWidget(this)
         backgroundLayer.lower()
 
+        val projectFilesTreeState = ProjectFilesSidePanelProvider.TreeState(
+            expandedPaths = if (uiState.projectFilesViewStates.isNotEmpty())
+                uiState.projectFilesViewStates.first().expandedPaths.toSet()
+            else uiState.projectFilesExpandedPaths.toSet(),
+            selectedPath = if (uiState.projectFilesViewStates.isNotEmpty())
+                uiState.projectFilesViewStates.first().selectedPath
+            else uiState.projectFilesSelectedPath
+        )
+        ProjectFilesSidePanelProvider.setPendingInitialDockState(
+            ProjectFilesSidePanelProvider.DockState(
+                activeViewId = uiState.projectFilesActiveViewId,
+                viewStates = listOf(
+                    ProjectFilesSidePanelProvider.ViewState("project_files", projectFilesTreeState)
+                )
+            )
+        )
+
         sidePanelMngr = SidePanelMngr(
             project = project,
             parent = this,
+            editorArea = editorArea,
             onStateChanged = { scheduleStatePersist() },
-            onDockCreated = { id, dock ->
-                if(id == "project_files") {
-                    val tree = (dock.widget() as? QTreeWidget) ?: dock.widget()?.findChild(QTreeWidget::class.java)
-
-                    tree?.itemDoubleClicked?.connect { item, _ ->
-                        val path = item?.data(0, UserRole) as? VPath
-                        if(path != null && !path.isDir()) {
-                            editorArea.openFile(path)
-                        }
-                    }
-                    tree?.itemExpanded?.connect { scheduleStatePersist() }
-                    tree?.itemCollapsed?.connect { scheduleStatePersist() }
-                    tree?.currentItemChanged?.connect { _, _ -> scheduleStatePersist() }
-
-                    val restoredDockState =
-                        if (uiState.projectFilesViewStates.isNotEmpty()) {
-                            ProjectFilesSidePanelProvider.DockState(
-                                activeViewId = uiState.projectFilesActiveViewId,
-                                viewStates = uiState.projectFilesViewStates.map { state ->
-                                    ProjectFilesSidePanelProvider.ViewState(
-                                        viewId = state.viewId,
-                                        treeState = ProjectFilesSidePanelProvider.TreeState(
-                                            expandedPaths = state.expandedPaths.toSet(),
-                                            selectedPath = state.selectedPath
-                                        )
-                                    )
-                                }
-                            )
-                        } else {
-                            ProjectFilesSidePanelProvider.legacyDockState(
-                                ProjectFilesSidePanelProvider.TreeState(
-                                    expandedPaths = uiState.projectFilesExpandedPaths.toSet(),
-                                    selectedPath = uiState.projectFilesSelectedPath
-                                )
-                            )
-                        }
-
-                    ProjectFilesSidePanelProvider.restoreDockTreeState(
-                        dock,
-                        restoredDockState
-                    )
-                }
-            },
             onAllProvidersBuilt = {}
         )
 
@@ -170,21 +149,10 @@ class ProjectViewWindow internal constructor(
             }
         }
 
-        unsubscribeGameProcessListener = CoroutineScope(Dispatchers.Main + CoroutineName("GameProcessMngr")).launch {
-            GameProcessMngr.events.collect {
-                runOnGuiThread {
-                    if (!isVisible) return@runOnGuiThread
-                    rebuildMenusTimer.start()
-                }
-            }
-        }
-        unsubscribeRuntimePreparationListener = CoroutineScope(Dispatchers.Main + CoroutineName("RuntimePreparation")).launch {
-            GameProcessMngr.events.collect {
-                runOnGuiThread {
-                    if (!isVisible) return@runOnGuiThread
-                    rebuildMenusTimer.start()
-                }
-            }
+        gameEventScope = CoroutineScope(Dispatchers.Main + CoroutineName("GameProcessMngr")).apply {
+            onEvent<TritiumEvent.GameAttached> { handleGameEvent() }
+            onEvent<TritiumEvent.GameDetached> { handleGameEvent() }
+            onEvent<TritiumEvent.GameExited> { handleGameEvent() }
         }
         unsubscribeTaskListener = ProjectTaskMngr.taskChanges.onEach {
             runOnGuiThread {
@@ -201,14 +169,19 @@ class ProjectViewWindow internal constructor(
         }.launchIn(CoroutineScope(Dispatchers.Main + CoroutineName("KeymapMngr")))
 
         destroyed.connect {
-            unsubscribeGameProcessListener?.cancel()
-            unsubscribeGameProcessListener = null
-            unsubscribeRuntimePreparationListener?.cancel()
-            unsubscribeRuntimePreparationListener = null
+            gameEventScope?.cancel()
+            gameEventScope = null
             unsubscribeTaskListener?.cancel()
             unsubscribeTaskListener = null
             unsubscribeKeymapListener?.cancel()
             unsubscribeKeymapListener = null
+        }
+    }
+
+    private fun handleGameEvent() {
+        runOnGuiThread {
+            if (!isVisible) return@runOnGuiThread
+            rebuildMenusTimer.start()
         }
     }
 
@@ -221,7 +194,6 @@ class ProjectViewWindow internal constructor(
 
     /**
      * Restores previous window state after the window is shown.
-     * Deferred to avoid Qt crash from calling restoreState/restoreGeometry before show().
      */
     private fun restoreUIState() {
         if (uiStateRestored) return
@@ -256,6 +228,7 @@ class ProjectViewWindow internal constructor(
 
             editorArea.restoreOpenFiles(pendingOpenFiles ?: uiState.openFiles)
             pendingOpenFiles = null
+            captureDockWidths()
         } catch (t: Throwable) {
             logger.warn("Failed to apply UI state for '{}'", project.name, t)
             resize(defaultWindowSize.first, defaultWindowSize.second)
@@ -286,6 +259,7 @@ class ProjectViewWindow internal constructor(
         if (suppressStatePersistence) return
         try {
             ensureTDir()
+            captureDockWidths()
             val openFiles = editorArea.openFiles()
             val geomQBA = saveGeometry()
             val stateQBA = saveState()
@@ -406,6 +380,33 @@ class ProjectViewWindow internal constructor(
         )
     }
 
+    private fun captureDockWidths() {
+        savedDockWidths.clear()
+        for ((id, dock) in sidePanelMngr.dockWidgets()) {
+            savedDockWidths[id] = dock.width()
+        }
+    }
+
+    private fun lockDockWidths() {
+        for ((id, w) in savedDockWidths) {
+            sidePanelMngr.getDock(id)?.minimumWidth = w
+        }
+    }
+
+    private fun unlockDockWidths() {
+        for ((id, _) in savedDockWidths) {
+            sidePanelMngr.getDock(id)?.minimumWidth = 0
+        }
+    }
+
+    override fun changeEvent(event: @Nullable QEvent?) {
+        super.changeEvent(event)
+        if (event?.type() == QEvent.Type.WindowStateChange) {
+            lockDockWidths()
+            QTimer.singleShot(0) { unlockDockWidths() }
+        }
+    }
+
     override fun showEvent(event: @Nullable QShowEvent?) {
         super.showEvent(event)
         if(::notificationOverlay.isInitialized) {
@@ -417,7 +418,9 @@ class ProjectViewWindow internal constructor(
     }
 
     override fun resizeEvent(event: @Nullable QResizeEvent?) {
+        lockDockWidths()
         super.resizeEvent(event)
+        QTimer.singleShot(50) { unlockDockWidths() }
         backgroundLayer.setGeometry(0, 0, width(), height())
         if(::notificationOverlay.isInitialized) notificationOverlay.reposition()
         scheduleStatePersist()
@@ -435,6 +438,7 @@ class ProjectViewWindow internal constructor(
         }
         statePersistTimer.stop()
         persistState()
+        TritiumEventBus.publish(TritiumEvent.ProjectClosing(project))
         super.closeEvent(event)
     }
 
@@ -492,18 +496,6 @@ class ProjectViewWindow internal constructor(
      */
     fun openSettings(link: SettingsLink? = null) {
         settingsDialog.open(link)
-    }
-
-    /**
-     * Opens a Mod Browser tab
-     */
-    fun openModBrowser() {
-        val target = ModBrowserPane.tabPath(project)
-        if (!target.exists()) {
-            target.parent().mkdirs()
-            target.writeBytesAtomic(ByteArray(0))
-        }
-        editorArea.openFile(target)
     }
 
     /**

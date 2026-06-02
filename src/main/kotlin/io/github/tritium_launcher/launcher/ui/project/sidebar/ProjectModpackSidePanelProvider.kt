@@ -29,7 +29,7 @@ import io.qt.widgets.QWidget
 class ProjectModpackSidePanelProvider : SidePanelProvider {
     override val id: String = "modpack"
     override val displayName: String = "Modpack"
-    override val icon: QIcon = TIcons.ModConfig.icon
+    override var icon: QIcon? = TIcons.ModConfig.icon
     override val order: Int = 5
 
     override val closeable: Boolean = false

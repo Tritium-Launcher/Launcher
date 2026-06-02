@@ -1,10 +1,14 @@
 package io.github.tritium_launcher.launcher.extension.core
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.font.FontMngr
 import io.github.tritium_launcher.launcher.keymap.*
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.settings.*
+import io.github.tritium_launcher.launcher.settings.RefreshableSettingWidget
+import io.github.tritium_launcher.launcher.settings.SettingWidgetContext
+import io.github.tritium_launcher.launcher.settings.settingsDefinition
 import io.github.tritium_launcher.launcher.ui.widgets.InfoLineEditWidget
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
@@ -20,8 +24,6 @@ import io.qt.gui.QMouseEvent
 import io.qt.widgets.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -356,7 +358,6 @@ private class KeymapActionsWidget(
     private val ctx: SettingWidgetContext<String>
 ) : QWidget(), RefreshableSettingWidget {
     private val actionRole = Qt.ItemDataRole.UserRole
-    private var unsubscribe: Job? = null
 
     private val tree = QTreeWidget().apply {
         columnCount = 2
@@ -378,8 +379,9 @@ private class KeymapActionsWidget(
         tree.customContextMenuRequested.connect { pt ->
             showContextMenu(pt.x(), pt.y())
         }
-        val listener: (SettingsEvent) -> Unit = { event ->
-            if (event is SettingValueChangedEvent<*> && event.node.key == CoreSettingKeys.KeymapActionsOverview) {
+        CoroutineScope(Dispatchers.Main).onEvent<TritiumEvent.SettingChanged> { event ->
+            val key = "${event.namespace}:${event.nodeKey}"
+            if (key == CoreSettingKeys.KeymapActionsOverview.toString()) {
                 val raw = (event.newValue as? String)?.trim().orEmpty()
                 val overrides = if (raw.isBlank()) {
                     emptyMap()
@@ -393,11 +395,6 @@ private class KeymapActionsWidget(
                 }
                 KeymapMngr.applyOverridesFromStrings(overrides)
                 refreshFromSettingValue()
-            }
-        }
-        unsubscribe = CoroutineScope(Dispatchers.Main).launch {
-            SettingsMngr.events.collect {
-                listener(it)
             }
         }
         refreshFromSettingValue()
@@ -716,6 +713,12 @@ internal object CoreSettings {
             title = "Minecraft"
             parent = projects
             allowForeignSettings = true
+        }
+
+        toggle(minecraft.path, "game.smart_rerun") {
+            title = "Smart Rerun"
+            description = "When enabled, clicking the Play button while the game is running sends a server reload request to the Companion mod instead of restarting the game. Hold Shift while clicking to force a full restart. Falls back to normal restart if Companion mod is unavailable."
+            defaultValue = true
         }
 
         val companionBridge = category("companion_bridge") {

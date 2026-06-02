@@ -23,6 +23,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlin.time.Duration.Companion.milliseconds
 
 class Modrinth : ModSource(), Registrable {
     override val id: String = "modrinth"
@@ -59,6 +60,20 @@ class Modrinth : ModSource(), Registrable {
             )
         }
 
+    private suspend fun <T> retryOnThrottle(block: suspend () -> T): T {
+        repeat(3) { attempt ->
+            try {
+                return block()
+            } catch (e: ClientRequestException) {
+                if (e.response.status.value != 429 || attempt == 2) throw e
+                val retryAfter = e.response.headers["Retry-After"]?.toLongOrNull()
+                    ?: (10L * (1 shl attempt))
+                kotlinx.coroutines.delay((retryAfter * 1000).milliseconds)
+            }
+        }
+        error("unreachable")
+    }
+
     override suspend fun search(context: ModBrowserContext, query: ModSearchQuery): ModSearchPage {
         logger.info(
             "Modrinth search: mc={} loader={} text='{}' include={} exclude={} offset={} limit={}",
@@ -70,13 +85,15 @@ class Modrinth : ModSource(), Registrable {
             query.offset,
             query.limit
         )
-        val response = client.get("search") {
-            parameter("query", query.text)
-            parameter("facets", facetsFor(context, query.includedCategories))
-            parameter("index", Search.Sorting.RELEVANCE.name.lowercase())
-            parameter("offset", query.offset)
-            parameter("limit", query.limit)
-        }.body<Search.Ok>()
+        val response = retryOnThrottle {
+            client.get("search") {
+                parameter("query", query.text)
+                parameter("facets", facetsFor(context, query.includedCategories))
+                parameter("index", Search.Sorting.RELEVANCE.name.lowercase())
+                parameter("offset", query.offset)
+                parameter("limit", query.limit)
+            }.body<Search.Ok>()
+        }
 
         return ModSearchPage(
             results = response.hits
@@ -103,7 +120,7 @@ class Modrinth : ModSource(), Registrable {
 
     override suspend fun details(context: ModBrowserContext, projectId: String): ModDetails {
         logger.debug("Modrinth details: projectId={}", projectId)
-        val project = client.get("project/$projectId").body<ModrinthProject>()
+        val project = retryOnThrottle { client.get("project/$projectId").body<ModrinthProject>() }
         return ModDetails(
             id = project.id,
             title = project.title,
@@ -162,14 +179,16 @@ class Modrinth : ModSource(), Registrable {
     }
 
     private suspend fun fetchVersions(context: ModBrowserContext, projectId: String): List<ModrinthVersion> {
-        val versions = client.get("project/$projectId/version") {
-            context.minecraftVersion?.takeIf { it.isNotBlank() }?.let { version ->
-                parameter("game_versions", json.encodeToString(ListSerializer(String.serializer()), listOf(version)))
-            }
-            context.modLoaderId?.takeIf { it.isNotBlank() }?.let { loader ->
-                parameter("loaders", json.encodeToString(ListSerializer(String.serializer()), listOf(loader)))
-            }
-        }.body<List<ModrinthVersion>>()
+        val versions = retryOnThrottle {
+            client.get("project/$projectId/version") {
+                context.minecraftVersion?.takeIf { it.isNotBlank() }?.let { version ->
+                    parameter("game_versions", json.encodeToString(ListSerializer(String.serializer()), listOf(version)))
+                }
+                context.modLoaderId?.takeIf { it.isNotBlank() }?.let { loader ->
+                    parameter("loaders", json.encodeToString(ListSerializer(String.serializer()), listOf(loader)))
+                }
+            }.body<List<ModrinthVersion>>()
+        }
         return versions
             .sortedWith(compareByDescending<ModrinthVersion> { it.featured }.thenByDescending { releaseRank(it.version_type) })
     }

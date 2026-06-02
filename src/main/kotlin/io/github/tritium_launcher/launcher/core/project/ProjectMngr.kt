@@ -1,6 +1,8 @@
 package io.github.tritium_launcher.launcher.core.project
 
 import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.core.project.templates.MigrationRegistry
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectFileLoader
 import io.github.tritium_launcher.launcher.core.project.templates.TemplateDescriptor
@@ -83,17 +85,21 @@ object ProjectMngr {
 
     private fun notifyProjectCreated(project: ProjectBase) {
         _projectEvents.tryEmit(ProjectMngrEvent.Created(project))
+        TritiumEventBus.publish(TritiumEvent.ProjectCreated(project))
     }
     private fun notifyProjectFailedToGenerate(project: ProjectBase, errorMsg: String, exception: Exception?) {
         _projectEvents.tryEmit(ProjectMngrEvent.FailedToGenerate(project, errorMsg, exception))
+        TritiumEventBus.publish(TritiumEvent.ProjectFailedToGenerate(project, errorMsg))
     }
     private fun notifyProjectOpened(project: ProjectBase) {
         _activeProject.value = project
         _projectEvents.tryEmit(ProjectMngrEvent.Opened(project))
+        TritiumEventBus.publish(TritiumEvent.ProjectOpened(project))
     }
     private fun notifyFinishedLoading() {
         val snapshot = synchronized(_projectsLock) { _projects.toList() }
         _projectEvents.tryEmit(ProjectMngrEvent.FinishedLoading(snapshot))
+        TritiumEventBus.publish(TritiumEvent.ProjectFinishedLoading(snapshot))
     }
 
     private fun loadProjectFromDir(dir: VPath): ProjectBase? {

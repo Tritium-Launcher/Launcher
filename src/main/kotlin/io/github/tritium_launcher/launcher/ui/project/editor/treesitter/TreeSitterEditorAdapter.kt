@@ -13,10 +13,7 @@ import io.github.tritium_launcher.launcher.ui.project.editor.lsp.CompletionPopup
 import io.github.tritium_launcher.launcher.ui.project.editor.lsp.HoverOverlay
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.qt.Nullable
-import io.qt.core.QEvent
-import io.qt.core.QObject
-import io.qt.core.QPoint
-import io.qt.core.Qt
+import io.qt.core.*
 import io.qt.gui.*
 import io.qt.widgets.QTextEdit
 import io.qt.widgets.QToolTip
@@ -43,18 +40,33 @@ class TreeSitterEditorAdapter(
 
     private val completionPopup = CompletionPopup(textEdit)
     private val hoverOverlay = HoverOverlay(textEdit.window())
+    private var textChangedSinceCursorMoved = false
+    private var currentHoverSymbol: String? = null
+
+    private val hoverHideTimer = QTimer()
 
     init {
+        hoverHideTimer.interval = 100
+        hoverHideTimer.timeout.connect { checkHoverShouldHide() }
         textEdit.tabChangesFocus = false
         completionPopup.onSelected = { item ->
             applyCompletion(item)
         }
 
         textEdit.textChanged.connect {
+            textChangedSinceCursorMoved = true
             scheduleParse()
             flushSelections()
             scheduleCompletionRefresh()
             scheduleSignatureHelp()
+        }
+
+        textEdit.cursorPositionChanged.connect {
+            if (completionPopup.isVisible && !textChangedSinceCursorMoved) {
+                completionJob?.cancel()
+                completionPopup.hide()
+            }
+            textChangedSinceCursorMoved = false
         }
 
         val eventFilter = object : QObject() {
@@ -68,7 +80,7 @@ class TreeSitterEditorAdapter(
                     QEvent.Type.Show -> flushSelections()
                     QEvent.Type.KeyPress -> {
                         val keyEvent = event as QKeyEvent
-                        hoverOverlay.hide()
+                        hideOverlay()
                         QToolTip.hideText()
                         if (completionPopup.isVisible && completionPopup.handleKeyEvent(keyEvent)) {
                             return true
@@ -100,13 +112,19 @@ class TreeSitterEditorAdapter(
                         val mouseEvent = event as QMouseEvent
                         val cursor = textEdit.cursorForPosition(mouseEvent.pos())
                         if (!cursor.isNull) {
-                            scheduleHoverRequest(cursor, textEdit.viewport()!!.mapToGlobal(mouseEvent.pos()))
+                            val symbol = extractSymbolAt(cursor)
+                            if (symbol != null) {
+                                scheduleHoverRequest(cursor, textEdit.viewport()!!.mapToGlobal(mouseEvent.pos()))
+                            } else {
+                                hideOverlay()
+                            }
                         } else {
-                            hoverOverlay.hide()
+                            hideOverlay()
                         }
                     }
                     QEvent.Type.MouseButtonPress -> {
-                        hoverOverlay.hide()
+                        completionPopup.hide()
+                        hideOverlay()
                         QToolTip.hideText()
                         val mouseEvent = event as QMouseEvent
                         if (mouseEvent.modifiers().testFlag(Qt.KeyboardModifier.ControlModifier) && mouseEvent.button() == Qt.MouseButton.LeftButton) {
@@ -121,7 +139,7 @@ class TreeSitterEditorAdapter(
                         }
                     }
                     QEvent.Type.FocusOut -> {
-                        hoverOverlay.hide()
+                        hideOverlay()
                         QToolTip.hideText()
                     }
                     else -> {}
@@ -137,6 +155,7 @@ class TreeSitterEditorAdapter(
     fun close() {
         scope.cancel()
         bgDispatcher.close()
+        hoverHideTimer.stop()
         completionPopup.cleanup()
         hoverOverlay.cleanup()
     }
@@ -391,14 +410,34 @@ class TreeSitterEditorAdapter(
         }
     }
 
+    private fun hideOverlay() {
+        hoverJob?.cancel()
+        currentHoverSymbol = null
+        hoverHideTimer.stop()
+        hoverOverlay.hide()
+    }
+
+    private fun checkHoverShouldHide() {
+        val globalPos = QCursor.pos()
+        val viewport = textEdit.viewport() ?: return
+        val viewportPos = viewport.mapFromGlobal(globalPos)
+        val cursor = textEdit.cursorForPosition(viewportPos)
+        if (cursor.isNull || extractSymbolAt(cursor) == null) {
+            hideOverlay()
+        }
+    }
+
     private fun scheduleHoverRequest(cursor: QTextCursor, globalPos: QPoint) {
         hoverJob?.cancel()
         val symbol = extractSymbolAt(cursor) ?: return
+        if (hoverOverlay.isVisible && symbol == currentHoverSymbol) return
+        currentHoverSymbol = symbol
         hoverJob = scope.launch(bgDispatcher) {
             delay(500.milliseconds)
             val hover = KubeJSIntelligenceService.getHover(project, symbol) ?: return@launch
             launch(Dispatchers.Main) {
                 hoverOverlay.showHover(hover.markdown, globalPos)
+                hoverHideTimer.start()
             }
         }
     }

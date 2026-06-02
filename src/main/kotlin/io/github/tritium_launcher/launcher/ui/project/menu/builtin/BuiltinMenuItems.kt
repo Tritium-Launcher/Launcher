@@ -1,8 +1,14 @@
 package io.github.tritium_launcher.launcher.ui.project.menu.builtin
 
 import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.launcher.core.mod.ModDatabase
+import io.github.tritium_launcher.launcher.core.project.ModpackMeta
+import io.github.tritium_launcher.launcher.core.project.Project
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.fromTR
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
@@ -30,6 +36,8 @@ import io.qt.gui.QGuiApplication
 import io.qt.gui.QIcon
 import io.qt.widgets.*
 import kotlinx.coroutines.*
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -48,6 +56,8 @@ object BuiltinMenuItems {
     private const val KILL_WAIT_TIMEOUT_MS = 4_000L
     private const val DOWNLOAD_POLL_INTERVAL_MS = 200L
     private const val DOWNLOAD_WAIT_TIMEOUT_MS = 10 * 60_000L
+    private const val PLAY_ICON_COOLDOWN_MS = 2_000L
+    private var lastPlayClickMs = 0L
 
     val Play = MenuItem(
         id = "play",
@@ -64,10 +74,11 @@ object BuiltinMenuItems {
             if (project == null) {
                 TIcons.Run.icon
             } else {
+                val inCooldown = System.currentTimeMillis() - lastPlayClickMs < PLAY_ICON_COOLDOWN_MS
                 when {
                     GameLauncher.isGameRunning(project) -> TIcons.Rerun.icon
-                    isAssetGenerationActive(project) -> TIcons.Download.icon
-                    GameLauncher.needsRuntimeDownload(project) -> TIcons.Download.icon
+                    !inCooldown && isAssetGenerationActive(project) -> TIcons.Download.icon
+                    !inCooldown && GameLauncher.needsRuntimeDownload(project) -> TIcons.Download.icon
                     else -> TIcons.Run.icon
                 }
             }
@@ -76,11 +87,21 @@ object BuiltinMenuItems {
             val project = ctx.project
             project != null && !isAssetGenerationActive(project)
         },
-        tooltip = "Play game (reruns if running, downloads runtime when missing)",
+        tooltip = "Tap to play (tap = reload server when running; hold to restart)",
         action = { ctx ->
             val project = ctx.project ?: return@MenuItem
             scope.launch {
-                launchOrPrepare(project)
+                if (CoreSettingValues.smartRerun && GameLauncher.isGameRunning(project)) {
+                    val response = CompanionBridge.reloadServer()
+                    if (response.ok) {
+                        postBridgeResponse(project, "Reload", response)
+                    } else {
+                        logger.warn("Smart rerun reload failed: {}. Falling back to restart.", response.message)
+                        launchOrPrepare(project)
+                    }
+                } else {
+                    launchOrPrepare(project)
+                }
             }
         }
     )
@@ -443,19 +464,6 @@ object BuiltinMenuItems {
         action = { ctx -> adjustFocusedTextWidgetFont(ctx.window, -1) }
     )
 
-    val ViewModBrowser = MenuItem(
-        id = "view_mod_browser",
-        title = "Mod Browser",
-        parentId = View.id,
-        order = 30,
-        kind = MenuItemKind.ACTION,
-        icon = TIcons.Search.icon,
-        enabledResolver = { ctx -> ctx.project?.typeId == "source" },
-        action = { ctx ->
-            (ctx.window as? ProjectViewWindow)?.openModBrowser()
-        }
-    )
-
     val LaunchGame = MenuItem(
         id = "launch_game",
         title = "Launch...",
@@ -641,6 +649,127 @@ object BuiltinMenuItems {
         }
     )
 
+    val CheckModUpdates = MenuItem(
+        id = "check_mod_updates",
+        title = "Check Mod Updates",
+        parentId = View.id,
+        order = 35,
+        kind = MenuItemKind.ACTION,
+        icon = TIcons.Download.icon,
+        enabledResolver = { ctx -> ctx.project?.typeId == "modpack" },
+        action = { ctx ->
+            TritiumEventBus.publish(TritiumEvent.UpdateCheckRequested)
+        }
+    )
+
+    val FileSepBeforeExport = MenuItem(
+        id = "file_sep_before_export",
+        title = "",
+        parentId = File.id,
+        order = 15,
+        kind = MenuItemKind.SEPARATOR
+    )
+
+    val ExportReleaseManifest = MenuItem(
+        id = "export_release_manifest",
+        title = "Export Release Manifest",
+        parentId = File.id,
+        order = 16,
+        kind = MenuItemKind.ACTION,
+        icon = TIcons.JSON.icon,
+        enabledResolver = { ctx -> ctx.project?.typeId == "modpack" },
+        action = { ctx ->
+            val project = ctx.project ?: return@MenuItem
+            doExportReleaseManifest(project, ctx.window)
+        }
+    )
+
+    private fun doExportReleaseManifest(project: ProjectBase, window: QWidget?) {
+        scope.launch {
+            try {
+                val meta = (project as? Project<*>)?.typedMeta as? ModpackMeta ?: return@launch
+                val mods = withContext(Dispatchers.IO) {
+                    ModDatabase(project.projectDir).use { db -> db.getReleaseModsFull() }
+                }
+                val manifestMods = mods.map { mod ->
+                    val deps = withContext(Dispatchers.IO) {
+                        ModDatabase(project.projectDir).use { db -> db.getDependencies(mod.projectId) }
+                    }
+                    ExportManifestMod(
+                        source = mod.source,
+                        projectId = mod.projectId,
+                        versionId = mod.versionId,
+                        fileName = mod.fileName,
+                        displayName = mod.displayName,
+                        side = mod.side.name,
+                        releaseType = mod.releaseType,
+                        dependencies = deps
+                    )
+                }
+                val manifest = ExportManifest(
+                    formatVersion = 1,
+                    minecraftVersion = meta.minecraftVersion,
+                    modLoader = meta.loader,
+                    modLoaderVersion = meta.loaderVersion,
+                    mods = manifestMods
+                )
+                val jsonStr = exportJson.encodeToString(manifest)
+                val target = project.projectDir.resolve(".tr/release-manifest.json")
+                withContext(Dispatchers.IO) {
+                    target.parent().mkdirs()
+                    target.writeTextAtomic(jsonStr)
+                }
+                TritiumEventBus.publish(TritiumEvent.ReleaseManifestExported(project, target.toAbsolute().toString()))
+                runOnGuiThread {
+                    QMessageBox.information(
+                        window,
+                        "Export Complete",
+                        "Release manifest written to:\n${target.toAbsolute()}"
+                    )
+                }
+            } catch (t: Throwable) {
+                logger.warn("Failed to export release manifest", t)
+                runOnGuiThread {
+                    QMessageBox.warning(
+                        window,
+                        "Export Failed",
+                        t.message ?: "Unknown error"
+                    )
+                }
+            }
+        }
+    }
+
+    private object ManifestJson {
+        val instance = Json {
+            prettyPrint = true
+            ignoreUnknownKeys = true
+        }
+    }
+
+    @Serializable
+    private data class ExportManifest(
+        val formatVersion: Int = 1,
+        val minecraftVersion: String,
+        val modLoader: String,
+        val modLoaderVersion: String,
+        val mods: List<ExportManifestMod>
+    )
+
+    @Serializable
+    private data class ExportManifestMod(
+        val source: String,
+        val projectId: String,
+        val versionId: String,
+        val fileName: String,
+        val displayName: String,
+        val side: String,
+        val releaseType: String,
+        val dependencies: List<String> = emptyList()
+    )
+
+    private val exportJson get() = ManifestJson.instance
+
     private enum class EditCommand {
         UNDO,
         REDO,
@@ -650,7 +779,8 @@ object BuiltinMenuItems {
         DELETE
     }
 
-    private suspend fun launchOrPrepare(project: ProjectBase) {
+    suspend fun launchOrPrepare(project: ProjectBase) {
+        lastPlayClickMs = System.currentTimeMillis()
         if (isAssetGenerationActive(project)) return
         val wasRunning = GameLauncher.isGameRunning(project)
         if (wasRunning) {
@@ -872,7 +1002,8 @@ object BuiltinMenuItems {
         val targets = listOf(
             TConstants.Dirs.CACHE,
             TConstants.Dirs.LOADERS,
-            TConstants.Dirs.ASSETS
+            TConstants.Dirs.ASSETS,
+            "mb-cache"
         )
 
         val deleted = mutableListOf<String>()
@@ -1006,6 +1137,8 @@ object BuiltinMenuItems {
         Save,
         SaveAll,
         FileSepAfterSave,
+        FileSepBeforeExport,
+        ExportReleaseManifest,
         CloseProject,
         FileSepBeforeInvalidate,
         InvalidateCaches,
@@ -1023,7 +1156,7 @@ object BuiltinMenuItems {
         ViewToolWindows,
         ViewIncreaseFont,
         ViewDecreaseFont,
-        ViewModBrowser,
+        CheckModUpdates,
         Game,
         LaunchGame,
         StopGame,

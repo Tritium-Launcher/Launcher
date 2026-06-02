@@ -34,7 +34,7 @@ import kotlin.time.ExperimentalTime
 class ProjectLogsSidePanelProvider : SidePanelProvider {
     override val id: String = "mc_logs"
     override val displayName: String = "MC Logs"
-    override val icon: QIcon = TIcons.Log.icon
+    override var icon: QIcon? = TIcons.Log.icon
     override val order: Int = 10
 
     override val preferredArea: Qt.DockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea

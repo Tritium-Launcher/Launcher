@@ -9,7 +9,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.ktreesitter)
     idea
-    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.gradleup.shadow") version "9.2.0"
 }
 
 ksp { arg("verbose", "true") }
@@ -174,15 +174,16 @@ val compileGrammarNative by tasks.registering {
     }
     doLast {
         cmakeBuildDir.mkdirs()
-        exec {
-            workingDir = cmakeBuildDir
-            environment("JAVA_HOME", System.getProperty("java.home"))
-            commandLine("cmake", srcDir.path, "-DCMAKE_BUILD_TYPE=Release")
-        }
-        exec {
-            workingDir = cmakeBuildDir
-            commandLine("cmake", "--build", ".", "--target", "ktreesitter-javascript", "--parallel")
-        }
+        ProcessBuilder("cmake", srcDir.path, "-DCMAKE_BUILD_TYPE=Release")
+            .directory(cmakeBuildDir)
+            .inheritIO()
+            .start()
+            .waitFor()
+        ProcessBuilder("cmake", "--build", ".", "--target", "ktreesitter-javascript", "--parallel")
+            .directory(cmakeBuildDir)
+            .inheritIO()
+            .start()
+            .waitFor()
     }
 }
 

@@ -2,6 +2,8 @@ package io.github.tritium_launcher.launcher.settings
 
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigRenderOptions
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.extension.Extension
 import io.github.tritium_launcher.launcher.extension.core.CoreExtension.namespace
 import io.github.tritium_launcher.launcher.logger
@@ -508,6 +510,14 @@ object SettingsMngr {
             emitEvent(
                 SettingValueChangedEvent(
                     node = node,
+                    oldValue = oldValue,
+                    newValue = value
+                )
+            )
+            TritiumEventBus.publish(
+                TritiumEvent.SettingChanged(
+                    nodeKey = node.key.id,
+                    namespace = node.ownerNamespace,
                     oldValue = oldValue,
                     newValue = value
                 )

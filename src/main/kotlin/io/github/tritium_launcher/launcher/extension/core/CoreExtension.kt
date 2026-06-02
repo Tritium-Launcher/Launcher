@@ -22,8 +22,8 @@ import io.github.tritium_launcher.launcher.ui.dashboard.GridStyleProvider
 import io.github.tritium_launcher.launcher.ui.dashboard.ListStyleProvider
 import io.github.tritium_launcher.launcher.ui.project.editor.file.builtin.BuiltinFileTypes
 import io.github.tritium_launcher.launcher.ui.project.editor.panes.ImageViewerProvider
-import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModBrowserPaneProvider
 import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModConfigPane
+import io.github.tritium_launcher.launcher.ui.project.editor.panes.ModDetailPaneProvider
 import io.github.tritium_launcher.launcher.ui.project.editor.panes.SettingsEditorPaneProvider
 import io.github.tritium_launcher.launcher.ui.project.editor.syntax.builtin.JsonLanguage
 import io.github.tritium_launcher.launcher.ui.project.editor.syntax.builtin.PythonLanguage
@@ -112,6 +112,7 @@ internal object CoreExtension : Extension {
             sidePanels.register(ProjectRegistryBrowserSidePanelProvider())
             sidePanels.register(ProjectLogsSidePanelProvider())
             sidePanels.register(ProjectNotificationsSidePanelProvider())
+            sidePanels.register(ModBrowserSidePanelProvider())
 
             menuItems.register(BuiltinMenuItems.All)
             notifications.register(BuiltinNotifications.All)
@@ -125,7 +126,7 @@ internal object CoreExtension : Extension {
             TemplateRegistry.register(ModpackTemplateDescriptor)
 
             editorPanes.register(ImageViewerProvider())
-            editorPanes.register(ModBrowserPaneProvider())
+            editorPanes.register(ModDetailPaneProvider)
             editorPanes.register(SettingsEditorPaneProvider())
             editorPanes.register(ModConfigPane.Provider)
 

@@ -7,6 +7,8 @@
 package io.github.tritium_launcher.launcher.bootstrap
 
 import io.github.tritium_launcher.launcher.appInstance
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.extension.ExtensionDirectoryLoader
 import io.github.tritium_launcher.launcher.extension.ExtensionLoader
 import io.github.tritium_launcher.launcher.extension.ExtensionStateManager
@@ -15,7 +17,6 @@ import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.keymap.*
 import io.github.tritium_launcher.launcher.registry.RegistryMngr
-import io.github.tritium_launcher.launcher.settings.SettingValueChangedEvent
 import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.logging.LogDialogMngr
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
@@ -27,7 +28,6 @@ import io.qt.widgets.QTextEdit
 import io.qt.widgets.QWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -84,7 +84,7 @@ internal fun stopHost(loaders: List<Closeable> = emptyList()) {
 }
 
 internal fun startSettings() {
-    fun applyKeymapOverrides(e: SettingValueChangedEvent<*>) {
+    fun applyKeymapOverrides(e: TritiumEvent.SettingChanged) {
         val raw = (e.newValue as? String)?.trim().orEmpty()
         if(raw.isBlank()) return
         runCatching { Json.decodeFromString(
@@ -95,13 +95,10 @@ internal fun startSettings() {
         }
     }
 
-    CoroutineScope(Dispatchers.Main).launch {
-        SettingsMngr.events.collect { e ->
-            if(e !is SettingValueChangedEvent<*>) return@collect
-            when(e.node.key) {
-                CoreSettingKeys.UiBackgroundImage -> ThemeMngr.refresh()
-                CoreSettingKeys.KeymapActionsOverview -> applyKeymapOverrides(e)
-            }
+    CoroutineScope(Dispatchers.Main).onEvent<TritiumEvent.SettingChanged> { e ->
+        when ("${e.namespace}:${e.nodeKey}") {
+            CoreSettingKeys.UiBackgroundImage.toString() -> ThemeMngr.refresh()
+            CoreSettingKeys.KeymapActionsOverview.toString() -> applyKeymapOverrides(e)
         }
     }
 }

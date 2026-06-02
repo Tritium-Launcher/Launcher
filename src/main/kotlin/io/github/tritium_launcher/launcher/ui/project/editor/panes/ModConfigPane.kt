@@ -29,6 +29,7 @@ internal class ModConfigPane(
     private var root: ConfigNode,
     private val format: ConfigFormat
 ) : EditorPane(project, file) {
+    private val paneFile: VPath get() = file!!
 
     private fun applyItemMargins(layout: QBoxLayout, compact: Boolean) {
         if (compact) {
@@ -97,7 +98,7 @@ internal class ModConfigPane(
     }
 
     override suspend fun save(): Boolean = try {
-        file.writeBytes(serialize().toByteArray())
+        paneFile.writeBytes(serialize().toByteArray())
         rebuild()
         modified = false
         true
