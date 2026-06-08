@@ -9,8 +9,10 @@ import io.github.tritium_launcher.launcher.core.project.ModpackMeta
 import io.github.tritium_launcher.launcher.core.project.Project
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectDirWatcher
+import io.github.tritium_launcher.launcher.core.source.HashFallbackProvider
 import io.github.tritium_launcher.launcher.core.source.ModBrowserContext
 import io.github.tritium_launcher.launcher.core.source.ModVersionOption
+import io.github.tritium_launcher.launcher.core.source.resolveInstallDownload
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
@@ -426,14 +428,20 @@ class InstalledModsPanel(
                 )
 
                 try {
-                    val plan = source.resolveInstall(context, modId, updateOption.id)
+                    val fallbacks = BuiltinRegistries.ModSource.all()
+                        .filterIsInstance<HashFallbackProvider>()
+                        .sortedBy { it.priority }
+                    val resolved = resolveInstallDownload(context, source, modId, updateOption.id, fallbacks)
+                    if (resolved.downloadUrl == null) {
+                        error("Update requires manual download (blocked by mod author)")
+                    }
                     val modsDir = project.projectDir.resolve("mods")
                     modsDir.mkdirs()
-                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                    val bytes = httpClient.get(resolved.downloadUrl).bodyAsBytes()
                     val oldJar = modsDir.resolve(mod.fileName)
                     if (oldJar.exists()) oldJar.moveToTrash()
 
-                    val jarPath = modsDir.resolve(plan.fileName)
+                    val jarPath = modsDir.resolve(resolved.fileName)
                     jarPath.writeBytesAtomic(bytes)
 
                     val fileHash = ModDatabase.sha1(bytes)
@@ -443,19 +451,20 @@ class InstalledModsPanel(
                             oldVersionId = mod.versionId,
                             oldVersionLabel = mod.versionLabel,
                             oldFileHash = mod.fileHash,
-                            newVersionId = plan.versionId,
-                            newVersionLabel = plan.versionLabel
+                            newVersionId = resolved.plan.versionId,
+                            newVersionLabel = resolved.plan.versionLabel
                         )
                         db.install(mod.copy(
-                            fileName = plan.fileName,
-                            versionId = plan.versionId,
-                            versionLabel = plan.versionLabel,
+                            fileName = resolved.fileName,
+                            versionId = resolved.plan.versionId,
+                            versionLabel = resolved.plan.versionLabel,
                             fileHash = fileHash,
-                            installedAt = Clock.System.now()
+                            installedAt = Clock.System.now(),
+                            requiresManualDownload = resolved.requiresManualDownload,
                         ))
                     }
-                    TritiumEventBus.publish(TritiumEvent.ModUpdated(project, modId, mod.displayName, mod.versionId, plan.versionId))
-                    TritiumEventBus.publish(TritiumEvent.ModInstalled(project, modId, mod.modId, mod.displayName, plan.versionId, plan.versionLabel))
+                    TritiumEventBus.publish(TritiumEvent.ModUpdated(project, modId, mod.displayName, mod.versionId, resolved.plan.versionId))
+                    TritiumEventBus.publish(TritiumEvent.ModInstalled(project, modId, mod.modId, mod.displayName, resolved.plan.versionId, resolved.plan.versionLabel))
                 } catch (t: Throwable) {
                     logger.warn("Failed to update mod '{}'", mod.displayName, t)
                 }
@@ -481,14 +490,20 @@ class InstalledModsPanel(
 
                 try {
                     val prev = ModDatabase(project.projectDir).use { it.getPreviousVersion(modId) } ?: return@withContext
-                    val plan = source.resolveInstall(context, modId, prev.oldVersionId)
+                    val fallbacks = BuiltinRegistries.ModSource.all()
+                        .filterIsInstance<HashFallbackProvider>()
+                        .sortedBy { it.priority }
+                    val resolved = resolveInstallDownload(context, source, modId, prev.oldVersionId, fallbacks)
+                    if (resolved.downloadUrl == null) {
+                        error("Downgrade requires manual download (blocked by mod author)")
+                    }
                     val modsDir = project.projectDir.resolve("mods")
                     modsDir.mkdirs()
-                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                    val bytes = httpClient.get(resolved.downloadUrl).bodyAsBytes()
                     val oldJar = modsDir.resolve(mod.fileName)
                     if (oldJar.exists()) oldJar.moveToTrash()
 
-                    val jarPath = modsDir.resolve(plan.fileName)
+                    val jarPath = modsDir.resolve(resolved.fileName)
                     jarPath.writeBytesAtomic(bytes)
 
                     val fileHash = ModDatabase.sha1(bytes)
@@ -502,11 +517,12 @@ class InstalledModsPanel(
                             newVersionLabel = prev.oldVersionLabel
                         )
                         db.install(mod.copy(
-                            fileName = plan.fileName,
+                            fileName = resolved.fileName,
                             versionId = prev.oldVersionId,
                             versionLabel = prev.oldVersionLabel,
                             fileHash = fileHash,
-                            installedAt = Clock.System.now()
+                            installedAt = Clock.System.now(),
+                            requiresManualDownload = resolved.requiresManualDownload,
                         ))
                     }
                     TritiumEventBus.publish(TritiumEvent.ModDowngraded(project, modId, mod.displayName, mod.versionId, prev.oldVersionId))
@@ -572,14 +588,20 @@ class InstalledModsPanel(
                 )
 
                 try {
-                    val plan = source.resolveInstall(context, modId, skippedRecord.newVersionId)
+                    val fallbacks = BuiltinRegistries.ModSource.all()
+                        .filterIsInstance<HashFallbackProvider>()
+                        .sortedBy { it.priority }
+                    val resolved = resolveInstallDownload(context, source, modId, skippedRecord.newVersionId, fallbacks)
+                    if (resolved.downloadUrl == null) {
+                        error("Install requires manual download (blocked by mod author)")
+                    }
                     val modsDir = project.projectDir.resolve("mods")
                     modsDir.mkdirs()
-                    val bytes = httpClient.get(plan.downloadUrl).bodyAsBytes()
+                    val bytes = httpClient.get(resolved.downloadUrl).bodyAsBytes()
                     val oldJar = modsDir.resolve(mod.fileName)
                     if (oldJar.exists()) oldJar.moveToTrash()
 
-                    val jarPath = modsDir.resolve(plan.fileName)
+                    val jarPath = modsDir.resolve(resolved.fileName)
                     jarPath.writeBytesAtomic(bytes)
 
                     val fileHash = ModDatabase.sha1(bytes)
@@ -593,13 +615,15 @@ class InstalledModsPanel(
                             newVersionLabel = skippedRecord.newVersionLabel
                         )
                         db.install(mod.copy(
-                            fileName = plan.fileName,
+                            fileName = resolved.fileName,
                             versionId = skippedRecord.newVersionId,
                             versionLabel = skippedRecord.newVersionLabel,
                             fileHash = fileHash,
-                            installedAt = Clock.System.now()
+                            installedAt = Clock.System.now(),
+                            requiresManualDownload = resolved.requiresManualDownload,
                         ))
                     }
+                    TritiumEventBus.publish(TritiumEvent.ModUpdated(project, modId, mod.displayName, mod.versionId, skippedRecord.newVersionId))
                     TritiumEventBus.publish(TritiumEvent.ModInstalled(project, modId, mod.modId, mod.displayName, skippedRecord.newVersionId, skippedRecord.newVersionLabel))
                 } catch (t: Throwable) {
                     logger.warn("Failed to install skipped version for mod '{}'", mod.displayName, t)

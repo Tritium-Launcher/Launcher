@@ -16,7 +16,10 @@ data class QueuedDownload(
     val versionLabel: String,
     val iconUrl: String?,
     val dependencies: List<ModDependencyRef>,
-    val status: QueueStatus
+    val status: QueueStatus,
+    val requiresManualDownload: Boolean = false,
+    val projectUrl: String? = null,
+    val fileHash: String? = null,
 )
 
 data class QueueStatus(

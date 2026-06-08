@@ -279,7 +279,9 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
     data class Entry(
         val id: String,
         val label: String,
-        var state: State = State.NEUTRAL
+        val iconUrl: String? = null,
+        var state: State = State.NEUTRAL,
+        var pixmap: QPixmap? = null
     )
 
     private val popup = QMenu(this)
@@ -430,15 +432,15 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
     }
 
     /**
-     * Replaces the available category entries while preserving prior selection state by id.
+     * Replaces the available category entries with icon URLs while preserving the prior selection state by id.
      *
-     * @param values Pairs of category id and display label.
+     * @param values Triples of category id, display label, and optional icon URL.
      */
-    fun setEntries(values: List<Pair<String, String>>) {
+    fun setEntries(values: List<Triple<String, String, String?>>) {
         val preserved = entries.mapValues { it.value.state }
         entries.clear()
-        values.forEach { (id, label) ->
-            entries[id] = Entry(id = id, label = label, state = preserved[id] ?: State.NEUTRAL)
+        values.forEach { (id, label, iconUrl) ->
+            entries[id] = Entry(id = id, label = label, iconUrl = iconUrl, state = preserved[id] ?: State.NEUTRAL)
         }
         refreshRows()
         refreshSummary()
@@ -472,6 +474,17 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
             val layout = QHBoxLayout(row)
             layout.setContentsMargins(12, 8, 12, 8)
             layout.setSpacing(8)
+            val iconLabel = QLabel()
+            iconLabel.setFixedSize(48, 48)
+            iconLabel.objectName = "tMultiStateComboIcon"
+            iconLabel.visible = false
+            entry.iconUrl?.let { url ->
+                iconLabel.setProperty("iconUrl", url)
+            }
+            entry.pixmap?.let { pixmap ->
+                iconLabel.pixmap = pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                iconLabel.visible = true
+            }
             val label = QLabel(entry.label)
             label.sizePolicy = QSizePolicy(Policy.Expanding, Policy.Preferred)
             label.wordWrap = false
@@ -495,6 +508,8 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
                 refreshSummary()
                 onSelectionChanged?.invoke()
             }
+            layout.addWidget(iconLabel, 0)
+            layout.addSpacing(4)
             layout.addWidget(label, 1)
             layout.addSpacing(8)
             layout.addWidget(include, 0, Qt.AlignmentFlag.AlignRight)
@@ -519,6 +534,24 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
         }
         addItem(text)
         currentIndex = 0
+    }
+
+    /**
+     * Sets an icon pixmap on the row for the given category id.
+     */
+    fun setEntryIcon(id: String, pixmap: QPixmap) {
+        entries[id]?.pixmap = pixmap
+        val entryUrl = entries[id]?.iconUrl
+        val scaled = pixmap.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+        for (i in 0 until popupLayout.count()) {
+            val item = popupLayout.itemAt(i)
+            val widget = item?.widget() ?: continue
+            val iconLabel = widget.findChild(QLabel::class.java, "tMultiStateComboIcon") ?: continue
+            val labelUrl = iconLabel.property("iconUrl")?.toString()
+            if (labelUrl != entryUrl) continue
+            iconLabel.pixmap = scaled
+            iconLabel.visible = true
+        }
     }
 
     /**

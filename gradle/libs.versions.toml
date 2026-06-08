@@ -98,6 +98,8 @@ jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref 
 # CommonMark
 commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
 commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-ext-gfm-strikethrough = { group = "org.commonmark", name = "commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
+commonmark-ext-task-list-items = { group = "org.commonmark", name = "commonmark-ext-task-list-items", version.ref = "commonmark" }
 commonmark-ext-image-attributes = { group = "org.commonmark", name = "commonmark-ext-image-attributes", version.ref = "commonmark" }
 
 # SQLite

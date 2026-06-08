@@ -1,9 +1,6 @@
 package io.github.tritium_launcher.launcher.core.source
 
-import io.github.tritium_launcher.launcher.core.source.modrinth.api.ModrinthCategories
-import io.github.tritium_launcher.launcher.core.source.modrinth.api.ModrinthProject
-import io.github.tritium_launcher.launcher.core.source.modrinth.api.ModrinthVersion
-import io.github.tritium_launcher.launcher.core.source.modrinth.api.Search
+import io.github.tritium_launcher.launcher.core.source.modrinth.api.*
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.platform.ClientIdentity
 import io.github.tritium_launcher.launcher.registry.Registrable
@@ -25,7 +22,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlin.time.Duration.Companion.milliseconds
 
-class Modrinth : ModSource(), Registrable {
+class Modrinth : ModSource(), HashFallbackProvider, Registrable {
     override val id: String = "modrinth"
     override val displayName: String = "Modrinth"
     override val icon: QPixmap = TIcons.Modrinth
@@ -34,6 +31,7 @@ class Modrinth : ModSource(), Registrable {
 
     private val json = Json { ignoreUnknownKeys = true }
     private val logger = logger()
+    private var cachedCategories: List<ModCategory>? = null
     private val client = HttpClient(CIO) {
         install(ContentNegotiation) { json(json) }
         install(HttpTimeout) {
@@ -49,16 +47,28 @@ class Modrinth : ModSource(), Registrable {
         }
     }
 
-    override suspend fun getCategories(context: ModBrowserContext): List<ModCategory> = ModrinthCategories.entries
-        .filterNot { it in loaderCategories }
-        .map { category ->
-            ModCategory(
-                id = category.name.lowercase().replace('_', '-'),
-                displayName = category.name.lowercase()
-                    .split('_')
-                    .joinToString(" ") { token -> token.replaceFirstChar(Char::uppercase) }
-            )
+    override suspend fun getCategories(context: ModBrowserContext): List<ModCategory> {
+        if (cachedCategories != null) return cachedCategories!!
+        val categories = retryOnThrottle {
+            client.get("tag/category").body<List<ModrinthTagCategory>>()
         }
+        val knownLoaderNames = loaderCategories.map { it.name.lowercase() }.toSet()
+        val result = categories
+            .filter { it.projectType == "mod" }
+            .filterNot { it.name.lowercase() in knownLoaderNames }
+            .map { category ->
+                val iconUrl = null
+                ModCategory(
+                    id = category.name.lowercase().replace('_', '-'),
+                    displayName = category.name.lowercase()
+                        .split('_')
+                        .joinToString(" ") { token -> token.replaceFirstChar(Char::uppercase) },
+                    iconUrl = iconUrl
+                )
+            }
+        cachedCategories = result
+        return result
+    }
 
     private suspend fun <T> retryOnThrottle(block: suspend () -> T): T {
         repeat(3) { attempt ->
@@ -174,6 +184,24 @@ class Modrinth : ModSource(), Registrable {
             fileName = file.filename,
             downloadUrl = file.url,
             releaseType = version.version_type,
+            fileHash = file.hashes.sha1,
+        )
+    }
+
+    override val priority: Int get() = 10
+
+    override suspend fun resolveByHash(context: ModBrowserContext, hash: String): ResolvedFile? {
+        val version = runCatching {
+            retryOnThrottle {
+                client.get("version_file/$hash") {
+                    parameter("algorithm", "sha1")
+                }.body<ModrinthVersion>()
+            }
+        }.getOrNull() ?: return null
+        val file = version.files.firstOrNull { it.primary } ?: version.files.firstOrNull() ?: return null
+        return ResolvedFile(
+            fileName = file.filename,
+            downloadUrl = file.url,
             fileHash = file.hashes.sha1,
         )
     }

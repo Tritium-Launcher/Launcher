@@ -42,6 +42,7 @@ data class InstalledMod(
     val installedAt: Instant? = null,
     val enabled: Boolean = true,
     val excludedFromRelease: Boolean = false,
+    val requiresManualDownload: Boolean = false,
     val dependencies: List<String> = emptyList()
 )
 
@@ -81,10 +82,19 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
                 file_hash TEXT,
                 installed_at INTEGER,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                excluded_from_release INTEGER NOT NULL DEFAULT 0
+                excluded_from_release INTEGER NOT NULL DEFAULT 0,
+                requires_manual_download INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
+        try {
+            c.createStatement().execute(
+                //language=sql
+                """
+                ALTER TABLE installed_mods ADD COLUMN requires_manual_download INTEGER NOT NULL DEFAULT 0
+                """.trimIndent()
+            )
+        } catch (_: Exception) { }
         c.createStatement().execute(
             //language=sql
             """
@@ -134,8 +144,9 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             INSERT OR REPLACE INTO installed_mods
             (project_id, mod_id, file_name, display_name, side, release_type,
              source, version_id, version_label, icon_path, project_url,
-             file_hash, installed_at, enabled, excluded_from_release)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             file_hash, installed_at, enabled, excluded_from_release,
+             requires_manual_download)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
         ).use { ps ->
             ps.setString(1, mod.projectId)
@@ -153,6 +164,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             if (mod.installedAt != null) ps.setLong(13, mod.installedAt.toEpochMilliseconds()) else ps.setNull(13, java.sql.Types.INTEGER)
             ps.setInt(14, if (mod.enabled) 1 else 0)
             ps.setInt(15, if (mod.excludedFromRelease) 1 else 0)
+            ps.setInt(16, if (mod.requiresManualDownload) 1 else 0)
             ps.executeUpdate()
         }
     }
@@ -482,7 +494,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
         val allMods = getAll().map { registry.entryFromInstalledMod(it) }
         val data = ModRegistryData(
             version = 2,
-            mods = allMods.associate { it.projectId to it }
+            mods = allMods.associateBy { it.projectId }
         )
         registry.save(data)
         needsBackup = false
@@ -506,6 +518,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             installedAt = rs.getLong("installed_at").let { if (rs.wasNull()) null else Instant.fromEpochMilliseconds(it) },
             enabled = rs.getInt("enabled") != 0,
             excludedFromRelease = rs.getInt("excluded_from_release") != 0,
+            requiresManualDownload = rs.getInt("requires_manual_download") != 0,
             dependencies = getDependencies(projectId),
         )
     }

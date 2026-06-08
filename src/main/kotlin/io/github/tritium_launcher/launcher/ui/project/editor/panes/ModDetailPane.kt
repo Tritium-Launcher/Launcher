@@ -14,12 +14,18 @@ import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.platform.ClientIdentity
 import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.launcher.ui.helpers.CacheManager
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.project.editor.EditorPane
 import io.github.tritium_launcher.launcher.ui.project.editor.EditorPaneProvider
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.widgets.RemoteImageTextBrowser
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.*
+import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
+import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
@@ -31,13 +37,14 @@ import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
 import io.qt.widgets.*
 import kotlinx.coroutines.*
+import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
 import org.commonmark.ext.gfm.tables.TablesExtension
+import org.commonmark.ext.task.list.items.TaskListItemsExtension
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 class ModDetailPane(
     project: ProjectBase,
@@ -64,11 +71,16 @@ class ModDetailPane(
         }
     }
 
+    private val markdownExtensions = listOf(
+        TablesExtension.create(),
+        StrikethroughExtension.create(),
+        TaskListItemsExtension.create(),
+    )
     private val markdownParser = Parser.builder()
-        .extensions(listOf(TablesExtension.create()))
+        .extensions(markdownExtensions)
         .build()
     private val markdownRenderer = HtmlRenderer.builder()
-        .extensions(listOf(TablesExtension.create()))
+        .extensions(markdownExtensions)
         .escapeHtml(false)
         .build()
 
@@ -89,37 +101,30 @@ class ModDetailPane(
     private val sourceLabel = label()
     private val contextLabel = label()
     private val versionLabel = label("Version:")
-    private val versionCombo = QComboBox()
-    private val queueButton = pushButton { text = "Add to Queue" }
-    private val openPageButton = pushButton { text = "Open Page" }
+    private val versionCombo = TComboBox {}
+    private val queueButton = TPushButton { text = "Add to Queue"; minimumHeight = 30 }
+    private val openPageButton = TPushButton { text = "Open Page"; minimumHeight = 30 }
     private val dependencyLabel = label("Dependencies")
     private val dependencyScroll = QScrollArea()
     private val dependencyContent = qWidget()
     private val dependencyLayout = QHBoxLayout(dependencyContent)
-    private val imageCacheDir: VPath = fromTR("mb-cache")
-
-    private fun evictOldCacheFiles(ageDays: Long = 7) {
-        if (!imageCacheDir.exists()) return
-        val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(ageDays)
-        try {
-            Files.list(imageCacheDir.toJPath()).use { stream ->
-                stream.forEach { path ->
-                    try {
-                        val lastMod = Files.getLastModifiedTime(path).toMillis()
-                        if (lastMod < cutoff) Files.deleteIfExists(path)
-                    } catch (_: Exception) {}
-                }
-            }
-        } catch (_: Exception) {}
-    }
+    private val imageCacheDir: VPath = fromTR("mb-cache", "descriptions")
 
     private suspend fun cachedImageFetch(url: String): ByteArray {
-        val cacheFile = imageCacheDir.resolve(urlHash(url))
-        cacheFile.bytesOrNull()?.let { return it }
+        val sourceId = activeSource?.id ?: "unknown"
+        val cacheFile = imageCacheDir.resolve(sourceId).resolve(urlHash(url))
+        cacheFile.bytesOrNull()?.let {
+            CacheManager.touch(cacheFile)
+            return it
+        }
         val bytes = httpClient.get(url).bodyAsBytes()
         if (bytes.isNotEmpty()) {
-            cacheFile.parent().mkdirs()
-            cacheFile.writeBytes(bytes)
+            runCatching {
+                val path = cacheFile.toJPath()
+                Files.createDirectories(path.parent)
+                Files.write(path, bytes)
+            }
+            CacheManager.evictIfNeeded(imageCacheDir.parent(), "descriptions")
         }
         return bytes
     }
@@ -162,7 +167,8 @@ class ModDetailPane(
                     setContentsMargins(0, 0, 0, 0)
                     setSpacing(6)
                     addWidget(versionLabel)
-                    addWidget(versionCombo, 1)
+                    addWidget(versionCombo)
+                    addStretch(1)
                 }
             })
             addWidget(qWidget().also { row ->
@@ -229,7 +235,11 @@ class ModDetailPane(
         queueButton.isEnabled = false
         openPageButton.isEnabled = false
 
-        ioScope.launch { evictOldCacheFiles() }
+        ioScope.launch { CacheManager.evict(imageCacheDir.parent(), "descriptions") }
+    }
+
+    override fun onOpen() {
+        if (detailsJob != null) return
         loadDetails()
     }
 
@@ -247,6 +257,7 @@ class ModDetailPane(
     }
 
     private fun loadDetails() {
+        detailsJob?.cancel()
         val context = projectContext() ?: run {
             statusLabel.text = "The Mod Browser requires a typed Modpack project."
             return
@@ -286,22 +297,40 @@ class ModDetailPane(
             val details = detailsDeferred.await()
             val versions = versionsDeferred.await()
 
-            runOnGuiThread {
-                detailsData = details.getOrNull()
-                val detailError = details.exceptionOrNull()
-                if (detailError != null) {
-                    logger.warn("Failed loading mod details for '{}': {}", modId, detailError.message, detailError)
-                }
+            val detailObj = details.getOrNull()
+            val detailError = details.exceptionOrNull()
+            if (detailError != null) {
+                logger.warn("Failed loading mod details for '{}': {}", modId, detailError.message, detailError)
+            }
+            val versionError = versions.exceptionOrNull()
+            if (versionError != null) {
+                logger.warn("Failed loading mod versions for '{}': {}", modId, versionError.message, versionError)
+            }
 
-                detailsData?.title?.let { onTitleChanged?.invoke(it) }
+            val descriptionHtml = withContext(Dispatchers.Default) {
+                processDescriptionText(detailObj)
+            }
+
+            runOnGuiThread {
+                detailsData = detailObj
+                detailObj?.title?.let { onTitleChanged?.invoke(it) }
                 bindVersions(versions.getOrDefault(emptyList()))
-                renderDetails(details.getOrNull(), detailError?.message)
+                renderDetails(detailObj, detailError?.message, descriptionHtml)
                 statusLabel.text = when {
                     detailError != null -> detailError.message ?: "Failed loading details"
-                    else -> "Loaded ${details.getOrNull()?.title ?: modId}"
+                    else -> "Loaded ${detailObj?.title ?: modId}"
                 }
             }
         }
+    }
+
+    private fun processDescriptionText(details: ModDetails?): String? {
+        if (details == null) return null
+        val raw = details.description.ifBlank { details.summary }.takeIf { it.isNotBlank() } ?: return null
+        if (activeSource?.descriptionFormat == DescriptionFormat.HTML) return raw
+        val normalized = normalizeDescription(raw)
+        val doc = markdownParser.parse(normalized)
+        return markdownRenderer.render(doc)
     }
 
     private suspend fun fetchDetails(context: ModBrowserContext, source: ModSource, id: String): ModDetails {
@@ -331,15 +360,25 @@ class ModDetailPane(
             versionCombo.currentIndex = 0
             queueButton.isEnabled = true
         }
+        val fm = versionCombo.fontMetrics()
+        val maxW = versions.maxOfOrNull { v ->
+            val s = v.releaseType?.let { " (${it.name.lowercase().replaceFirstChar(Char::uppercase)})" } ?: ""
+            fm.horizontalAdvance("${v.label}$s")
+        }?.plus(80) ?: 180
+        versionCombo.minimumWidth = maxW.coerceAtLeast(180)
     }
 
-    private fun renderDetails(details: ModDetails?, error: String? = null) {
+    private fun renderDetails(details: ModDetails?, error: String? = null, descriptionHtml: String? = null) {
         if (details == null) {
             titleLabel.text = modId
             summaryLabel.text = ""
             metaLabel.text = error ?: ""
             applyIcon(null)
-            renderDescription(error ?: "Failed to load mod details.")
+            if (descriptionHtml != null) {
+                descriptionView.setHtmlContent(descriptionHtml)
+            } else {
+                renderDescription(error ?: "Failed to load mod details.")
+            }
             openPageButton.isEnabled = false
             return
         }
@@ -364,7 +403,11 @@ class ModDetailPane(
         openPageButton.isEnabled = !details.website.isNullOrBlank()
         queueIconLoad(details.id, details.iconUrl)
         renderDependencyStrip()
-        renderDescription(details.description.ifBlank { details.summary })
+        if (descriptionHtml != null) {
+            descriptionView.setHtmlContent(descriptionHtml)
+        } else {
+            renderDescription(details.description.ifBlank { details.summary })
+        }
     }
 
     private fun renderDescription(raw: String) {
@@ -372,23 +415,27 @@ class ModDetailPane(
             descriptionView.plainText = "No description available."
             return
         }
+        if (activeSource?.descriptionFormat == DescriptionFormat.HTML) {
+            descriptionView.setHtmlContent(raw)
+            return
+        }
         val normalized = normalizeDescription(raw)
         val doc = markdownParser.parse(normalized)
-        val html = buildString {
-            append("<style>img { max-width: 100%; height: auto; }</style>")
-            append(markdownRenderer.render(doc))
-        }
-        descriptionView.setHtmlContent(html)
+        descriptionView.setHtmlContent(markdownRenderer.render(doc))
     }
 
     private fun applyIcon(url: String?) {
-        iconLabel.pixmap = if (url.isNullOrBlank()) {
-            TIcons.Search.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio)
+        if (url.isNullOrBlank()) {
+            iconLabel.pixmap = TIcons.Search.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio)
+            onIconChanged?.invoke(null)
         } else {
             shared.iconCache[url]?.let { icon ->
                 onIconChanged?.invoke(icon)
-                icon.pixmap(64, 64)
-            } ?: TIcons.Search.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio)
+                iconLabel.pixmap = icon.pixmap(64, 64)
+            } ?: run {
+                iconLabel.pixmap = TIcons.Search.scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio)
+                queueIconLoad(shared.detailsCache[modId]?.id ?: modId, url)
+            }
         }
     }
 
@@ -396,6 +443,7 @@ class ModDetailPane(
         if (url.isNullOrBlank()) return
         shared.iconCache[url]?.let { icon ->
             iconLabel.pixmap = icon.pixmap(64, 64)
+            onIconChanged?.invoke(icon)
             return
         }
 
@@ -491,7 +539,8 @@ class ModDetailPane(
             versionLabel = versionsById[versionId]?.label ?: versionId,
             iconUrl = details.iconUrl,
             dependencies = versionsById[versionId]?.dependencies ?: emptyList(),
-            status = QueueStatus()
+            status = QueueStatus(),
+            projectUrl = details.website,
         )
         shared.queuedDownloads[details.id] = queued
         shared.manuallyQueuedIds += details.id
@@ -520,7 +569,7 @@ class ModDetailPane(
         var normalized = text
             .replace("\r\n", "\n")
             .replace('\uFFFC', '\n')
-            .replace(Regex("""\s+---\s+"""), "\n\n---\n\n")
+            .replace(Regex("""(?<!\|)\s+---\s+(?!\|)"""), "\n\n---\n\n")
             .replace(Regex("""\s+(#{1,6}\s)"""), "\n\n$1")
             .replace(Regex("""\)\s+(!?\[)"""), ")\n\n$1")
             .replace(Regex("""([.!?])\s+(#{1,6}\s)"""), "$1\n\n$2")

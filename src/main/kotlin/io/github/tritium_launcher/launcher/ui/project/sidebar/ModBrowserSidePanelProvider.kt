@@ -11,9 +11,13 @@ import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.source.*
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
+import io.github.tritium_launcher.launcher.fromTR
+import io.github.tritium_launcher.launcher.io.*
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.platform.ClientIdentity
+import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.launcher.ui.helpers.CacheManager
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
 import io.github.tritium_launcher.launcher.ui.project.editor.EditorArea
@@ -22,7 +26,11 @@ import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.TMultiStateCategoryComboBox
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.*
+import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
@@ -30,16 +38,22 @@ import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
+import io.qt.core.QByteArray
+import io.qt.core.QRectF
 import io.qt.core.QSize
 import io.qt.core.Qt
 import io.qt.gui.*
+import io.qt.svg.QSvgRenderer
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.time.Clock
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.ExperimentalTime
 
 class ModBrowserSidePanelProvider : SidePanelProvider {
@@ -54,7 +68,7 @@ class ModBrowserSidePanelProvider : SidePanelProvider {
 
     override fun create(project: ProjectBase): DockWidget {
         val dock = DockWidget(displayName, null)
-        dock.setWidget(ModBrowserSidePanel(project, dock, this))
+        dock.setWidget(ModBrowserSidePanel(project, this))
         return dock
     }
 
@@ -73,7 +87,6 @@ class ModBrowserSidePanelProvider : SidePanelProvider {
 
 class ModBrowserSidePanel(
     private val project: ProjectBase,
-    private val dock: DockWidget? = null,
     private val provider: ModBrowserSidePanelProvider? = null
 ) : QWidget() {
     var onOpenDetailRequested: ((modId: String, title: String, iconUrl: String?) -> Unit)? = null
@@ -101,11 +114,12 @@ class ModBrowserSidePanel(
 
     private val availableItemsById = linkedMapOf<String, QListWidgetItem>()
     private val searchResultsById = linkedMapOf<String, ModSearchResult>()
-    private val availableRowWidgets = linkedMapOf<String, AvailableRowWidgets_>()
-    private val queuedRowWidgets = linkedMapOf<String, QueuedRowWidgets_>()
+    private val availableRowWidgets = linkedMapOf<String, AvailableRowWidgets>()
+    private val queuedRowWidgets = linkedMapOf<String, QueuedRowWidgets>()
     private val iconCache get() = state.iconCache
     private val dominantColorCache get() = state.dominantColorCache
     private val iconLoadSemaphore = Semaphore(8)
+    private val mbCacheDir: VPath = fromTR("mb-cache")
 
     private var activeContext: ModBrowserContext? = null
     private var activeSource: ModSource? = null
@@ -121,18 +135,20 @@ class ModBrowserSidePanel(
     private var searchGeneration: Int = 0
     private var searchJob: Job? = null
     private var currentSupportMessage: String? = null
+    private val prefetchSemaphore = Semaphore(4)
+    private var downloadsWatcher: VPathWatcher? = null
 
     private val container = qWidget()
     private var suppressSelectionEvents = false
     private val searchField = QLineEdit()
-    private val searchButton = pushButton { text = "Search" }
+    private val searchButton = TPushButton { text = "Search"; minimumHeight = 30 }
     private val categoryCombo = TMultiStateCategoryComboBox()
     private val availableList = QListWidget().apply {
         setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     }
     private val queuedList = QListWidget()
-    private val downloadQueuedButton = pushButton { text = "Download Queue" }
-    private val removeQueuedButton = pushButton { text = "Remove Selected" }
+    private val downloadQueuedButton = TPushButton { text = "Download Queue"; minimumHeight = 30 }
+    private val removeQueuedButton = TPushButton { text = "Remove Selected"; minimumHeight = 30 }
     private val statusLabel = label("Ready") { wordWrap = true }
 
     init {
@@ -207,9 +223,6 @@ class ModBrowserSidePanel(
             if (suppressSelectionEvents) return@connect
             selectedResultId = current?.data(Qt.ItemDataRole.UserRole) as? String
             updateSelectedRowGradient()
-            val resultId = selectedResultId ?: return@connect
-            val result = searchResultsById[resultId] ?: return@connect
-            onOpenDetailRequested?.invoke(resultId, result.title, result.iconUrl)
         }
         availableList.itemClicked.connect { item ->
             val resultId = item?.data(Qt.ItemDataRole.UserRole) as? String ?: return@connect
@@ -232,6 +245,14 @@ class ModBrowserSidePanel(
             updateSelectedRowGradient()
             removeQueuedButton.isEnabled = queuedList.currentRow() >= 0
         }
+        queuedList.itemClicked.connect { item ->
+            val projectId = item?.data(Qt.ItemDataRole.UserRole) as? String ?: return@connect
+            val queued = state.queuedDownloads[projectId] ?: return@connect
+            if (queued.requiresManualDownload) {
+                val url = queued.projectUrl?.let { "$it/download/${queued.versionId}" }
+                if (url != null) Platform.openBrowser(url)
+            }
+        }
         availableList.verticalScrollBar()?.valueChanged?.connect { value ->
             val now = System.currentTimeMillis()
             if (now - lastPageLoadMs < 350) return@connect
@@ -248,7 +269,7 @@ class ModBrowserSidePanel(
         removeQueuedButton.isEnabled = false
 
         projectContext()?.let { ctx ->
-            val source = resolveSource(ctx) ?: return@let
+            val source = resolveSource() ?: return@let
             activeContext = ctx
             activeSource = source
             provider?.icon = QIcon(source.icon)
@@ -264,8 +285,21 @@ class ModBrowserSidePanel(
                     emptyList()
                 }
                 runOnGuiThread {
-                    categoryCombo.setEntries(categories.map { it.id to it.displayName })
+                    categoryCombo.setEntries(categories.map { Triple(it.id, it.displayName, it.iconUrl) })
                     startFreshSearch()
+                }
+                categories.forEach { cat ->
+                    val url = cat.iconUrl ?: return@forEach
+                    val cached = iconCache[url]
+                    if (cached != null) {
+                        runOnGuiThread { categoryCombo.setEntryIcon(cat.id, cached.pixmap(48, 48)) }
+                    } else {
+                        ioScope.launch {
+                            downloadAndCacheIcon(url, subdir = "categories", sourceId = source.id, onCached = { icon ->
+                                categoryCombo.setEntryIcon(cat.id, icon.pixmap(48, 48))
+                            })
+                        }
+                    }
                 }
             }
         } ?: run {
@@ -285,7 +319,7 @@ class ModBrowserSidePanel(
         )
     }
 
-    private fun resolveSource(context: ModBrowserContext): ModSource? {
+    private fun resolveSource(): ModSource? {
         val sourceId = ((project as? Project<*>)?.typedMeta as? ModpackMeta)?.source
         return sourceId?.let { id -> sources.all().find { it.id == id } }
     }
@@ -375,14 +409,16 @@ class ModBrowserSidePanel(
                 }
 
                 val totalCached = state.detailsCache.size
-                val remainingBudget = 100 - totalCached
-                if (remainingBudget > 0 && newResults.isNotEmpty()) {
+                val newBudget = 500 - totalCached
+                if (newBudget > 0 && newResults.isNotEmpty()) {
                     ioScope.launch {
-                        newResults.take(remainingBudget).forEach { result ->
+                        newResults.take(newBudget).forEach { result ->
                             launch {
-                                runCatching { fetchDetails(context, source, result.id) }
-                                runCatching { fetchVersions(context, source, result.id) }
-                                preloadIcon(result.iconUrl)
+                                prefetchSemaphore.withPermit {
+                                    runCatching { fetchDetails(context, source, result.id) }
+                                    runCatching { fetchVersions(context, source, result.id) }
+                                    preloadIcon(result.iconUrl)
+                                }
                             }
                         }
                     }
@@ -410,7 +446,7 @@ class ModBrowserSidePanel(
         item.setSizeHint(row.root.sizeHint())
     }
 
-    private fun createAvailableRow(result: ModSearchResult): AvailableRowWidgets_ {
+    private fun createAvailableRow(result: ModSearchResult): AvailableRowWidgets {
         val icon = label {
             setFixedSize(40, 40)
             scaledContents = true
@@ -445,7 +481,7 @@ class ModBrowserSidePanel(
                 }, 1)
             }
         }
-        return AvailableRowWidgets_(root = root, iconLabel = icon)
+        return AvailableRowWidgets(root = root, iconLabel = icon)
     }
 
     private fun addQueuedDownloadItem(queued: QueuedDownload) {
@@ -459,7 +495,7 @@ class ModBrowserSidePanel(
         item.setSizeHint(row.root.sizeHint())
     }
 
-    private fun createQueuedRow(queued: QueuedDownload): QueuedRowWidgets_ {
+    private fun createQueuedRow(queued: QueuedDownload): QueuedRowWidgets {
         val icon = label {
             setFixedSize(40, 40)
             scaledContents = true
@@ -484,6 +520,16 @@ class ModBrowserSidePanel(
             wordWrap = true
             isVisible = errorText.isNotBlank()
         }
+        val downloadUrl = if (queued.requiresManualDownload) {
+            queued.projectUrl?.let { "$it/download/${queued.versionId}" }
+        } else null
+        val link = if (downloadUrl != null) {
+            label("<a href=\"$downloadUrl\" style=\"color: ${TColors.Accent};\">$downloadUrl</a>") {
+                textFormat = Qt.TextFormat.RichText
+                wordWrap = true
+                isVisible = true
+            }
+        } else label("") { isVisible = false }
         val root = object : QWidget() {
             override fun sizeHint(): QSize {
                 val hint = super.sizeHint()
@@ -503,11 +549,12 @@ class ModBrowserSidePanel(
                         addWidget(version)
                         if (info.isVisible) addWidget(info)
                         if (error.isVisible) addWidget(error)
+                        if (link.isVisible) addWidget(link)
                     }
                 }, 1)
             }
         }
-        return QueuedRowWidgets_(root = root, iconLabel = icon)
+        return QueuedRowWidgets(root = root, iconLabel = icon)
     }
 
     private fun extractDominantColor(pixmap: QPixmap): Triple<Int, Int, Int>? {
@@ -583,6 +630,10 @@ class ModBrowserSidePanel(
         } else ""
 
     private fun buildQueueErrorText(queued: QueuedDownload): String = buildString {
+        if (queued.requiresManualDownload) {
+            append("Manual download required (blocked by mod author)")
+            return@buildString
+        }
         queued.status.missingDependencies.takeIf { it.isNotEmpty() }?.let {
             append("Missing: ")
             append(it.joinToString(", "))
@@ -607,21 +658,86 @@ class ModBrowserSidePanel(
             try {
                 iconLoadSemaphore.acquire()
                 acquired = true
-                downloadAndCacheIcon(url, key)
+                downloadAndCacheIcon(url, key, subdir = "items", sourceId = activeSource?.id ?: "")
             } finally {
                 if (acquired) iconLoadSemaphore.release()
             }
         }
     }
 
-    private suspend fun downloadAndCacheIcon(iconUrl: String, listKey: String? = null) {
-        val bytes = runCatching { httpClient.get(iconUrl).bodyAsBytes() }.getOrNull() ?: return
+    private fun urlHash(url: String): String =
+        MessageDigest.getInstance("MD5").digest(url.toByteArray()).joinToString("") { "%02x".format(it) }
+
+    private fun cacheFile(subdir: String, sourceId: String, url: String): VPath =
+        mbCacheDir.resolve(subdir).resolve(sourceId).resolve(urlHash(url))
+
+    private fun bytesToIcon(bytes: ByteArray): QIcon = runCatching {
+        val pixmap = QPixmap()
+        if (pixmap.loadFromData(bytes)) return@runCatching QIcon(pixmap)
+        val svgText = bytes.toString(Charsets.UTF_8).replace("currentColor", "#000000")
+        val renderer = QSvgRenderer(QByteArray(svgText.toByteArray(Charsets.UTF_8)))
+        val svgPix = QPixmap(64, 64)
+        svgPix.fill(Qt.GlobalColor.transparent)
+        val painter = QPainter(svgPix)
+        try {
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, true)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, true)
+            renderer.render(painter, QRectF(0.0, 0.0, 64.0, 64.0))
+        } finally {
+            painter.end()
+        }
+        QIcon(svgPix)
+    }.getOrElse { EMPTY_ICON }
+
+    private suspend fun downloadAndCacheIcon(
+        iconUrl: String,
+        listKey: String? = null,
+        subdir: String? = null,
+        sourceId: String? = null,
+        onCached: ((QIcon) -> Unit)? = null
+    ) {
+        if (subdir != null && sourceId != null) {
+            val cached = cacheFile(subdir, sourceId, iconUrl).bytesOrNull()
+            if (cached != null) {
+                CacheManager.touch(cacheFile(subdir, sourceId, iconUrl))
+                runOnGuiThread {
+                    val iconObj = bytesToIcon(cached)
+                    if (iconObj !== EMPTY_ICON) {
+                        iconCache[iconUrl] = iconObj
+                        if (!dominantColorCache.containsKey(iconUrl)) {
+                            val color = extractDominantColor(iconObj.pixmap(40, 40))
+                            if (color != null) {
+                                dominantColorCache[iconUrl] = color
+                                if (listKey == selectedResultId) updateSelectedRowGradient()
+                            }
+                        }
+                        if (listKey != null) {
+                            availableRowWidgets[listKey]?.iconLabel?.pixmap = iconObj.pixmap(40, 40)
+                            queuedRowWidgets[listKey]?.iconLabel?.pixmap = iconObj.pixmap(40, 40)
+                        }
+                        onCached?.invoke(iconObj)
+                    }
+                }
+                return
+            }
+        }
+        val bytes = runCatching {
+            if (iconUrl.startsWith("data:image/svg+xml,")) {
+                iconUrl.removePrefix("data:image/svg+xml,").toByteArray(Charsets.UTF_8)
+            } else {
+                httpClient.get(iconUrl).bodyAsBytes()
+            }
+        }.getOrNull() ?: return
+        if (subdir != null && sourceId != null) {
+            runCatching {
+                val path = cacheFile(subdir, sourceId, iconUrl).toJPath()
+                Files.createDirectories(path.parent)
+                Files.write(path, bytes)
+            }
+            CacheManager.evictIfNeeded(mbCacheDir, subdir)
+        }
         runOnGuiThread {
-            val iconObj = runCatching {
-                val pixmap = QPixmap()
-                if (!pixmap.loadFromData(bytes)) error("Failed to decode icon")
-                QIcon(pixmap)
-            }.getOrElse { EMPTY_ICON }
+            val iconObj = bytesToIcon(bytes)
             iconCache[iconUrl] = iconObj
             if (iconObj !== EMPTY_ICON && !dominantColorCache.containsKey(iconUrl)) {
                 val color = extractDominantColor(iconObj.pixmap(40, 40))
@@ -634,6 +750,7 @@ class ModBrowserSidePanel(
                 availableRowWidgets[listKey]?.iconLabel?.pixmap = iconObj.pixmap(40, 40)
                 queuedRowWidgets[listKey]?.iconLabel?.pixmap = iconObj.pixmap(40, 40)
             }
+            onCached?.invoke(iconObj)
         }
     }
 
@@ -671,7 +788,8 @@ class ModBrowserSidePanel(
                 versionLabel = version?.label ?: versionId,
                 iconUrl = details.iconUrl,
                 dependencies = version?.dependencies ?: emptyList(),
-                status = QueueStatus()
+                status = QueueStatus(),
+                projectUrl = details.website,
             )
             runOnGuiThread {
                 state.queuedDownloads[resultId] = queued
@@ -711,6 +829,11 @@ class ModBrowserSidePanel(
             queuedList.updatesEnabled = true
         }
         updateQueueButtons()
+        if (state.queuedDownloads.any { it.value.requiresManualDownload }) {
+            startDownloadsWatcher()
+        } else {
+            stopDownloadsWatcher()
+        }
     }
 
     private fun updateQueueButtons() {
@@ -775,6 +898,9 @@ class ModBrowserSidePanel(
             modsDir.mkdirs()
             val cacheEnabled = CoreSettingValues.modCacheEnabled
             val downloadSemaphore = Semaphore(4)
+            val fallbacks = sources.all()
+                .filterIsInstance<HashFallbackProvider>()
+                .sortedBy { it.priority }
 
             data class PerModData(
                 val projectId: String,
@@ -789,9 +915,30 @@ class ModBrowserSidePanel(
                     async {
                         downloadSemaphore.withPermit {
                             try {
-                                val plan = source.resolveInstall(context, queuedMod.projectId, queuedMod.versionId)
-                                val jarPath = modsDir.resolve(plan.fileName)
-                                val response = httpClient.prepareGet(plan.downloadUrl).execute()
+                                val resolved = resolveInstallDownload(context, source, queuedMod.projectId, queuedMod.versionId, fallbacks)
+                                if (resolved.downloadUrl == null) {
+                                    val existing = scanDownloadsForMod(queuedMod, resolved.plan.fileHash)
+                                    if (existing != null) {
+                                        val (jarPath, hash) = existing
+                                        logger.info("Found existing download for '{}': {}", queuedMod.title, jarPath.fileName())
+                                        val installedMod = prepareJarInstall(jarPath, queuedMod, hash, source.id)
+                                        val depIds = queuedMod.dependencies.filter { it.required }.map { it.projectId }
+                                        return@withPermit PerModData(projectId = queuedMod.projectId, installedMod = installedMod, depIds = depIds)
+                                    }
+                                    runOnGuiThread {
+                                        state.queuedDownloads[queuedMod.projectId] = queuedMod.copy(
+                                            requiresManualDownload = true,
+                                            fileHash = resolved.plan.fileHash,
+                                        )
+                                        renderQueuedDownloads()
+                                        startDownloadsWatcher()
+                                    }
+                                    val msg = "Manual download required (blocked by mod author)"
+                                    failures.add(queuedMod.projectId to msg)
+                                    return@withPermit null
+                                }
+                                val jarPath = modsDir.resolve(resolved.fileName)
+                                val response = httpClient.prepareGet(resolved.downloadUrl).execute()
                                 val channel = response.bodyAsChannel()
                                 val totalBytes = response.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: -1L
                                 val digest = MessageDigest.getInstance("SHA-1")
@@ -811,7 +958,7 @@ class ModBrowserSidePanel(
                                     }
                                 }
                                 val fileHash = digest.digest().joinToString("") { "%02x".format(it) }
-                                logger.info("Downloaded queued mod '{}' as '{}'", queuedMod.projectId, plan.fileName)
+                                logger.info("Downloaded queued mod '{}' as '{}'", queuedMod.projectId, resolved.fileName)
 
                                 if (cacheEnabled) {
                                     val cacheFile = ModDatabase.cachePathFor(fileHash)
@@ -847,17 +994,18 @@ class ModBrowserSidePanel(
                                     installedMod = InstalledMod(
                                         projectId = queuedMod.projectId,
                                         modId = modId,
-                                        fileName = plan.fileName,
+                                        fileName = resolved.fileName,
                                         displayName = displayName,
                                         side = side,
-                                        releaseType = plan.releaseType?.name?.lowercase() ?: "release",
+                                        releaseType = resolved.plan.releaseType?.name?.lowercase() ?: "release",
                                         source = source.id,
-                                        versionId = plan.versionId,
-                                        versionLabel = plan.versionLabel,
+                                        versionId = resolved.plan.versionId,
+                                        versionLabel = resolved.plan.versionLabel,
                                         iconPath = iconPath,
                                         projectUrl = null,
                                         fileHash = fileHash,
-                                        installedAt = Clock.System.now()
+                                        installedAt = Clock.System.now(),
+                                        requiresManualDownload = resolved.requiresManualDownload,
                                     ),
                                     depIds = depIds
                                 )
@@ -900,8 +1048,11 @@ class ModBrowserSidePanel(
 
             ProjectTaskMngr.finish(taskId)
             runOnGuiThread {
+                val manualCount = state.queuedDownloads.count { it.value.requiresManualDownload }
                 val message = when {
-                    failures.isEmpty() -> "Downloaded ${successful.size} mod(s)"
+                    failures.isEmpty() && manualCount == 0 -> "Downloaded ${successful.size} mod(s)"
+                    failures.isEmpty() && manualCount > 0 -> "Downloaded ${successful.size} mod(s), $manualCount require manual download"
+                    successful.isEmpty() && manualCount > 0 -> "$manualCount mod(s) require manual download"
                     successful.isEmpty() -> "All downloads failed"
                     else -> "Downloaded ${successful.size}/${queued.size} mod(s), ${failures.size} failed"
                 }
@@ -910,9 +1061,192 @@ class ModBrowserSidePanel(
         }
     }
 
+    private fun startDownloadsWatcher() {
+        if (downloadsWatcher != null) return
+        if (state.queuedDownloads.none { it.value.requiresManualDownload }) return
+
+        val downloadsDir = VPath.parse(System.getProperty("user.home")).resolve("Downloads")
+        if (!downloadsDir.isDir()) {
+            logger.warn("Downloads directory not found: {}", downloadsDir.toAbsolute())
+            return
+        }
+
+        ioScope.launch {
+            scanDownloadsFolder(downloadsDir)
+            if (state.queuedDownloads.none { it.value.requiresManualDownload }) {
+                runOnGuiThread { stopDownloadsWatcher() }
+            }
+        }
+
+        logger.info("Starting Downloads folder watcher for manual download detection")
+        downloadsWatcher = downloadsDir.watch(
+            callback = { event ->
+                if (event.kind == VWatchEvent.Kind.Create) {
+                    val name = event.path.fileName()
+                    if (name.endsWith(".jar", ignoreCase = true)) {
+                        ioScope.launch {
+                            handleDownloadsJar(event.path)
+                        }
+                    }
+                }
+            },
+            options = VWatchOptions(
+                kinds = listOf(java.nio.file.StandardWatchEventKinds.ENTRY_CREATE),
+            ),
+            ctx = Dispatchers.IO
+        )
+    }
+
+    private fun stopDownloadsWatcher() {
+        downloadsWatcher?.close()
+        downloadsWatcher = null
+    }
+
+    private suspend fun scanDownloadsFolder(downloadsDir: VPath) {
+        val existingJars = downloadsDir.list()
+            .filter { it.fileName().endsWith(".jar", ignoreCase = true) }
+            .sortedByDescending { it.lastModifiedOrNull() }
+        for (jarPath in existingJars) {
+            handleDownloadsJar(jarPath)
+            if (state.queuedDownloads.none { it.value.requiresManualDownload }) break
+        }
+    }
+
+    private fun jarMatchesMod(jarPath: VPath, expectedHash: String?, projectId: String): String? {
+        val bytes = runCatching { jarPath.bytesOrNothing() }.getOrNull() ?: return null
+        val hash = ModDatabase.sha1(bytes)
+        if (expectedHash != null && hash == expectedHash) return hash
+        val info = runCatching { readModJarInfo(jarPath) }.getOrNull()
+        if (info != null && info.modId == projectId) return hash
+        return null
+    }
+
+    private suspend fun prepareJarInstall(jarPath: VPath, queued: QueuedDownload, hash: String, sourceId: String): InstalledMod {
+        val modsDir = project.projectDir.resolve("mods")
+        modsDir.mkdirs()
+        val targetPath = modsDir.resolve(jarPath.fileName())
+        withContext(Dispatchers.IO) {
+            Files.copy(
+                jarPath.toJPath(),
+                targetPath.toJPath(),
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        }
+
+        val jarInfo = readModJarInfo(targetPath)
+        val projectId = queued.projectId
+        val modId = jarInfo?.modId ?: projectId
+        val displayName = jarInfo?.displayName ?: queued.title
+        val side = jarInfo?.side ?: ModSide.BOTH
+
+        val iconBytes = try {
+            queued.iconUrl?.let { url -> httpClient.get(url).bodyAsBytes() }
+        } catch (_: Exception) { null } ?: readModJarIcon(targetPath)
+        val iconPath: String? = if (iconBytes != null) {
+            val iconFile = ModDatabase.iconPathFor(projectId)
+            iconFile.writeBytesAtomic(iconBytes)
+            iconFile.toAbsolute().toString()
+        } else null
+
+        return InstalledMod(
+            projectId = projectId,
+            modId = modId,
+            fileName = targetPath.fileName(),
+            displayName = displayName,
+            side = side,
+            releaseType = "release",
+            source = sourceId,
+            versionId = queued.versionId,
+            versionLabel = queued.versionLabel,
+            iconPath = iconPath,
+            projectUrl = queued.projectUrl,
+            fileHash = hash,
+            installedAt = Clock.System.now(),
+            requiresManualDownload = true,
+        )
+    }
+
+    private suspend fun commitManualInstall(installedMod: InstalledMod, depIds: List<String> = emptyList()) {
+        val projectId = installedMod.projectId
+        withContext(Dispatchers.IO) {
+            ModDatabase(project.projectDir).use { db ->
+                db.install(installedMod)
+                db.setDependencies(projectId, depIds)
+            }
+        }
+
+        runOnGuiThread {
+            state.queuedDownloads.remove(projectId)
+            state.manuallyQueuedIds.remove(projectId)
+            renderQueuedDownloads()
+            if (state.queuedDownloads.none { it.value.requiresManualDownload }) {
+                stopDownloadsWatcher()
+            }
+        }
+
+        TritiumEventBus.publish(
+            TritiumEvent.ModInstalled(
+                project, projectId, installedMod.modId, installedMod.displayName,
+                installedMod.versionId, installedMod.versionLabel
+            )
+        )
+        TritiumEventBus.publish(TritiumEvent.ModsInstalled)
+        TritiumEventBus.publish(TritiumEvent.QueuedDownloadsChanged)
+
+        runOnGuiThread { statusLabel.text = "Detected and installed manual download: ${installedMod.displayName}" }
+    }
+
+    private fun scanDownloadsForMod(queued: QueuedDownload, fileHash: String?): Pair<VPath, String>? {
+        val downloadsDir = VPath.parse(System.getProperty("user.home")).resolve("Downloads")
+        if (!downloadsDir.isDir()) return null
+        val jars = downloadsDir.list()
+            .filter { it.fileName().endsWith(".jar", ignoreCase = true) }
+            .sortedByDescending { it.lastModifiedOrNull() }
+        for (jarPath in jars) {
+            val hash = jarMatchesMod(jarPath, fileHash, queued.projectId) ?: continue
+            return jarPath to hash
+        }
+        return null
+    }
+
+    private suspend fun handleDownloadsJar(jarPath: VPath) {
+        val pendingManual = state.queuedDownloads.filter { it.value.requiresManualDownload }
+        if (pendingManual.isEmpty()) return
+
+        delay(2000.milliseconds)
+
+        for ((_, queued) in pendingManual) {
+            val hash = jarMatchesMod(jarPath, queued.fileHash, queued.projectId) ?: continue
+            logger.info("Detected manual download for mod '{}': {}", queued.title, jarPath.fileName())
+            val installedMod = prepareJarInstall(jarPath, queued, hash, activeSource?.id ?: "unknown")
+            val depIds = queued.dependencies.filter { it.required }.map { it.projectId }
+            commitManualInstall(installedMod, depIds)
+            return
+        }
+    }
+
     init {
         ioScope.onEvent<TritiumEvent.QueuedDownloadsChanged> { renderQueuedDownloads() }
+        ioScope.onEvent<TritiumEvent.ModsInstalled> {
+            val manualIds = state.queuedDownloads.filter { it.value.requiresManualDownload }.keys
+            if (manualIds.isEmpty()) return@onEvent
+            ioScope.launch {
+                val installed = withContext(Dispatchers.IO) {
+                    ModDatabase(project.projectDir).use { db ->
+                        manualIds.filter { db.exists(it) }
+                    }
+                }
+                if (installed.isNotEmpty()) {
+                    runOnGuiThread {
+                        installed.forEach { state.queuedDownloads.remove(it) }
+                        renderQueuedDownloads()
+                        TritiumEventBus.publish(TritiumEvent.QueuedDownloadsChanged)
+                    }
+                }
+            }
+        }
         destroyed.connect {
+            stopDownloadsWatcher()
             searchJob?.cancel()
             ioScope.cancel()
             httpClient.close()
@@ -920,12 +1254,12 @@ class ModBrowserSidePanel(
     }
 }
 
-private data class AvailableRowWidgets_(
+private data class AvailableRowWidgets(
     val root: QWidget,
     val iconLabel: QLabel
 )
 
-private data class QueuedRowWidgets_(
+private data class QueuedRowWidgets(
     val root: QWidget,
     val iconLabel: QLabel
 )

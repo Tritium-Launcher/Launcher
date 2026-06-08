@@ -4,6 +4,8 @@ import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.registry.Registrable
 import io.qt.gui.QPixmap
 
+enum class DescriptionFormat { MARKDOWN, HTML }
+
 /**
  * Mod Sources are web APIs that provide Mods and other content to users. Examples are [CurseForge] and [Modrinth].
  */
@@ -13,6 +15,7 @@ abstract class ModSource: Registrable {
     abstract val icon: QPixmap
     abstract val webpage: String
     abstract val order: Int
+    open val descriptionFormat: DescriptionFormat = DescriptionFormat.MARKDOWN
 
     open fun support(context: ModBrowserContext): ModSourceSupport = ModSourceSupport()
 
@@ -42,7 +45,8 @@ data class ModSourceSupport(
 
 data class ModCategory(
     val id: String,
-    val displayName: String
+    val displayName: String,
+    val iconUrl: String? = null
 )
 
 data class ModSearchQuery(
@@ -104,7 +108,47 @@ data class ModInstallPlan(
     val versionId: String,
     val versionLabel: String,
     val fileName: String,
-    val downloadUrl: String,
+    val downloadUrl: String?,
     val releaseType: ReleaseType? = null,
     val fileHash: String? = null,
 )
+
+data class ResolvedFile(
+    val fileName: String,
+    val downloadUrl: String,
+    val fileHash: String,
+)
+
+interface HashFallbackProvider {
+    val priority: Int
+    suspend fun resolveByHash(context: ModBrowserContext, hash: String): ResolvedFile?
+}
+
+data class ResolvedInstall(
+    val plan: ModInstallPlan,
+    val downloadUrl: String?,
+    val fileName: String,
+    val requiresManualDownload: Boolean,
+)
+
+suspend fun resolveInstallDownload(
+    context: ModBrowserContext,
+    source: ModSource,
+    projectId: String,
+    versionId: String,
+    fallbacks: List<HashFallbackProvider> = emptyList(),
+): ResolvedInstall {
+    val plan = source.resolveInstall(context, projectId, versionId)
+    if (plan.downloadUrl != null) {
+        return ResolvedInstall(plan, plan.downloadUrl, plan.fileName, requiresManualDownload = false)
+    }
+    if (plan.fileHash != null) {
+        for (fallback in fallbacks.sortedBy { it.priority }) {
+            val resolved = runCatching { fallback.resolveByHash(context, plan.fileHash) }.getOrNull()
+            if (resolved != null) {
+                return ResolvedInstall(plan, resolved.downloadUrl, resolved.fileName, requiresManualDownload = false)
+            }
+        }
+    }
+    return ResolvedInstall(plan, null, plan.fileName, requiresManualDownload = true)
+}

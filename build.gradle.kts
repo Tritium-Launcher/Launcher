@@ -117,6 +117,8 @@ dependencies {
     // CommonMark
     implementation(libs.commonmark)
     implementation(libs.commonmark.ext.gfm.tables)
+    implementation(libs.commonmark.ext.gfm.strikethrough)
+    implementation(libs.commonmark.ext.task.list.items)
     implementation(libs.commonmark.ext.image.attributes)
     implementation(libs.sqlite.jdbc)
     implementation(libs.flatbuffers)

@@ -277,6 +277,8 @@ data class VPath(
      */
     fun bytesOrNull(): ByteArray? = try {
         Files.readAllBytes(toJPath())
+    } catch (_: NoSuchFileException) {
+        null
     } catch (e: Exception) {
         logger.warn("Exception reading bytes for path '$this'", e)
         null
