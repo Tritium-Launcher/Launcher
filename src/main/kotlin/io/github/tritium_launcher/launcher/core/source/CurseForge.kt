@@ -221,39 +221,36 @@ class CurseForge : ModSource(), Registrable {
             var index = 0
             val pageSize = 50
             val maxPages = 4
-            var pagesFetched = 0
             val loaderType = context.modLoaderId?.let { curseLoaderType(it) }
 
-            while (pagesFetched < maxPages) {
-                val page = retryOnThrottle {
-                    client.get("mods/$projectId/files") {
-                        parameter("pageSize", pageSize)
-                        parameter("index", index)
-                        context.minecraftVersion?.let { parameter("gameVersion", it) }
-                        loaderType?.let { parameter("modLoaderType", it) }
+            run pagination@{
+                repeat(maxPages) {
+                    val page = retryOnThrottle {
+                        client.get("mods/$projectId/files") {
+                            parameter("pageSize", pageSize)
+                            parameter("index", index)
+                            context.minecraftVersion?.let { parameter("gameVersion", it) }
+                            loaderType?.let { parameter("modLoaderType", it) }
+                        }
+                    }.let { response ->
+                        if (!response.status.isSuccess()) {
+                            logger.error("CurseForge returned {}", response.status)
+                        }
+                        try {
+                            response.body<CurseFilesResponse>()
+                        } catch (e: Exception) {
+                            val raw = response.bodyAsText()
+                            logger.error("CurseForge files deserialization failed. Raw response (first 2KB): {}", raw.take(2048))
+                            throw e
+                        }
                     }
-                }.let { response ->
-                    if (!response.status.isSuccess()) {
-                        logger.error("CurseForge returned {}", response.status)
-                    }
-                    try {
-                        response.body<CurseFilesResponse>()
-                    } catch (e: Exception) {
-                        val raw = response.bodyAsText()
-                        logger.error("CurseForge files deserialization failed. Raw response (first 2KB): {}", raw.take(2048))
-                        throw e
-                    }
+
+                    allFiles.addAll(page.data)
+
+                    val total = page.pagination.totalCount
+                    index += pageSize
+                    if (index >= total || page.data.isEmpty()) return@pagination
                 }
-
-                allFiles.addAll(page.data)
-                pagesFetched++
-
-                val total = page.pagination.totalCount
-                index += pageSize
-                if (index >= total || page.data.isEmpty()) break
-            }
-
-            if (pagesFetched >= maxPages) {
                 logger.warn("CurseForge versions hit page limit for projectId={}, total files may be truncated", projectId)
             }
 
