@@ -44,13 +44,15 @@ data class CurseFileHash(
 @Serializable
 data class CurseFileInfo(
     val id: Int,
+    @SerialName("mod_id") val modId: Int? = null,
+    @SerialName("game_id") val gameId: Int? = null,
     val gameVersions: List<String>,
     val modLoaders: List<CurseModLoader>? = null,
     val fileName: String = "",
     val displayName: String = "",
     val downloadUrl: String? = null,
     val description: String? = null,
-    val downloadCount: Long = 0,
+    @SerialName("download_count") val downloadCount: Long = 0,
     val fileDate: String? = null,
     val hashes: List<CurseFileHash>? = null,
     val releaseType: Int = 1,
@@ -118,4 +120,21 @@ data class CurseFileResponse(
 @Serializable
 data class CurseDescriptionResponse(
     val data: String
+)
+
+@Serializable
+data class CurseFingerprintResponse(
+    val data: CurseFingerprintData
+)
+
+@Serializable
+data class CurseFingerprintData(
+    @SerialName("exact_matches") val exactMatches: List<CurseFingerprintMatch> = emptyList(),
+    @SerialName("partial_matches") val partialMatches: List<CurseFingerprintMatch> = emptyList(),
+)
+
+@Serializable
+data class CurseFingerprintMatch(
+    val id: Long,
+    val file: CurseFileInfo
 )

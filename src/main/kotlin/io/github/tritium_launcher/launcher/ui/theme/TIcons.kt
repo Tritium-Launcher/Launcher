@@ -2,6 +2,7 @@ package io.github.tritium_launcher.launcher.ui.theme
 
 import io.github.tritium_launcher.launcher.currentDpr
 import io.github.tritium_launcher.launcher.referenceWidget
+import io.github.tritium_launcher.launcher.ui.theme.TIcons.pix
 import io.qt.gui.QPixmap
 import java.io.File
 import java.nio.file.Files
@@ -51,16 +52,24 @@ object TIcons {
     /* Menu Icons */
 
     val CurseForge get() = pix("ui/curseforge", 16, 16)
-    val Modrinth   get() = pix("ui/modrinth", 16, 16)
+    val Modrinth   get() = pix("ui/modrinth", 64, 64)
+
+    /** Key constants for account service icons — pass to [pix] with a target size. */
+    const val CURSEFORGE = "ui/curseforge"
+    const val MODRINTH = "ui/modrinth"
+    const val MICROSOFT = "dashboard/microsoft"
 
     val Fabric   get() = pix("ui/fabric", 16, 16)
     val NeoForge get() = pix("ui/neoforge", 16, 16)
 
-    val Prism get() = pix("ui/prism_launcher", 16, 16)
-    val GDL   get() = pix("ui/gd_launcher", 16, 16)
-    val ATL   get() = pix("ui/at_launcher", 16, 16)
+    val Prism    get() = pix("ui/prism_launcher", 16, 16)
+    val GDL      get() = pix("ui/gd_launcher", 16, 16)
+    val ATL      get() = pix("ui/at_launcher", 16, 16)
+    val CFPack   get() = pix("ui/curseforge_pack", 16, 16)
+    val MRPack   get() = pix("ui/modrinth_pack", 16, 16)
 
     val QuestionMark get() = pix("ui/question", 16, 16)
+    val Unknown      get() = pix("ui/unknown_question", 16, 16)
 
     val NewProject  get() = pix("dashboard/new_project", 32, 32)
     val Import      get() = pix("dashboard/folder_import", 32, 32)
@@ -69,7 +78,7 @@ object TIcons {
     val ListView    get() = pix("dashboard/list_view", 16, 16)
     val GridView    get() = pix("dashboard/grid_view", 16, 16)
     val CompactView get() = pix("dashboard/compact_view", 16, 16)
-    val Microsoft   get() = pix("dashboard/microsoft", 32, 32)
+    val Microsoft   get() = pix("dashboard/microsoft", 64, 64)
     val SmallGrass  get() = pix("dashboard/tiny_grass", 32, 32)
 
     val Build      get() = pix("menu/build", 12, 12)
@@ -86,6 +95,7 @@ object TIcons {
     val SmallPause     get() = pix("ui/small_pause", 16, 16)
     val SmallPlay      get() = pix("ui/small_play", 16, 16)
     val SmallMenu      get() = pix("ui/small_menu", 16, 16)
+    val ExternalArrow  get() = pix("ui/external_arrow", 12, 12)
 
     /**
      * Creates a [QPixmap] from specified Icon paths
@@ -99,6 +109,12 @@ object TIcons {
     }
 
     fun pixForKey(key: String, width: Int, height: Int) = pix(key, width, height)
+
+    /** Render a themed icon at the exact target [size] (square). */
+    fun pix(key: String, size: Int): QPixmap {
+        val dpr = try { currentDpr(referenceWidget) } catch (_: Throwable) { 1.0 }
+        return ThemeMngr.getPixmap(key, size, size, dpr) ?: QPixmap()
+    }
 
     /**
      * When generating a Project without specifying an Icon, use a generic icon
@@ -140,3 +156,7 @@ object TIcons {
         }
     }
 }
+
+typealias IconKey = String
+
+fun IconKey.icon(size: Int): QPixmap = TIcons.pix(this, size)

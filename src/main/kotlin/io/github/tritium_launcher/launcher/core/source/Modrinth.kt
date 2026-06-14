@@ -206,6 +206,20 @@ class Modrinth : ModSource(), HashFallbackProvider, Registrable {
         )
     }
 
+    override suspend fun resolveProjectInfoByHash(hash: String): HashProjectInfo? {
+        return try {
+            val version = retryOnThrottle {
+                client.get("version_file/$hash") {
+                    parameter("algorithm", "sha1")
+                }.body<ModrinthVersion>()
+            }
+            val project = retryOnThrottle {
+                client.get("project/${version.project_id}").body<ModrinthProject>()
+            }
+            HashProjectInfo(projectId = project.id, projectTitle = project.title)
+        } catch (_: Exception) { null }
+    }
+
     private suspend fun fetchVersions(context: ModBrowserContext, projectId: String): List<ModrinthVersion> {
         val versions = retryOnThrottle {
             client.get("project/$projectId/version") {

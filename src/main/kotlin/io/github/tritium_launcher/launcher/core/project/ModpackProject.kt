@@ -30,6 +30,7 @@ import io.qt.gui.QPixmap
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
+import java.net.URL
 import java.nio.file.Path
 
 /**
@@ -56,6 +57,14 @@ class ModpackProjectType : ProjectType {
     private val licenses   = BuiltinRegistries.License
     private val modLoaders = BuiltinRegistries.ModLoader
     private val modSources = BuiltinRegistries.ModSource
+
+    private data class CompanionModEntry(
+        val loader: String,
+        val mcVersion: String
+    )
+
+    private var companionModVersion: String = ""
+    private var companionModEntries: List<CompanionModEntry> = emptyList()
 
     override fun createSetupWidget(
         projectRootHint: Path?,
@@ -209,6 +218,19 @@ class ModpackProjectType : ProjectType {
         }
         form.addRow(separatorLabel)
 
+        // MARK: Companion Mod checkbox
+        val companionLabel = label("Include Companion Mod:")
+        val companionCheckbox = QCheckBox().apply {
+            isChecked = true
+            visible = false
+            toggled.connect { checked ->
+                initialVars["includeCompanionMod"] = if(checked) "true" else "false"
+            }
+            minimumWidth = 50
+        }
+        initialVars["includeCompanionMod"] = "true"
+        form.addRow(companionLabel, companionCheckbox)
+
         // MARK: Set if Git Repository should be initialized
         val gitLabel = label("Create Git Repository:")
         val gitCheckbox = QCheckBox().apply {
@@ -328,12 +350,48 @@ class ModpackProjectType : ProjectType {
             return a.compareTo(b)
         }
 
+        fun updateCompanionModVisibility() {
+            val loaderId = modLoaderCombo.currentData as? String
+            val mcVersion = mcCombo.currentData as? String
+            val hasMatch = loaderId != null && mcVersion != null &&
+                companionModEntries.any { it.loader == loaderId && it.mcVersion == mcVersion }
+            companionCheckbox.visible = hasMatch
+        }
+
+        fun fetchCompanionModVersions() {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val content = URL("https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/main/versions.json")
+                        .openStream().bufferedReader().use { it.readText() }
+                    val root = Json.parseToJsonElement(content).jsonObject
+                    val modVersion = root["modVersion"]?.jsonPrimitive?.contentOrNull ?: return@launch
+                    val supported = root["supported"]?.jsonArray ?: return@launch
+                    val entries = supported.flatMap { element ->
+                        val obj = element.jsonObject
+                        val mcVersion = obj["mcVersion"]?.jsonPrimitive?.contentOrNull ?: return@flatMap emptyList()
+                        val loaders = obj["loaders"]?.jsonArray
+                            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                            ?: return@flatMap emptyList()
+                        loaders.map { CompanionModEntry(loader = it, mcVersion = mcVersion) }
+                    }
+                    companionModVersion = modVersion
+                    companionModEntries = entries
+                    runOnGuiThread { updateCompanionModVisibility() }
+                } catch (t: Throwable) {
+                    logger.info("Failed to fetch companion mod versions", t)
+                }
+            }
+        }
+
         fun updateCompatibleVersions() {
             val loaderId = modLoaderCombo.currentData as? String
             val mcVersion = mcCombo.currentData as? String
 
             if (loaderId == null || mcVersion == null) {
-                runOnGuiThread { modLoaderVerCombo.clear() }
+                runOnGuiThread {
+                    modLoaderVerCombo.clear()
+                    updateCompanionModVisibility()
+                }
                 return
             }
 
@@ -354,6 +412,7 @@ class ModpackProjectType : ProjectType {
                         modLoaderVerCombo.currentIndex = 0
                         (modLoaderVerCombo.currentData as? String)?.let { initialVars["modLoaderVersion"] = it }
                     }
+                    updateCompanionModVisibility()
                 }
             }
         }
@@ -391,6 +450,7 @@ class ModpackProjectType : ProjectType {
         modLoaderCombo.currentIndexChanged.connect { updateCompatibleVersions() }
 
         fetchAndPopulateMcVersions()
+        fetchCompanionModVersions()
 
         return panel
     }
@@ -507,6 +567,25 @@ class ModpackProjectType : ProjectType {
                 )),
                 affects = listOf("icon.png")
             )
+        }
+
+        val includeCompanion = vars["includeCompanionMod"]?.toBoolean() ?: false
+        if(includeCompanion && companionModVersion.isNotBlank()) {
+            val mcVer = vars["minecraftVersion"] ?: ""
+            val loaderId = vars["modLoader"] ?: ""
+            if(companionModEntries.any { it.loader == loaderId && it.mcVersion == mcVer }) {
+                val downloadUrl = "https://github.com/Tritium-Launcher/Tritium-Companion/releases/download/v${companionModVersion}/tritiumcompanion-${loaderId}-${companionModVersion}.jar"
+                val destFilename = downloadUrl.substringAfterLast('/')
+                steps += GeneratorStepDescriptor(
+                    "companion-mod",
+                    "fetch",
+                    JsonObject(mapOf(
+                        "url" to JsonPrimitive(downloadUrl),
+                        "dest" to JsonPrimitive("mods/$destFilename")
+                    )),
+                    affects = listOf("mods/$destFilename")
+                )
+            }
         }
 
         if(gitInit) {

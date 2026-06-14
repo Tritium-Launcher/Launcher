@@ -119,7 +119,7 @@ class ModBrowserSidePanel(
     private val iconCache get() = state.iconCache
     private val dominantColorCache get() = state.dominantColorCache
     private val iconLoadSemaphore = Semaphore(8)
-    private val mbCacheDir: VPath = fromTR("mb-cache")
+    private val mbCacheDir: VPath = fromTR("cache", "mod-browser")
 
     private var activeContext: ModBrowserContext? = null
     private var activeSource: ModSource? = null

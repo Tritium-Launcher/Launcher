@@ -3,9 +3,14 @@ package io.github.tritium_launcher.launcher.keymap
 import io.qt.Nullable
 import io.qt.core.QEvent
 import io.qt.core.QObject
+import io.qt.core.Qt
 import io.qt.core.Qt.Key.*
 import io.qt.gui.QKeyEvent
 import io.qt.gui.QMouseEvent
+import io.qt.widgets.QApplication
+import io.qt.widgets.QLineEdit
+import io.qt.widgets.QPlainTextEdit
+import io.qt.widgets.QTextEdit
 
 /**
  * Dispatches Key events
@@ -32,6 +37,13 @@ class KeymapDispatcher(
 
         val key = keyEvent.key()
         if(isModifierKey(key)) return false
+
+        if (isTextEditKeystroke(key) || keyEvent.modifiers().value() == Qt.KeyboardModifier.ControlModifier.value() && key in textEditCtrlKeys) {
+            val focusWidget = QApplication.focusWidget()
+            if (focusWidget is QLineEdit || focusWidget is QTextEdit || focusWidget is QPlainTextEdit) {
+                return false
+            }
+        }
 
         val stroke = Keystroke(key, keyEvent.modifiers().value())
         val keymap = KeymapMngr.activeKeymap
@@ -89,4 +101,24 @@ class KeymapDispatcher(
         Key_Alt.value(),
         Key_Meta.value(),
     )
+
+    private companion object {
+        private val textEditCtrlKeys = setOf(
+            Key_A.value(),   // Select All
+            Key_C.value(),   // Copy
+            Key_V.value(),   // Paste
+            Key_X.value(),   // Cut
+            Key_Z.value(),   // Undo
+            Key_Y.value(),   // Redo
+            Key_Slash.value(),
+        )
+
+        private val textEditStandaloneKeys = setOf(
+            Key_Delete.value(),
+            Key_Backspace.value(),
+        )
+    }
+
+    private fun isTextEditKeystroke(key: Int): Boolean =
+        key in textEditStandaloneKeys
 }

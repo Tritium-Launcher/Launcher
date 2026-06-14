@@ -17,6 +17,7 @@ object CacheManager {
         "categories" to CacheConfig(maxBytes = 5L * 1024 * 1024),
         "items" to CacheConfig(maxBytes = 100L * 1024 * 1024),
         "descriptions" to CacheConfig(maxBytes = 50L * 1024 * 1024, maxAgeDays = 7),
+        "mod-import" to CacheConfig(maxBytes = 20L * 1024 * 1024),
     )
 
     private val writeCounters = ConcurrentHashMap<String, Int>()

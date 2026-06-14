@@ -29,6 +29,36 @@ abstract class ModSource: Registrable {
 
     abstract suspend fun resolveInstall(context: ModBrowserContext, projectId: String, versionId: String): ModInstallPlan
 
+    /**
+     * Optionally resolve a project ID from a file hash.
+     * Sources that support hash-based lookup should override this.
+     */
+    open suspend fun resolveProjectInfoByHash(hash: String): HashProjectInfo? = null
+
+    open suspend fun resolveProjectInfoByFingerprint(fingerprint: Long): HashProjectInfo? = null
+
+    /**
+     * Compute a file fingerprint from the raw jar bytes.
+     * Sources that use file fingerprint algorithms
+     * should override this to compute their fingerprint.
+     * Return `null` if not supported.
+     */
+    open fun computeFileFingerprint(bytes: ByteArray): Long? = null
+
+    /**
+     * Batch resolve project info for multiple fingerprints.
+     * Sources that support batch fingerprint lookup should override this.
+     * Returns a map of fingerprint -> project info; unmatched fingerprints are absent.
+     */
+    open suspend fun resolveProjectInfosByFingerprints(fingerprints: List<Long>): Map<Long, HashProjectInfo> = emptyMap()
+
+    /**
+     * Optionally resolve a project from the raw jar file contents.
+     * Sources that use file fingerprint algorithms
+     * should override this to compute their fingerprint.
+     */
+    open suspend fun resolveProjectInfoByJarContents(bytes: ByteArray): HashProjectInfo? = null
+
     override fun toString(): String = id
 }
 
@@ -65,7 +95,8 @@ data class ModSearchResult(
     val downloads: Long? = null,
     val categories: List<String> = emptyList(),
     val versions: List<String> = emptyList(),
-    val iconUrl: String? = null
+    val iconUrl: String? = null,
+    val slug: String? = null,
 )
 
 data class ModSearchPage(
@@ -89,6 +120,8 @@ data class ModDetails(
 data class ModVersionOption(
     val id: String,
     val label: String,
+    val fileName: String? = null,
+    val fileHash: String? = null,
     val gameVersions: List<String> = emptyList(),
     val loaders: List<String> = emptyList(),
     val featured: Boolean = false,
@@ -111,6 +144,11 @@ data class ModInstallPlan(
     val downloadUrl: String?,
     val releaseType: ReleaseType? = null,
     val fileHash: String? = null,
+)
+
+data class HashProjectInfo(
+    val projectId: String,
+    val projectTitle: String,
 )
 
 data class ResolvedFile(

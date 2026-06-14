@@ -108,7 +108,7 @@ class ModDetailPane(
     private val dependencyScroll = QScrollArea()
     private val dependencyContent = qWidget()
     private val dependencyLayout = QHBoxLayout(dependencyContent)
-    private val imageCacheDir: VPath = fromTR("mb-cache", "descriptions")
+    private val imageCacheDir: VPath = fromTR("cache", "mod-browser", "descriptions")
 
     private suspend fun cachedImageFetch(url: String): ByteArray {
         val sourceId = activeSource?.id ?: "unknown"

@@ -5,10 +5,10 @@ import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
 import io.github.tritium_launcher.launcher.core.project.ProjectMngrEvent
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.launcher.import.ui.ImportProjectDialog
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard.Companion.bgDashboardLogger
-import io.github.tritium_launcher.launcher.ui.importing.ImportProjectDialog
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle

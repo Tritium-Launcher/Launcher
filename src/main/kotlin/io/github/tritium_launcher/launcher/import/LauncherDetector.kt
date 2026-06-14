@@ -1,4 +1,4 @@
-package io.github.tritium_launcher.launcher.importing
+package io.github.tritium_launcher.launcher.import
 
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
@@ -148,6 +148,24 @@ data class KnownLauncher(
             id = "_browse",
             displayName = "Existing Project",
             icon = TIcons.Tritium.icon,
+            instanceDirs = emptyList(),
+            minecraftSubdirName = "",
+            parser = { null }
+        )
+
+        val CURSEFORGE_PACK = KnownLauncher(
+            id = "_cursepack",
+            displayName = "CurseForge ZIP",
+            icon = TIcons.CFPack.icon,
+            instanceDirs = emptyList(),
+            minecraftSubdirName = "",
+            parser = { null }
+        )
+
+        val MODRINTH_PACK = KnownLauncher(
+            id = "_modrinthpack",
+            displayName = "Modrinth ZIP",
+            icon = TIcons.MRPack.icon,
             instanceDirs = emptyList(),
             minecraftSubdirName = "",
             parser = { null }

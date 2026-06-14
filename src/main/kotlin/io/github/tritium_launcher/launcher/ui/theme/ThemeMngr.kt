@@ -13,8 +13,10 @@ import io.qt.core.QByteArray
 import io.qt.core.QRectF
 import io.qt.core.QSize
 import io.qt.core.Qt
-import io.qt.gui.*
-import io.qt.svg.QSvgRenderer
+import io.qt.gui.QColor
+import io.qt.gui.QIcon
+import io.qt.gui.QPalette
+import io.qt.gui.QPixmap
 import io.qt.widgets.QApplication
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +24,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.json.*
+import java.awt.RenderingHints.KEY_INTERPOLATION
+import java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+import java.awt.image.BufferedImage
+import java.awt.image.BufferedImage.TYPE_INT_ARGB
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
@@ -29,6 +36,8 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.jar.JarFile
 import java.util.prefs.Preferences
+import javax.imageio.ImageIO
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.text.Charsets.UTF_8
@@ -678,21 +687,51 @@ object ThemeMngr {
                     }
                 }
 
-                val renderer = QSvgRenderer(QByteArray(svgText.toByteArray(UTF_8)))
+                val doc = DocumentBuilderFactory.newInstance()
+                    .newDocumentBuilder()
+                    .parse(svgText.byteInputStream())
+                val svgEl = doc.documentElement
 
-                val pix = QPixmap(physW, physH)
-                pix.fill(Qt.GlobalColor.transparent)
+                val nW = svgEl.getAttribute("width").toIntOrNull()  ?: 16
+                val nH = svgEl.getAttribute("height").toIntOrNull() ?: 16
 
-                val painter = QPainter(pix)
-                try {
-                    painter.setRenderHint(QPainter.RenderHint.Antialiasing, true)
-                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, true)
+                val img = BufferedImage(nW, nH, TYPE_INT_ARGB)
 
-                    renderer.render(painter, QRectF(0.0,0.0, physW.toDouble(), physH.toDouble()))
-                } finally {
-                    painter.end()
+                val rects = doc.getElementsByTagName("rect")
+                for(i in 0 until rects.length) {
+                    val rect = rects.item(i) as org.w3c.dom.Element
+                    val x = rect.getAttribute("x").toIntOrNull() ?: continue
+                    val y = rect.getAttribute("y").toIntOrNull() ?: continue
+                    val w = rect.getAttribute("width").toIntOrNull() ?: continue
+                    val h = rect.getAttribute("height").toIntOrNull() ?: continue
+                    val fill = rect.getAttribute("fill").takeIf { it.isNotBlank() && it != "none" } ?: continue
+                    val color = try { java.awt.Color.decode(fill) } catch (_: Exception) { continue }
+
+                    val alpha = rect.getAttribute("fill-opacity").toFloatOrNull()
+                        ?: rect.getAttribute("opacity").toFloatOrNull()
+                        ?: 1f
+                    val argb = (((alpha * 255).toInt() and 0xFF) shl 24) or
+                            ((color.red and 0xFF) shl 16) or
+                            ((color.green and 0xFF) shl 8) or
+                            (color.blue and 0xFF)
+
+                    for (py in y until (y + h)) {
+                        for (px in x until (x + w)) {
+                            if (px < nW && py < nH) img.setRGB(px, py, argb)
+                        }
+                    }
                 }
 
+                val scaledImg = BufferedImage(physW, physH, TYPE_INT_ARGB)
+                val g2 = scaledImg.createGraphics()
+                g2.setRenderingHint(KEY_INTERPOLATION, VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+                g2.drawImage(img, 0, 0, physW, physH, null)
+                g2.dispose()
+
+                val baos = ByteArrayOutputStream()
+                ImageIO.write(scaledImg, "PNG", baos)
+                val pix = QPixmap()
+                pix.loadFromData(QByteArray(baos.toByteArray()))
                 pix.setDevicePixelRatio(dpr)
                 return pix
             } else {

@@ -1,12 +1,9 @@
-package io.github.tritium_launcher.launcher.accounts.ui
+package io.github.tritium_launcher.launcher.accounts
 
-import io.github.tritium_launcher.launcher.accounts.AccountDescriptor
-import io.github.tritium_launcher.launcher.accounts.AccountProvider
-import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
-import io.github.tritium_launcher.launcher.accounts.ProfileMngr
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.toQImage
 import io.github.tritium_launcher.launcher.toUrl
+import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.qt.core.Qt
 import io.qt.gui.QPainter
 import io.qt.gui.QPixmap
@@ -24,13 +21,22 @@ class MicrosoftAccountProvider: AccountProvider {
     private val logger = logger()
     override val id: String = "microsoft_account_provider"
     override val displayName: String = "Microsoft"
+    override val serviceIcon: QPixmap get() = TIcons.Microsoft
+    override val sectionColor: String = "3A4A5C"
+    override val infoDescription: String = "Used for Mojang authentication to download and launch Minecraft"
 
     override suspend fun listAccounts(): List<AccountDescriptor> = withContext(Dispatchers.IO) {
         try {
             val accounts = MicrosoftAuth.listAccounts()
             accounts.map { a ->
                 val mc = ProfileMngr.Cache.getForAccount(a.homeAccountId)
-                AccountDescriptor(a.homeAccountId, mc?.name ?: a.username, mc?.id ?: a.username, null, mc?.name ?: a.username)
+                AccountDescriptor(
+                    a.homeAccountId,
+                    mc?.name ?: a.username,
+                    mc?.id ?: a.username,
+                    null,
+                    mc?.name ?: a.username
+                )
             }
         } catch (e: Exception) {
             logger.warn("Failed to map accounts", e)
@@ -38,9 +44,12 @@ class MicrosoftAccountProvider: AccountProvider {
         }
     }
 
-    override suspend fun signIn(parentWindow: QWidget?) {
-        MicrosoftAuth.newSignIn()
+    override suspend fun signIn(parentWindow: QWidget?): AccountDescriptor? {
+        val profile = MicrosoftAuth.newSignIn()
+        return profile?.let { AccountDescriptor(it.id, it.name) }
     }
+
+    override suspend fun getCredentials(accountId: String): Map<String, String>? = null
 
     override suspend fun signOutAccount(accountId: String) {
         MicrosoftAuth.signOutAccount(accountId)
@@ -53,7 +62,7 @@ class MicrosoftAccountProvider: AccountProvider {
     override suspend fun getAvatar(accountId: String): QPixmap? = withContext(Dispatchers.IO) {
         try {
             val p = ProfileMngr.Cache.getForAccount(accountId)
-            if(p != null && p.skins.isNotEmpty()) {
+            if (p != null && p.skins.isNotEmpty()) {
                 return@withContext createFacePixmap(p.skins.first().url)
             }
 
@@ -73,10 +82,10 @@ class MicrosoftAccountProvider: AccountProvider {
 
         val original = QPixmap.fromImage(img.toQImage())
 
-        val baseFace = original.copy(8,8,8,8)
-        val hatLayer = original.copy(40,8,8,8)
+        val baseFace = original.copy(8, 8, 8, 8)
+        val hatLayer = original.copy(40, 8, 8, 8)
 
-        val combined = QPixmap(8,8)
+        val combined = QPixmap(8, 8)
         combined.fill(Qt.GlobalColor.transparent)
 
         val painter = QPainter(combined)

@@ -547,7 +547,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
         private val json = Json { ignoreUnknownKeys = true }
         private val logger = logger()
 
-        val ICONS_DIR: VPath = fromTR("mod-icons")
+        val ICONS_DIR: VPath = fromTR("cache", "mod-icons")
         val CACHE_DIR: VPath = fromTR("mod-cache")
 
         init {

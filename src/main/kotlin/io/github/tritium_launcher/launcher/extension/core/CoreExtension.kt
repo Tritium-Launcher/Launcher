@@ -1,6 +1,8 @@
 package io.github.tritium_launcher.launcher.extension.core
 
-import io.github.tritium_launcher.launcher.accounts.ui.MicrosoftAccountProvider
+import io.github.tritium_launcher.launcher.accounts.CurseForgeAccount
+import io.github.tritium_launcher.launcher.accounts.MicrosoftAccountProvider
+import io.github.tritium_launcher.launcher.accounts.ModrinthAccount
 import io.github.tritium_launcher.launcher.applyRainbowOverlay
 import io.github.tritium_launcher.launcher.core.mod_config.ConfigFormat
 import io.github.tritium_launcher.launcher.core.modloader.Fabric
@@ -80,6 +82,8 @@ internal object CoreExtension : Extension {
             }
 
             accountProviders.register(MicrosoftAccountProvider())
+            accountProviders.register(ModrinthAccount())
+            accountProviders.register(CurseForgeAccount())
 
             modLoaders.register(Fabric())
             modLoaders.register(NeoForge())
