@@ -50,10 +50,12 @@ suspend fun extractAndPrepareMrpack(
             val tvp = VPath.get(tempDir.absolutePath)
 
             val entries = zip.entries()
+            val canonicalBase = tempDir.canonicalPath + File.separator
             while (entries.hasMoreElements()) {
                 val entry = entries.nextElement()
                 if (entry.isDirectory || entry.name == "modrinth.index.json") continue
                 val outFile = File(tempDir, entry.name)
+                if (!outFile.canonicalPath.startsWith(canonicalBase)) continue
                 outFile.parentFile?.mkdirs()
                 zip.getInputStream(entry).use { input -> outFile.outputStream().use { input.copyTo(it) } }
             }
@@ -74,7 +76,9 @@ suspend fun extractAndPrepareMrpack(
         val url = file.downloads.firstOrNull() ?: continue
         try {
             val bytes = httpClient.get(url).bodyAsBytes()
-            val outFile = VPath.get(tempVPath, file.path).toJFile()
+            val resolved = VPath.get(tempVPath, file.path).normalize()
+            if (!resolved.startsWith(tempVPath)) continue
+            val outFile = resolved.toJFile()
             outFile.parentFile?.mkdirs()
             withContext(Dispatchers.IO) {
                 outFile.outputStream().use { it.write(bytes) }
