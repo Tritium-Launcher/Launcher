@@ -9,6 +9,14 @@ import io.qt.gui.QIcon
 import kotlinx.serialization.json.*
 import java.nio.file.Files
 
+/**
+ * Metadata parsed from a launcher's instance configuration files.
+ *
+ * @param name Instance display name (might be `null` if only the folder name is available).
+ * @param gameVersion Minecraft version of the instance.
+ * @param loader Mod loader display name ("Fabric", "Forge", "NeoForge", "Quilt").
+ * @param loaderVersion Version string of the mod loader.
+ */
 data class InstanceMeta(
     val name: String?,
     val gameVersion: String?,
@@ -16,6 +24,21 @@ data class InstanceMeta(
     val loaderVersion: String?
 )
 
+/**
+ * Describes a known third-party launcher whose instances can be discovered and imported.
+ *
+ * Each [KnownLauncher] defines the platform-specific directories to scan, how to resolve
+ * the minecraft subdirectory within an instance, and a parser function that reads the
+ * instance metadata from its config files.
+ *
+ * @param id Unique identifier, used for matching.
+ * @param displayName Human-readable name for the UI.
+ * @param icon [QIcon] badge shown in the launcher selection cards.
+ * @param instanceDirs Directories to scan for instances.
+ * @param minecraftSubdirName Subdirectory within an instance folder that contains the
+ *   Minecraft files (e.g. "minecraft" for PrismLauncher, "" for CurseForge).
+ * @param parser Function that reads [InstanceMeta] from an instance directory.
+ */
 data class KnownLauncher(
     val id: String,
     val displayName: String,
@@ -144,6 +167,10 @@ data class KnownLauncher(
             ),
         )
 
+        /**
+         * Sentinel launcher used when browsing a directory manually. Returns no instances
+         * and the parser always returns `null`.
+         */
         val BROWSE_FOLDER = KnownLauncher(
             id = "_browse",
             displayName = "Existing Project",
@@ -153,6 +180,9 @@ data class KnownLauncher(
             parser = { null }
         )
 
+        /**
+         * Sentinel launcher for importing CurseForge modpack archives.
+         */
         val CURSEFORGE_PACK = KnownLauncher(
             id = "_cursepack",
             displayName = "CurseForge ZIP",
@@ -162,6 +192,9 @@ data class KnownLauncher(
             parser = { null }
         )
 
+        /**
+         * Sentinel launcher for importing Modrinth modpack archives (.mrpack).
+         */
         val MODRINTH_PACK = KnownLauncher(
             id = "_modrinthpack",
             displayName = "Modrinth ZIP",
@@ -172,8 +205,10 @@ data class KnownLauncher(
         )
 
         // --- Parser implementations ---
-        // TODO: Needs to be extendable in the future.
 
+        /**
+         * Parses a PrismLauncher / MultiMC / PolyMC instance from its `mmc-pack.json`.
+         */
         private fun parsePrismInstance(dir: VPath): InstanceMeta? {
             val pack = dir.resolve("mmc-pack.json")
             val root = parseJsonFile(pack) ?: return null
@@ -192,6 +227,9 @@ data class KnownLauncher(
             return InstanceMeta(null, gv, ln, lv)
         }
 
+        /**
+         * Parses an ATLauncher instance from its `instance.json`.
+         */
         private fun parseATLauncherInstance(dir: VPath): InstanceMeta? {
             val file = dir.resolve("instance.json")
             if (!file.exists()) return null
@@ -205,6 +243,9 @@ data class KnownLauncher(
             return InstanceMeta(name, gv, ln, lv)
         }
 
+        /**
+         * Parses a CurseForge instance from its `minecraftinstance.json`.
+         */
         private fun parseCurseForgeInstance(dir: VPath): InstanceMeta? {
             val file = dir.resolve("minecraftinstance.json")
             if (!file.exists()) return null
@@ -220,6 +261,9 @@ data class KnownLauncher(
             return InstanceMeta(name, gv, ln, lv)
         }
 
+        /**
+         * Parses a GDLauncher instance from its `instance.json`.
+         */
         private fun parseGDLauncherInstance(dir: VPath): InstanceMeta? {
             val file = dir.resolve("instance.json")
             if (!file.exists()) return null
@@ -240,6 +284,17 @@ data class KnownLauncher(
     }
 }
 
+/**
+ * A detected Minecraft instance discovered by scanning a [KnownLauncher]'s directories.
+ *
+ * @param launcher The launcher this instance was found under.
+ * @param name Display name, from metadata or folder name.
+ * @param instanceDir Root directory of the instance.
+ * @param minecraftDir Directory containing the actual Minecraft files (mods, config, etc.).
+ * @param gameVersion Minecraft version, or `null` if unknown.
+ * @param loader Mod loader display name, or `null`.
+ * @param loaderVersion Mod loader version, or `null`.
+ */
 data class DetectedInstance(
     val launcher: KnownLauncher,
     val name: String,
@@ -250,9 +305,18 @@ data class DetectedInstance(
     val loaderVersion: String?
 )
 
+/**
+ * Discovers launcher installations and resolves instance metadata.
+ */
 object LauncherDetector {
     private val log = logger()
 
+    /**
+     * Returns the subset of [KnownLauncher.all] that have at least one existing instance
+     * directory on the current machine.
+     *
+     * @return List of launchers with detectable installations.
+     */
     fun detectInstalled(): List<KnownLauncher> =
         KnownLauncher.all.filter { launcher ->
             launcher.instanceDirs.any { dir ->
@@ -261,6 +325,15 @@ object LauncherDetector {
             }
         }
 
+    /**
+     * Scans all instance directories for a given [launcher] and returns parsed [DetectedInstance]s.
+     *
+     * Deduplicates directories by real path to handle overlapping paths between launchers
+     * (e.g. PrismLauncher includes MultiMC directories).
+     *
+     * @param launcher The launcher to scan instances for.
+     * @return List of detected instances.
+     */
     fun scanInstances(launcher: KnownLauncher): List<DetectedInstance> {
         val results = mutableListOf<DetectedInstance>()
         val seenDirs = mutableSetOf<String>()
@@ -298,6 +371,14 @@ object LauncherDetector {
         return results
     }
 
+    /**
+     * Inspects a user-selected directory and returns a [DetectedInstance] if it looks
+     * like a valid Minecraft instance. If a `.minecraft` subdirectory exists, it is
+     * treated as the minecraft dir; otherwise the directory itself is used.
+     *
+     * @param dir The directory to inspect.
+     * @return A [DetectedInstance] with unknown game version and loader, or `null`.
+     */
     fun inspectDirectory(dir: VPath): DetectedInstance? {
         if (!dir.exists()) return null
         try {
@@ -333,6 +414,18 @@ object LauncherDetector {
         }
     }
 
+    /**
+     * Resolves the icon file path for a [DetectedInstance].
+     *
+     * Priority:
+     * 1. CurseForge's `profileImagePath` field from `minecraftinstance.json`.
+     * 2. `icon.png` directly in the instance directory.
+     * 3. `icon.png` in the minecraft directory.
+     * 4. Any `.png` file found in the instance directory.
+     *
+     * @param instance The instance to find an icon for.
+     * @return Path to the icon file, or `null` if none was found.
+     */
     fun resolveInstanceIcon(instance: DetectedInstance): VPath? {
         if (instance.launcher.id == "curseforge") {
             val cfFile = instance.instanceDir.resolve("minecraftinstance.json")
@@ -363,10 +456,14 @@ object LauncherDetector {
     }
 }
 
-// --- Shared parser helpers ---
-
 private val json = Json { ignoreUnknownKeys = true }
 
+/**
+ * Reads and parses a JSON file into a [JsonObject].
+ *
+ * @param file The file to read.
+ * @return Parsed object, or `null` if the file is missing or malformed.
+ */
 private fun parseJsonFile(file: VPath): JsonObject? {
     val text = file.readTextOrNull() ?: return null
     return try { json.parseToJsonElement(text).jsonObject } catch (_: Exception) { null }

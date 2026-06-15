@@ -138,3 +138,8 @@ data class CurseFingerprintMatch(
     val id: Long,
     val file: CurseFileInfo
 )
+
+@Serializable
+data class CurseModListResponse(
+    val data: List<CurseModSummary>
+)

@@ -10,6 +10,15 @@ import io.qt.core.Qt
 import io.qt.widgets.QFrame
 import io.qt.widgets.QWidget
 
+/**
+ * Builds a small pill-style widget displaying the Minecraft version and mod loader for an
+ * instance or modpack project.
+ *
+ * @param gameVersion Minecraft version string, or `null` to skip the version pill.
+ * @param loaderName Loader display name, or `null` to skip the loader pill.
+ * @return A [QWidget] containing the pills, or `null` if neither [gameVersion] nor
+ *   [loaderName] is provided.
+ */
 fun buildMetaTagsWidget(gameVersion: String?, loaderName: String?): QWidget? {
     var hasAny = false
     val metaWidget = QWidget()

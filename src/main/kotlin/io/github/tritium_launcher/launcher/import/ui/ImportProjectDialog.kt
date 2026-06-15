@@ -1,22 +1,24 @@
 package io.github.tritium_launcher.launcher.import.ui
 
 import io.github.tritium_launcher.launcher.accounts.AccountDescriptor
-import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
 import io.github.tritium_launcher.launcher.accounts.ModrinthAccount
 import io.github.tritium_launcher.launcher.accounts.ModrinthProject
 import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.mod.*
-import io.github.tritium_launcher.launcher.core.project.*
+import io.github.tritium_launcher.launcher.core.mod.ModSide
+import io.github.tritium_launcher.launcher.core.mod.readModJarIcon
+import io.github.tritium_launcher.launcher.core.mod.readModJarInfo
+import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.launcher.core.project.ProjectMngr
+import io.github.tritium_launcher.launcher.core.source.CurseForge
 import io.github.tritium_launcher.launcher.core.source.ModBrowserContext
 import io.github.tritium_launcher.launcher.core.source.ModSource
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.import.*
+import io.github.tritium_launcher.launcher.import.ui.ImportProjectDialog.Companion.iconCache
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.qs
-import io.github.tritium_launcher.launcher.ui.notifications.NotificationMngr
-import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
@@ -38,17 +40,23 @@ import io.qt.gui.QPixmap
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlinx.coroutines.sync.Semaphore as CoroutineSemaphore
 
+/**
+ * Multipage dialog for importing Minecraft instances into Tritium projects.
+ *
+ * The dialog guides the user through:
+ * 1. **Select page** — choose a launcher and pick an instance, or browse for a folder /
+ *    Modrinth / CurseForge pack.
+ * 2. **Review page** — review instance metadata, choose mods to import (with source
+ *    validation), select config files to copy, and set the destination path.
+ * 3. **Modrinth info page** — review a Modrinth pack project before importing.
+ */
 class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private val stacked = QStackedWidget()
     private val pageSelect = QWidget()
@@ -135,6 +143,8 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val log = logger()
 
+    private var cursePackPrebuiltMods: List<ImportableMod>? = null
+
     companion object {
         private val expandedState = mutableMapOf<String, Set<String>>()
         private val dummyProject = ProjectBase("dummy", VPath.get("/tmp"), "dummy", "", JsonObject(emptyMap()))
@@ -148,7 +158,6 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                 socketTimeoutMillis = 30_000
             }
         }
-        private val json = Json { prettyPrint = true }
     }
 
     init {
@@ -174,6 +183,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         applyStyles()
     }
 
+    /**
+     * Applies the custom Qt stylesheet for all import dialog widgets using [setThemedStyle].
+     */
     private fun applyStyles() {
         setThemedStyle {
             selector("#ImportDialog") {
@@ -360,6 +372,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Builds the source selection page with a sidebar of launcher cards and a list of
+     * detected instances on the right.
+     */
     private fun buildPageSelect() {
         hBoxLayout(pageSelect) {
             setContentsMargins(0, 0, 0, 0)
@@ -456,6 +472,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Builds the review page showing instance info, mod source selection, mod list, file
+     * tree, destination path.
+     */
     private fun buildPageReview() {
         vBoxLayout(pageReview) {
             setContentsMargins(0, 0, 0, 0)
@@ -638,6 +658,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Builds the Modrinth pack info page showing project icon, title, description,
+     * version, metadata.
+     */
     private fun buildPageModrinthInfo() {
         vBoxLayout(pageModrinthInfo) {
             setContentsMargins(0, 0, 0, 0)
@@ -758,6 +782,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Set up all Qt signal connections: instance selection, button clicks, search text
+     * changes, source combo changes, and refresh button.
+     */
     private fun connectSignals() {
         instanceList.itemDoubleClicked.connect {
             if (modrinthPackMode) {
@@ -785,6 +813,8 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             modrinthPackProjects.clear()
             cleanupMrpackTemp(mrpackTempDir)
             mrpackTempDir = null
+            cleanupCursePackTemp(cursePackTempDir)
+            cursePackTempDir = null
         }
 
         importBtn.clicked.connect { onImport() }
@@ -825,6 +855,11 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
     // --- Launcher selection ---
 
+    /**
+     * Scans for installed launchers via [LauncherDetector.detectInstalled] and populates
+     * the sidebar with [ImportOption] cards. Also adds special cards for CurseForge and
+     * Modrinth modpack archives, and a "Browse" card for manual directory selection.
+     */
     private fun populateLaunchers() {
         detectedLaunchers.clear()
         launcherCards.clear()
@@ -898,6 +933,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Creates an [ImportOption] card for a known launcher.
+     */
     private fun createImportOption(launcher: KnownLauncher, withSubtitle: Boolean = false): ImportOption {
         val card = ImportOption(launcher)
         card.setIcon(iconForLauncher(launcher, 32))
@@ -909,6 +947,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         return card
     }
 
+    /**
+     * Fills the mod source combo box with all registered [ModSource] implementations.
+     */
     private fun populateModSources() {
         modSourceCombo.clear()
         modSourceCombo.addItem("Choose...", null)
@@ -919,12 +960,20 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         modSourceCombo.currentIndex = 0
     }
 
+    /**
+     * Marks a card as selected, unselecting the previous one.
+     */
     private fun selectCard(card: ImportOption) {
         selectedCard?.setSelected(false)
         card.setSelected(true)
         selectedCard = card
     }
 
+    /**
+     * Handles selection of a launcher from the sidebar. For recognized launchers, scans
+     * and displays their instances. For special launchers ([BROWSE_FOLDER], [CURSEFORGE_PACK],
+     * [MODRINTH_PACK]), triggers the appropriate file-browse or account-based flow.
+     */
     private fun onLauncherSelected(launcher: KnownLauncher) {
         modrinthPackMode = false
         modrinthPackProjects.clear()
@@ -932,8 +981,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         browseMrpackCard.visible = false
         if (launcher.id == "_browse") { openBrowseDialog(); return }
         if (launcher.id == "_cursepack") {
-            instanceListPlaceholder.text = "Select a modpack archive to import."
-            instanceListStack.currentIndex = 0
+            onCursePackBrowse()
             return
         }
         if (launcher.id == "_modrinthpack") {
@@ -1014,6 +1062,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         instanceListStack.currentIndex = 1
     }
 
+    /**
+     * Fetches modpack projects for a selected Modrinth account and displays them in the
+     * instance list.
+     */
     private fun fetchProjectsForSelectedAccount(provider: ModrinthAccount, accountId: String) {
         currentModrinthFetchJob?.cancel()
         modrinthPackProjects.clear()
@@ -1049,7 +1101,12 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     }
 
     private var mrpackTempDir: VPath? = null
+    private var cursePackTempDir: VPath? = null
 
+    /**
+     * Opens a file dialog for selecting `.mrpack` files and triggers extraction via
+     * [extractAndPrepareMrpack].
+     */
     private fun onMrpackBrowse() {
         val chosen = QFileDialog.getOpenFileName(this, "Select Modrinth Pack", userHome.toString(), "Modrinth Pack (*.mrpack)")
         @Suppress("UNNECESSARY_SAFE_CALL")
@@ -1072,12 +1129,52 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Called when a mrpack has been successfully extracted and parsed. Treats the
+     * resulting instance as a normal instance and triggers the review page.
+     */
     private fun onMrpackInstanceReady(instance: DetectedInstance) {
         currentLauncher = KnownLauncher.BROWSE_FOLDER
         instances = listOf(instance)
         onInstanceSelected(instance)
     }
 
+    /**
+     * Opens a file dialog for selecting CurseForge `.zip` pack files and triggers
+     * extraction via [extractAndPrepareCursePack].
+     */
+    private fun onCursePackBrowse() {
+        val chosen = QFileDialog.getOpenFileName(this, "Select CurseForge Pack", userHome.toString(), "CurseForge Pack (*.zip)")
+        @Suppress("UNNECESSARY_SAFE_CALL")
+        val path = chosen?.result?.trim()
+        if (path.isNullOrBlank()) {
+            restoreSelection(null)
+            return
+        }
+        statusLabel.text = "Extracting modpack..."
+        val curseForge = BuiltinRegistries.ModSource.get("curseforge") as? CurseForge
+        ioScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                extractAndPrepareCursePack(path, curseForge)
+            }
+            withContext(Dispatchers.Main) {
+                if (result != null) {
+                    cursePackTempDir = result.tempDir
+                    cursePackPrebuiltMods = result.modEntries
+                    onMrpackInstanceReady(result.instance)
+                } else {
+                    statusLabel.text = ""
+                    QMessageBox.warning(this@ImportProjectDialog, "Invalid File", "Could not read manifest.json from the selected file.")
+                    restoreSelection(null)
+                }
+            }
+        }
+    }
+
+    /**
+     * Opens a directory picker for manual instance folder selection. If the chosen directory
+     * is recognized, proceeds to the review page.
+     */
     private fun openBrowseDialog() {
         val prev = currentLauncher
         val chosen = QFileDialog.getExistingDirectory(this, "Select Instance Directory", userHome.toString())
@@ -1093,6 +1190,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Restores the previously selected launcher card, or clears the selection if the
+     * launcher is no longer known.
+     */
     private fun restoreSelection(launcher: KnownLauncher?) {
         val card = launcherCards.firstOrNull { it.launcher.id == launcher?.id }
         if (card != null) {
@@ -1106,6 +1207,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
     // --- Instance selected: scan mods + show review page ---
 
+    /**
+     * Called when an instance is selected. Switches to the review page, populates the
+     * instance info panel, scans mods, and builds the file tree.
+     */
     private fun onInstanceSelected(instance: DetectedInstance) {
         currentScanJob?.cancel()
         currentValidationJob?.cancel()
@@ -1134,7 +1239,34 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         scanInstanceMods(instance)
     }
 
+    /**
+     * Scans the instance's `mods/` directory for `.jar` files, reads their metadata,
+     * computes SHA-1 hashes, and populates the mod list.
+     */
     private fun scanInstanceMods(instance: DetectedInstance) {
+        // If we have pre-built mods from a CurseForge pack, use them directly
+        val prebuilt = cursePackPrebuiltMods
+        if (prebuilt != null) {
+            cursePackPrebuiltMods = null
+            synchronized(modListGuard) {
+                importableMods.clear()
+                importableMods.addAll(prebuilt)
+            }
+            modListPlaceholder.text = "No mods found in this instance."
+            populateModList()
+            // Trigger icon fetches for mods with sourceIconUrl
+            for (i in 0 until modListWidget.count()) {
+                val item = modListWidget.item(i)
+                val dataIdx = item?.data(Qt.ItemDataRole.UserRole) as? Int ?: continue
+                val mod = synchronized(modListGuard) { importableMods.getOrNull(dataIdx) } ?: continue
+                if (!mod.sourceIconUrl.isNullOrBlank()) {
+                    val row = modListWidget.itemWidget(item) as? ImportableModRow
+                    row?.updateAvailability(mod.sourceAvailable, mod.sourceProjectId, mod.sourceIconUrl, mod.sourceStatus)
+                }
+            }
+            return
+        }
+
         importableMods.clear()
         modListWidget.clear()
         modListPlaceholder.text = "Scanning mods..."
@@ -1225,13 +1357,23 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Updates the Mods tab label with the current checked/total count.
+     */
     private fun updateModsTabLabel(total: Int, checked: Int) {
         importTabWidget.setTabText(0, "Mods  $checked/$total")
     }
 
+    /**
+     * Fills the mod list widget with [ImportableModRow] items. If [filteredSubset] is
+     * provided, only those mods are shown (used for search filtering).
+     */
     private fun populateModList(filteredSubset: List<ImportableMod>? = null) {
         val allMods: List<ImportableMod>
         synchronized(modListGuard) {
+            if (filteredSubset == null) {
+                importableMods.sortByDescending { it.displayName.lowercase() }
+            }
             allMods = filteredSubset ?: importableMods.toList()
         }
 
@@ -1276,6 +1418,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Filters the mod list by display name, mod ID, or filename matching the given text.
+     */
     private fun filterModsBySearch(text: String) {
         val allMods: List<ImportableMod>
         synchronized(modListGuard) {
@@ -1298,6 +1443,11 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
     // --- Source validation ---
 
+    /**
+     * Validates all mods against the chosen mod source. First attempts fast batch
+     * fingerprint resolution, then falls back to per-mod search via [findModOnSource].
+     * Results are cached via [saveImportCache].
+     */
     private fun validateModsAgainstSource(source: ModSource) {
         currentValidationJob?.cancel()
         val instance = currentInstance ?: return
@@ -1423,6 +1573,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Resolves and stores the dependency project IDs for a mod by querying the matched
+     * version on the source. Only runs when the validation job is still active.
+     */
     private fun resolveDependenciesForMod(mod: ImportableMod, source: ModSource, instance: DetectedInstance) {
         val projectId = mod.sourceProjectId ?: return
         if (projectId.isBlank()) return
@@ -1474,6 +1628,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
     // --- Icon loading ---
 
+    /**
+     * Fetches a mod icon from a URL and updates the corresponding row widget. Results are
+     * cached in [iconCache] for reuse.
+     */
     private fun fetchOnlineIcon(index: Int, url: String) {
         if (currentIconJob?.isActive != true) currentIconJob = Job()
         ioScope.launch(currentIconJob!!) {
@@ -1503,6 +1661,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Fetches and sets a Modrinth project icon on the given widget.
+     */
     private fun fetchModrinthPackIcon(widget: ModrinthPackItemWidget, iconUrl: String) {
         ioScope.launch {
             try {
@@ -1520,6 +1681,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Displays the Modrinth pack info page with project details and metadata.
+     */
     private fun onModrinthPackSelected(project: ModrinthProject) {
         currentModrinthProject = project
         modrinthTitleLabel.text = project.title
@@ -1559,6 +1723,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         stacked.currentIndex = 2
     }
 
+    /**
+     * Finds the row widget for the given mod index and updates its icon.
+     */
     private fun updateRowIcon(index: Int, icon: QIcon) {
         for (i in 0 until modListWidget.count()) {
             val item = modListWidget.item(i)
@@ -1571,6 +1738,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
+    /**
+     * Builds the file tree widget by asynchronously scanning the instance's minecraft
+     * directory and creating corresponding tree items with checkboxes.
+     */
     private fun populateFileTreeAsync(instance: DetectedInstance) {
         fileTree.clear()
         fileTreeStack.currentIndex = 0
@@ -1635,6 +1806,14 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
     // --- Import logic ---
 
+    /**
+     * Validates the current state and triggers the import pipeline via
+     * [ImportProjectCreator.createProject]. Disables UI during import, handles success
+     * (loading and opening the project) and failure (cleanup and re-enabling UI).
+     *
+     * On success, the import cache is cleaned up automatically by the creator. On failure,
+     * the partial project directory is deleted.
+     */
     @OptIn(ExperimentalTime::class)
     private fun onImport() {
         val instance = currentInstance ?: run {
@@ -1659,198 +1838,115 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             if (answer != QMessageBox.StandardButton.Yes.value()) return
         }
 
-        // Get all mods & checked states
-        val allMods: List<ImportableMod>
-        synchronized(modListGuard) {
-            allMods = importableMods.toList()
-        }
-        val selectedMods = allMods.filter { it.checked }
-        val selectedFiles = collectCheckedFiles(fileTree)
-
         // Disable UI during import
         importBtn.isEnabled = false
         backBtn.isEnabled = false
-        statusLabel.text = "Importing project..."
 
         ioScope.launch {
+            var cleanedUp = false
             try {
-                // Step 1: Create directory structure
-                withContext(Dispatchers.IO) {
-                    projectRoot.mkdirs()
-                    listOf("mods", "config", "defaultconfigs", "logs", "saves").forEach { dir ->
-                        projectRoot.resolve(dir).mkdirs()
+                // Collect checked state before any mutation
+                val allModsBefore: List<ImportableMod>
+                synchronized(modListGuard) {
+                    allModsBefore = importableMods.toList()
+                }
+
+                // If this is a CurseForge pack, download mods before importing
+                if (cursePackTempDir != null) {
+                    statusLabel.text = "Downloading mods..."
+                    val checkedFileNames = allModsBefore.filter { it.checked }.map { it.fileName }.toSet()
+                    val manifestFile = cursePackTempDir!!.resolve("curse-manifest.json").toJFile()
+                    val allProjectFiles = if (manifestFile.exists()) {
+                        try {
+                            curseJson.decodeFromString<CurseManifest>(manifestFile.readText()).files
+                        } catch (_: Exception) { emptyList() }
+                    } else emptyList()
+                    val filesToDownload = allProjectFiles.filter { f ->
+                        val fName = f.downloadUrl?.substringAfterLast('/')?.substringBefore('?')
+                            ?: "mod-${f.projectID}-${f.fileID}.jar"
+                        fName in checkedFileNames
                     }
-                }
-
-                // Step 2: Determine loader info
-                val loaderId = mapLoaderId(instance.loader)
-                val loaderVer = instance.loaderVersion ?: ""
-                val source = modSourceCombo.currentData as? ModSource
-                val sourceId = source?.id ?: "unknown"
-
-                // Step 3: Write trmodpack.json
-                val modpackMeta = ModpackMeta(
-                    id = instance.name,
-                    minecraftVersion = instance.gameVersion ?: "unknown",
-                    loader = loaderId ?: "unknown",
-                    loaderVersion = loaderVer,
-                    source = sourceId,
-                    license = null,
-                    icon = null
-                )
-                val manifest = json.encodeToString(ModpackMeta.serializer(), modpackMeta)
-                withContext(Dispatchers.IO) {
-                    projectRoot.resolve("trmodpack.json").writeBytesAtomic(manifest.toByteArray())
-                }
-
-                // Step 4: Copy icon
-                val iconPath = LauncherDetector.resolveInstanceIcon(instance)
-                if (iconPath != null) {
-                    withContext(Dispatchers.IO) {
-                        val iconBytes = iconPath.bytesOrNull()
-                        if (iconBytes != null) {
-                            projectRoot.resolve("icon.png").writeBytesAtomic(iconBytes)
-                        }
-                    }
-                }
-
-                // Step 5: Write trexportrules.json
-                withContext(Dispatchers.IO) {
-                    projectRoot.resolve("trexportrules.json").writeBytesAtomic("{}".toByteArray())
-                }
-
-                // Step 6: Copy selected mod jars and register in database
-                withContext(Dispatchers.IO) {
-                    ModDatabase(projectRoot).use { db ->
-                        for (mod in selectedMods) {
-                            val destJar = projectRoot.resolve("mods/${mod.fileName}")
-                            val bytes = mod.jarPath.bytesOrNull()
-                            if (bytes != null) {
-                                destJar.writeBytesAtomic(bytes)
-                                val hash = ModDatabase.sha1(bytes)
-
-                                val iconFile = extractAndCacheModIcon(mod, destJar)
-
-                                val projectId = mod.sourceProjectId ?: mod.modId
-                                val installedMod = InstalledMod(
-                                    projectId = projectId,
-                                    modId = mod.modId,
-                                    fileName = mod.fileName,
-                                    displayName = mod.displayName,
-                                    side = mod.side,
-                                    releaseType = "release",
-                                    source = sourceId,
-                                    versionId = mod.sourceProjectId ?: mod.modId,
-                                    versionLabel = "",
-                                    iconPath = iconFile?.toAbsolute()?.toString(),
-                                    projectUrl = null,
-                                    fileHash = hash,
-                                    installedAt = Clock.System.now(),
-                                    enabled = true,
-                                    excludedFromRelease = false,
-                                    requiresManualDownload = false,
-                                    dependencies = mod.dependencyIds
-                                )
-                                db.install(installedMod)
-                                if (mod.dependencyIds.isNotEmpty()) {
-                                    db.setDependencies(projectId, mod.dependencyIds)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Step 7: Copy checked non-mod files
-                for (filePath in selectedFiles) {
-                    withContext(Dispatchers.IO) {
-                        val relativePath = instance.minecraftDir.relativize(filePath)
-                        val dest = projectRoot.resolve(relativePath.toString())
-                        dest.parent().mkdirs()
-                        val bytes = filePath.bytesOrNull()
-                        if (bytes != null) {
-                            dest.writeBytesAtomic(bytes)
-                        }
-                    }
-                }
-
-                // Step 8: Write trproj.json
-                val iconValue = if (iconPath != null) "icon.png" else TIcons.defaultProjectIcon
-                val rawMeta = buildJsonObject { put("metaPath", "trmodpack.json") }
-                val trMeta = ProjectFiles.buildMeta(
-                    type = "source",
-                    name = instance.name,
-                    icon = iconValue,
-                    schemaVersion = ModpackTemplateDescriptor.currentSchema,
-                    meta = rawMeta
-                )
-                withContext(Dispatchers.IO) {
-                    ProjectFiles.writeTrProject(projectRoot, trMeta)
-                }
-
-                // Step 9: Background bootstrap (MC + loader)
-                if (loaderId != null && instance.gameVersion != null && loaderVer.isNotBlank()) {
-                    val loader = BuiltinRegistries.ModLoader.all().find { it.id == loaderId }
-                    if (loader != null) {
-                        withContext(Dispatchers.IO) {
-                            val bootstrapTaskId = ProjectTaskMngr.start(
-                                projectPath = projectRoot,
-                                title = "Bootstrapping imported '${instance.name}'",
-                                detail = "Preparing runtime files",
-                                progressPercent = 5.0
-                            )
-                            try {
-                                // Setup Minecraft
-                                ProjectTaskMngr.update(bootstrapTaskId, detail = "Setting up Minecraft ${instance.gameVersion}")
-                                ProjectTaskMngr.updateProgress(bootstrapTaskId, 20.0)
-                                val mcOk = MicrosoftAuth.setupMinecraftInstance(instance.gameVersion, projectRoot)
-                                ProjectTaskMngr.updateProgress(bootstrapTaskId, if (mcOk) 55.0 else 40.0)
-
-                                if (mcOk) {
-                                    ProjectTaskMngr.update(bootstrapTaskId, detail = "Installing $loaderId $loaderVer")
-                                    ProjectTaskMngr.updateProgress(bootstrapTaskId, 70.0)
-                                    val loaderOk = loader.installClient(loaderVer, instance.gameVersion, projectRoot)
-                                    if (loaderOk) {
-                                        MicrosoftAuth.writeMergedVersionJson(instance.gameVersion, loaderId, loaderVer, projectRoot)
-                                        ProjectTaskMngr.update(bootstrapTaskId, detail = "Bootstrap finished")
-                                        ProjectTaskMngr.updateProgress(bootstrapTaskId, 100.0)
-                                        NotificationMngr.post(
-                                            id = "import_bootstrap_success",
-                                            project = ProjectMngr.getProject(projectRoot),
-                                            description = "Imported project '${instance.name}' is ready.",
-                                            metadata = mapOf("source" to "import.bootstrap", "result" to "success")
+                    downloadCursePackMods(cursePackTempDir!!, httpClient, filesToDownload)
+                    importableMods.clear()
+                    val modsDir = instance.minecraftDir.resolve("mods")
+                    if (modsDir.exists() && modsDir.isDir()) {
+                        val scanned = withContext(Dispatchers.IO) {
+                            modsDir.listFiles { f -> f.fileName().endsWith(".jar", ignoreCase = true) }.mapNotNull { jarPath ->
+                                try {
+                                    val bytes = jarPath.toJFile().readBytes()
+                                    val sha1Hash = computeSha1(bytes)
+                                    val info = readModJarInfo(jarPath)
+                                    if (info == null) {
+                                        ImportableMod(
+                                            jarPath = jarPath,
+                                            modId = jarPath.fileName().removeSuffix(".jar"),
+                                            displayName = jarPath.fileName().removeSuffix(".jar"),
+                                            fileName = jarPath.fileName(),
+                                            side = ModSide.BOTH,
+                                            iconBytes = readModJarIcon(jarPath),
+                                            sha1Hash = sha1Hash,
+                                            checked = true
                                         )
                                     } else {
-                                        log.warn("Loader install failed for imported project {}", instance.name)
-                                        NotificationMngr.post(
-                                            id = "import_bootstrap_loader_failed",
-                                            project = ProjectMngr.getProject(projectRoot),
-                                            description = "Imported project '${instance.name}' bootstrap failed: loader install failed.",
-                                            metadata = mapOf("source" to "import.bootstrap", "result" to "failed")
+                                        ImportableMod(
+                                            jarPath = jarPath,
+                                            modId = info.modId,
+                                            displayName = info.displayName,
+                                            fileName = jarPath.fileName(),
+                                            side = info.side,
+                                            iconBytes = readModJarIcon(jarPath),
+                                            sha1Hash = sha1Hash,
+                                            checked = true
                                         )
                                     }
+                                } catch (t: Throwable) {
+                                    log.warn("Failed to scan downloaded mod jar '{}': {}", jarPath.fileName(), t.message)
+                                    null
                                 }
-                                ProjectTaskMngr.finish(bootstrapTaskId)
-                            } catch (t: Throwable) {
-                                log.warn("Bootstrap failed for imported project {}", instance.name, t)
-                                ProjectTaskMngr.finish(bootstrapTaskId)
-                                NotificationMngr.post(
-                                    id = "import_bootstrap_error",
-                                    project = ProjectMngr.getProject(projectRoot),
-                                    description = "Imported project '${instance.name}' bootstrap error: ${t.message}",
-                                    metadata = mapOf("source" to "import.bootstrap", "result" to "error")
-                                )
                             }
                         }
+                        importableMods.addAll(scanned)
                     }
                 }
 
-                // Delete cache after successful import
-                val sourceForCache = modSourceCombo.currentData as? ModSource
-                if (sourceForCache != null) {
-                    deleteImportCache(instance, sourceForCache.id)
+                // Collect selected mods and files
+                val allMods: List<ImportableMod>
+                synchronized(modListGuard) {
+                    allMods = importableMods.toList()
+                }
+                val selectedMods = allMods.filter { it.checked }
+                val selectedFiles = collectCheckedFiles(fileTree)
+                val source = modSourceCombo.currentData as? ModSource
+                val sourceId = source?.id ?: "unknown"
+                val iconPath = LauncherDetector.resolveInstanceIcon(instance)
+
+                val result = ImportProjectCreator.createProject(
+                    projectRoot = projectRoot,
+                    instance = instance,
+                    instanceMinecraftDir = instance.minecraftDir,
+                    sourceId = sourceId,
+                    iconPath = iconPath,
+                    selectedMods = selectedMods,
+                    selectedFiles = selectedFiles,
+                    sourceInstance = instance,
+                    sourceIdForCache = sourceId,
+                    onProgress = { msg ->
+                        withContext(Dispatchers.Main) { statusLabel.text = msg }
+                    }
+                )
+
+                if (!result.successful) {
+                    withContext(Dispatchers.IO) { projectRoot.toJFile().deleteRecursively() }
+                    cleanedUp = true
+                    withContext(Dispatchers.Main) {
+                        statusLabel.text = "Import failed."
+                        importBtn.isEnabled = true
+                        backBtn.isEnabled = true
+                    }
+                    return@launch
                 }
 
-                // Step 10: Register and open the project
+                // Register and open the project
                 val project = withContext(Dispatchers.IO) {
                     ProjectMngr.loadProject(projectRoot)
                 }
@@ -1874,6 +1970,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                 }
             } catch (t: Throwable) {
                 log.warn("Import failed", t)
+                if (!cleanedUp) {
+                    withContext(Dispatchers.IO) { projectRoot.toJFile().deleteRecursively() }
+                }
                 withContext(Dispatchers.Main) {
                     statusLabel.text = "Import failed: ${t.message}"
                     importBtn.isEnabled = true
@@ -1883,13 +1982,4 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         }
     }
 
-    private fun extractAndCacheModIcon(mod: ImportableMod, jarPath: VPath): VPath? {
-        if (mod.sourceIconUrl != null && iconCache.containsKey(mod.sourceIconUrl)) {
-            return null
-        }
-        val iconBytes = readModJarIcon(jarPath) ?: return null
-        val iconFile = ModDatabase.iconPathFor(mod.sourceProjectId ?: mod.modId)
-        iconFile.writeBytesAtomic(iconBytes)
-        return iconFile
-    }
 }

@@ -394,6 +394,41 @@ class CurseForge : ModSource(), Registrable {
         }
     }
 
+    /**
+     * Resolves mod names and icon URLs for a list of CurseForge project IDs.
+     *
+     * @param projectIds CurseForge project IDs to look up.
+     * @return Map of project ID to [CurseModBrief] with the mod's name and icon URL.
+     */
+    suspend fun batchModDetails(projectIds: List<Long>): Map<Long, CurseModBrief> {
+        if (projectIds.isEmpty()) return emptyMap()
+        return try {
+            val response = retryOnThrottle {
+                client.post("mods") {
+                    contentType(ContentType.Application.Json)
+                    setBody(buildJsonObject {
+                        put("modIds", buildJsonArray {
+                            projectIds.forEach { add(JsonPrimitive(it)) }
+                        })
+                    })
+                }
+            }.let { response ->
+                if (!response.status.isSuccess()) {
+                    logger.error("CurseForge batch mod lookup returned {}: {}", response.status, response.bodyAsText().take(500))
+                    return@let null
+                }
+                response.body<CurseModListResponse>()
+            } ?: return emptyMap()
+
+            response.data.associate { mod ->
+                mod.id.toLong() to CurseModBrief(mod.name, mod.logo?.url)
+            }
+        } catch (e: Exception) {
+            logger.error("CurseForge batch mod lookup failed: {}", e.message)
+            emptyMap()
+        }
+    }
+
     override suspend fun resolveInstall(
         context: ModBrowserContext,
         projectId: String,
@@ -508,3 +543,8 @@ class CurseForge : ModSource(), Registrable {
         )
     }
 }
+
+data class CurseModBrief(
+    val name: String,
+    val iconUrl: String?
+)

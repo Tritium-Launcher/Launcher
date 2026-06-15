@@ -5,8 +5,23 @@ import io.qt.core.Qt
 import io.qt.widgets.QTreeWidget
 import io.qt.widgets.QTreeWidgetItem
 
+/**
+ * A single node in the file tree displayed in the import dialog.
+ *
+ * @param path Absolute path to the file or directory.
+ * @param isDirectory Whether this entry is a directory.
+ * @param parent Absolute path of the parent directory, or `null` for the root entry.
+ */
 data class FileTreeEntry(val path: VPath, val isDirectory: Boolean, val parent: VPath?)
 
+/**
+ * Recursively collects all files and directories under [dir] into a flat list of [FileTreeEntry].
+ *
+ * Entries are sorted with directories first, then alphabetically by filename.
+ *
+ * @param dir The root directory to scan.
+ * @return A flat list of [FileTreeEntry] representing all descendants.
+ */
 fun collectFileTreeEntries(dir: VPath): List<FileTreeEntry> {
     val result = mutableListOf<FileTreeEntry>()
     fun walk(current: VPath, parent: VPath?) {
@@ -25,6 +40,13 @@ fun collectFileTreeEntries(dir: VPath): List<FileTreeEntry> {
     return result
 }
 
+/**
+ * Persists the expanded state of the file tree for a given instance.
+ *
+ * @param fileTree The tree widget to snapshot.
+ * @param instance The instance associated with this tree.
+ * @param expandedState Map to write the expanded paths into, keyed by instance path.
+ */
 fun saveExpandedState(fileTree: QTreeWidget, instance: DetectedInstance, expandedState: MutableMap<String, Set<String>>) {
     val path = instance.minecraftDir.toAbsolute().toString()
     val expanded = mutableSetOf<String>()
@@ -42,6 +64,13 @@ fun saveExpandedState(fileTree: QTreeWidget, instance: DetectedInstance, expande
     expandedState[path] = expanded
 }
 
+/**
+ * Restores a previously saved expanded state onto the file tree.
+ *
+ * @param fileTree The tree widget to restore.
+ * @param instancePath The instance path that was used as the save key.
+ * @param expandedState The persisted expanded state map.
+ */
 fun restoreExpandedState(fileTree: QTreeWidget, instancePath: String, expandedState: Map<String, Set<String>>) {
     val saved = expandedState[instancePath] ?: return
     fun walk(item: QTreeWidgetItem) {
@@ -57,6 +86,15 @@ fun restoreExpandedState(fileTree: QTreeWidget, instancePath: String, expandedSt
     }
 }
 
+/**
+ * Collects all file paths that are currently checked in the tree widget.
+ *
+ * Directories are skipped; only leaf nodes are returned. A partially checked parent is
+ * considered checked and its leaf children are collected recursively.
+ *
+ * @param fileTree The tree widget to read check states from.
+ * @return List of [VPath] for checked files.
+ */
 fun collectCheckedFiles(fileTree: QTreeWidget): List<VPath> {
     val result = mutableListOf<VPath>()
     fun walk(item: QTreeWidgetItem) {

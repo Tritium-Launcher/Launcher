@@ -7,8 +7,17 @@ import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.logger
 import kotlinx.coroutines.CancellationException
 
-private val searchLog = logger("ModSearchHelper")
+object ModSearchHelper
+private val searchLog = logger(ModSearchHelper::class)
 
+/**
+ * Result of a source lookup for a single mod.
+ *
+ * @param projectId ID of the matching project on the mod source.
+ * @param iconUrl URL of the project icon, if available.
+ * @param isFileMatch Whether the match came from a precise file fingerprint/hash lookup.
+ * @param status Human-readable status string ("Available", "Matched by file hash", etc.).
+ */
 data class SourceMatch(
     val projectId: String,
     val iconUrl: String?,
@@ -23,11 +32,23 @@ private val loaderNameToId = mapOf(
     "Quilt" to "quilt"
 )
 
+/**
+ * Normalizes a string for loose comparison: lowercased, non-alphanumeric characters removed.
+ */
 fun normalize(str: String): String =
     str.lowercase().replace(Regex("[^a-z0-9]"), "")
 
+/**
+ * Generates an ordered list of search query strings for a mod, from most precise to most
+ * general. Queries are derived from the mod's ID, display name, filename, and various
+ * heuristic splits (camelCase separators, version-stripping, spacing alternatives).
+ *
+ * Queries that match a registered [ModSource] name are excluded.
+ *
+ * @param mod The mod to build queries for.
+ * @return A deduplicated list of non-blank query strings.
+ */
 fun buildSearchQueries(mod: ImportableMod): List<String> {
-    // Skip mods that exactly match a registered ModSource name
     val sourceNames = BuiltinRegistries.ModSource.all().flatMap { listOf(it.id, it.displayName) }.map { it.lowercase() }.toSet()
     if (mod.modId.lowercase() in sourceNames || mod.displayName.lowercase() in sourceNames) {
         return emptyList()
@@ -100,12 +121,28 @@ fun buildSearchQueries(mod: ImportableMod): List<String> {
     return result.distinct().filter { it.isNotBlank() }
 }
 
+/**
+ * Searches for a mod on a given [ModSource] using multiple lookup strategies:
+ *
+ * 1. **File fingerprint** — fastest, most precise match using the source's fingerprint API.
+ * 2. **SHA-1 hash** — fallback hash lookup when fingerprinting is unavailable.
+ * 3. **Text search** — iterates through [buildSearchQueries] results, first with a narrow
+ *    context (matching MC version + loader), then with a broad context (any version/loader).
+ *
+ * When a text search result is found, the mod's version is verified against the source via
+ * [verifyVersionOnSource] before returning.
+ *
+ * @param mod The mod to locate on the source.
+ * @param source The mod source to query.
+ * @param context Search context containing MC version and loader for filtering.
+ * @return A [SourceMatch] with the project ID and status, or `null` if no match was found.
+ * @throws CancellationException Propagated from the source API if the coroutine is cancelled.
+ */
 suspend fun findModOnSource(
     mod: ImportableMod,
     source: ModSource,
     context: ModBrowserContext
 ): SourceMatch? {
-    // Strategy 0: File fingerprint lookup
     if (mod.fileFingerprint != null) {
         try {
             val fpInfo = source.resolveProjectInfoByFingerprint(mod.fileFingerprint!!)
@@ -115,7 +152,6 @@ suspend fun findModOnSource(
         } catch (_: Exception) { }
     }
 
-    // Strategy 1: Hash lookup
     if (mod.sha1Hash != null) {
         try {
             val hashInfo = source.resolveProjectInfoByHash(mod.sha1Hash!!)
@@ -125,7 +161,6 @@ suspend fun findModOnSource(
         } catch (_: Exception) { }
     }
 
-    // Strategy 2: Search by multiple query variations
     val queries = buildSearchQueries(mod)
     var bestNameMatch: SourceMatch? = null
 
@@ -180,6 +215,22 @@ suspend fun findModOnSource(
     return bestNameMatch
 }
 
+/**
+ * Verifies whether a project on a mod source has a version compatible with a given mod.
+ *
+ * Strategies used in order:
+ * 1. **MC version + loader match** — checks if any version matches both the mod's MC version
+ *    and loader. Includes compatibility mappings (Forge ↔ NeoForge, Fabric ↔ Quilt).
+ * 2. **SHA-1 hash match** — checks if a version's file hash matches the mod jar's hash.
+ * 3. **Filename fallback** — checks if the version filename or label contains the mod's filename.
+ *
+ * @param source The mod source to query.
+ * @param fetchContext Context for fetching versions (MC version + loader).
+ * @param matchContext Context for filtering matched versions.
+ * @param projectId The source project ID to check.
+ * @param mod The mod being verified.
+ * @return `true` if a compatible version exists.
+ */
 suspend fun verifyVersionOnSource(
     source: ModSource,
     fetchContext: ModBrowserContext,
@@ -192,7 +243,6 @@ suspend fun verifyVersionOnSource(
         val mcVersion = matchContext.minecraftVersion
         val loaderId = matchContext.modLoaderId
 
-        // Strategy 1: Match by MC version + loader
         if (mcVersion != null || loaderId != null) {
             val matched = versions.any { v ->
                 val mcMatch = mcVersion == null || v.gameVersions.any { gv ->
@@ -208,7 +258,6 @@ suspend fun verifyVersionOnSource(
             if (matched) return true
         }
 
-        // Strategy 2: Match by SHA-1 hash
         if (mod.sha1Hash != null) {
             val byHash = versions.any { v -> v.fileHash?.equals(mod.sha1Hash, ignoreCase = true) == true }
             if (byHash) {
@@ -217,7 +266,6 @@ suspend fun verifyVersionOnSource(
             }
         }
 
-        // Strategy 3: Fallback — match by jar filename
         val jarName = mod.fileName.removeSuffix(".jar").lowercase()
         val byFilename = versions.any { v ->
             v.fileName.equals(mod.fileName, ignoreCase = true) ||

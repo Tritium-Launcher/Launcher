@@ -25,8 +25,14 @@ import io.qt.widgets.QFrame
 import io.qt.widgets.QLabel
 import io.qt.widgets.QWidget
 
-// --- Launcher selection card ---
-
+/**
+ * A clickable card representing a launcher or modpack source on the import source selection
+ * page.
+ *
+ * Clicking the card triggers [onClick] with the associated [KnownLauncher].
+ *
+ * @param launcher The launcher this card represents.
+ */
 class ImportOption(val launcher: KnownLauncher) : QFrame() {
     private val iconLabel = QLabel()
     val nameLabel = QLabel()
@@ -65,6 +71,10 @@ class ImportOption(val launcher: KnownLauncher) : QFrame() {
         }
     }
 
+    /**
+     * Toggles the visual "selected" state of the card by setting the `selected` property
+     * and re-polishing the style.
+     */
     fun setSelected(sel: Boolean) {
         setProperty("selected", sel)
         style()?.unpolish(this)
@@ -72,13 +82,23 @@ class ImportOption(val launcher: KnownLauncher) : QFrame() {
         update()
     }
 
+    /**
+     * Updates the card icon from a [QPixmap].
+     */
     fun setIcon(pixmap: QPixmap) {
         iconLabel.pixmap = loadScaledPixmap(pixmap.toImage(), qs(32, 32), this)
     }
 }
 
-// --- Importable mod row (review page) ---
-
+/**
+ * A row widget in the mod list on the review page. Displays a checkbox, mod icon, mod name
+ * and ID, side badge, and availability status.
+ *
+ * @param mod The mod data to display.
+ * @param index Position index used for callback identification.
+ * @param onCheckedChanged Callback with (index, checked) when the checkbox is toggled.
+ * @param onFetchOnlineIcon Callback with (index, iconUrl) to fetch the online project icon.
+ */
 class ImportableModRow(
     private val mod: ImportableMod,
     private val index: Int,
@@ -103,14 +123,12 @@ class ImportableModRow(
             setSpacing(8)
         }
 
-        // Checkbox
         checkbox.isChecked = mod.checked
         checkbox.stateChanged.connect { state: Int ->
             onCheckedChanged(index, state == Qt.CheckState.Checked.value())
         }
         layout.addWidget(checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        // Icon
         iconLabel.apply {
             setFixedSize(32, 32)
             setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -128,7 +146,6 @@ class ImportableModRow(
         iconLabel.pixmap = pix
         layout.addWidget(iconLabel, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        // Name + meta
         val textColumn = QWidget()
         val textLayout = vBoxLayout(textColumn) {
             setContentsMargins(0, 0, 0, 0)
@@ -153,7 +170,6 @@ class ImportableModRow(
 
         layout.addWidget(textColumn, 1)
 
-        // Badge
         badgeLabel.apply {
             if (mod.sourceAvailable == null && mod.sourceStatus == null) {
                 visible = false
@@ -174,6 +190,14 @@ class ImportableModRow(
         layout.addWidget(badgeLabel, 0, Qt.AlignmentFlag.AlignVCenter)
     }
 
+    /**
+     * Updates the availability badge and optionally triggers online icon fetching.
+     *
+     * @param available Whether the mod is available on the source.
+     * @param projectId The matched source project ID (unused internally, provided for callers).
+     * @param iconUrl URL of the project icon to fetch.
+     * @param status Custom status text override.
+     */
     fun updateAvailability(available: Boolean?, projectId: String?, iconUrl: String?, status: String? = null) {
         badgeLabel.visible = true
         val displayStatus = status ?: when (available) {
@@ -196,6 +220,9 @@ class ImportableModRow(
         }
     }
 
+    /**
+     * Updates the row icon from a [QIcon] (typically fetched online).
+     */
     fun setIconFromQIcon(icon: QIcon) {
         val p = icon.pixmap(32, 32)
         if (!p.isNull) {
@@ -204,8 +231,12 @@ class ImportableModRow(
     }
 }
 
-// --- Modrinth pack item widget (instance list) ---
-
+/**
+ * A row widget representing a Modrinth modpack project in the instance list when the user
+ * selects a Modrinth account. Shows the project icon, title, and metadata pills.
+ *
+ * @param project The Modrinth project data.
+ */
 class ModrinthPackItemWidget(val project: ModrinthProject) : QFrame() {
     val iconLabel = QLabel()
 
@@ -237,8 +268,12 @@ class ModrinthPackItemWidget(val project: ModrinthProject) : QFrame() {
     }
 }
 
-// --- Instance item widget (instance list) ---
-
+/**
+ * A row widget representing a detected Minecraft instance in the instance list.
+ * Shows the instance icon, name, and metadata (game version + loader).
+ *
+ * @param instance The detected instance data.
+ */
 class InstanceItemWidget(val instance: DetectedInstance) : QFrame() {
     override fun sizeHint(): QSize = QSize(200, 44)
 
