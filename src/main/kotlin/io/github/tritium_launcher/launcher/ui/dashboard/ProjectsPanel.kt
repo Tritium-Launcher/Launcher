@@ -223,7 +223,6 @@ class ProjectsPanel internal constructor(): QWidget() {
         val projectFile = if (file.fileName() == "trproj.json") file else projectDir.resolve("trproj.json")
 
         if (!projectFile.exists()) {
-            // TODO: Add an import method for instances from other launchers
             Dashboard.logger.warn(
                 "Import skipped for '{}' because trproj.json was not found in '{}'",
                 selectedFile,

@@ -9,10 +9,6 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
 import kotlin.reflect.KClass
-
-private val logger = LoggerFactory.getLogger("GlobalFunctions") //TODO: Make a central io.github.tritium_launcher.launcher.logger for things like this and others
-val koinLogger: Logger = LoggerFactory.getLogger("Koin")
-
 /**
  * Shortens the [System.getProperty] call
  */

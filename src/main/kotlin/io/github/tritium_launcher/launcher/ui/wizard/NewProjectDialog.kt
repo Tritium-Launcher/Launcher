@@ -91,10 +91,12 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         rightLayout.addWidget(statusLabel)
 
         createButton.apply {
+            tint = TColors.Green
             text = "Create"
             minimumHeight = 36
         }
         cancelButton.apply {
+            tint = TColors.Warning
             text = "Cancel"
             minimumHeight = 36
         }

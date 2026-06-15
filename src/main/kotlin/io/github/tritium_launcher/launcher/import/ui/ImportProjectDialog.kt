@@ -108,8 +108,8 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private val fileTreeLoading = QLabel("Scanning files...")
 
     // Footer
-    private val backBtn = TPushButton { text = "Back" }
-    private val importBtn = TPushButton { text = "Import" }
+    private val backBtn = TPushButton(tint = TColors.Warning) { text = "Back" }
+    private val importBtn = TPushButton(tint = TColors.Green) { text = "Import" }
     private val statusLabel = QLabel()
 
     // Modrinth pack account selector
@@ -651,8 +651,8 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             val footer = widget { objectName = "importFooter" }
             hBoxLayout(footer) {
                 addStretch(1)
-                addWidget(backBtn.apply { minimumHeight = 36 })
                 addWidget(importBtn.apply { minimumHeight = 36 })
+                addWidget(backBtn.apply { minimumHeight = 36 })
             }
             addWidget(footer, 0)
         }
@@ -1251,6 +1251,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             synchronized(modListGuard) {
                 importableMods.clear()
                 importableMods.addAll(prebuilt)
+                importableMods.sortBy { it.displayName }
             }
             modListPlaceholder.text = "No mods found in this instance."
             populateModList()
@@ -1347,6 +1348,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                     } else {
                         importableMods.addAll(scanned)
                     }
+                importableMods.sortBy { it.displayName }
                 }
                 populateModList()
 
@@ -1371,9 +1373,6 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private fun populateModList(filteredSubset: List<ImportableMod>? = null) {
         val allMods: List<ImportableMod>
         synchronized(modListGuard) {
-            if (filteredSubset == null) {
-                importableMods.sortByDescending { it.displayName.lowercase() }
-            }
             allMods = filteredSubset ?: importableMods.toList()
         }
 
@@ -1517,7 +1516,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             val remainingMods = allMods.filterIndexed { index, _ -> index !in fingerprintMatched }
 
             coroutineScope {
-                remainingMods.mapIndexed { loopIndex, mod ->
+                remainingMods.mapIndexed { _, mod ->
                     // Find the original index in allMods
                     val originalIndex = allMods.indexOf(mod)
                     async {

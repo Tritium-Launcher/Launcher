@@ -4,13 +4,11 @@ import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.currentDpr
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
+import io.github.tritium_launcher.launcher.ui.widgets.pixel.PixelSkin
 import io.github.tritium_launcher.launcher.ui.widgets.pixel.pixelSkin
 import io.qt.Nullable
 import io.qt.core.QEvent
-import io.qt.gui.QMoveEvent
-import io.qt.gui.QPaintEvent
-import io.qt.gui.QPainter
-import io.qt.gui.QShowEvent
+import io.qt.gui.*
 import io.qt.widgets.QPushButton
 import io.qt.widgets.QStyle
 import io.qt.widgets.QStyleOptionButton
@@ -23,11 +21,31 @@ import kotlin.math.abs
 
 /**
  * Minecraft-styled push button.
+ *
+ * @param parent Parent widget.
+ * @param tint Optional hex color string to tint the button (e.g. [TColors.Green]).
+ *   Preserves the original button's lightness gradients while applying the tint's
+ *   hue and saturation.
  */
 class TPushButton(
-    parent: QWidget? = null
+    parent: QWidget? = null,
+    tint: String? = null
 ) : QPushButton(parent) {
     private var lastDpr: Double = -1.0
+
+    /**
+     * Optional hex color string to tint the button.
+     * Preserves lightness from the theme button colors while applying this color's
+     * hue and saturation.
+     */
+    var tint: String? = tint
+        set(value) {
+            if (field != value) {
+                field = value
+                update()
+            }
+        }
+
     /**
      * Additional Y offset applied to the button label.
      *
@@ -66,7 +84,8 @@ class TPushButton(
         val dpr = currentDpr(this)
         handleDprChange(dpr)
 
-        val bg = skin.render(state.key, w, h, dpr)
+        val s = if (tint != null) getTintedSkin(tint!!) else skin
+        val bg = s.render(state.key, w, h, dpr)
 
         if(!bg.isNull) {
             painter.drawPixmap(0, 0, bg)
@@ -102,6 +121,8 @@ class TPushButton(
             QEvent.Type.DevicePixelRatioChange,
             QEvent.Type.ScreenChangeInternal -> {
                 skin.clearCache(disposePixmaps = true)
+                tintedSkins.values.forEach { it.clearCache(disposePixmaps = true) }
+                tintedSkins.clear()
                 lastDpr = -1.0
                 update()
             }
@@ -132,6 +153,7 @@ class TPushButton(
     private fun handleDprChange(dpr: Double) {
         if (lastDpr < 0.0 || abs(lastDpr - dpr) > 0.001) {
             skin.clearCache(disposePixmaps = true)
+            tintedSkins.values.forEach { it.clearCache(disposePixmaps = true) }
             lastDpr = dpr
             update()
         }
@@ -145,6 +167,7 @@ class TPushButton(
     companion object {
         private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
         private var skin = buildSkin()
+        private val tintedSkins = mutableMapOf<String, PixelSkin>()
 
         init {
             scope.launch {
@@ -152,8 +175,88 @@ class TPushButton(
                     val prev = skin
                     skin = buildSkin()
                     prev.clearCache(disposePixmaps = true)
+                    tintedSkins.values.forEach { it.clearCache(disposePixmaps = true) }
+                    tintedSkins.clear()
                 }
             }
+        }
+
+        /**
+         * Return the tinted skin for [tintHex], building it on first use.
+         */
+        private fun getTintedSkin(tintHex: String): PixelSkin =
+            tintedSkins.getOrPut(tintHex) { buildTintedSkin(tintHex) }
+
+        /**
+         * Apply [tintHex] hue and saturation to each button color while preserving
+         * the original lightness.
+         */
+        private fun buildTintedSkin(tintHex: String) = pixelSkin {
+            pixelSize = 2
+            palette {
+                color("border", tintColor(TColors.Button0, tintHex))
+                color("shadow", tintColor(TColors.Button1, tintHex))
+                color("primary", tintColor(TColors.Button2, tintHex))
+                color("bright", tintColor(TColors.Button3, tintHex))
+                color("disabled", TColors.ButtonDisabled0)
+                color("disabledBorder", TColors.ButtonDisabled1)
+            }
+
+            state("normal") {
+                draw {
+                    val p = px
+                    val w = width
+                    val h = height
+                    fillRect(0, 0, w, h, "border")
+                    fillRect(p, p, w - p * 2, h - p * 2, "primary")
+                    fillRect(p, p, w - p * 2, p, "bright")
+                    fillRect(p, p, p, h - p * 5, "bright")
+                    fillRect(w - p * 2, p, p, h - p * 5, "bright")
+                    fillRect(p, h - p * 4, w - p * 2, p, "bright")
+                    fillRect(p, h - p * 3, w - p * 2, p * 2, "shadow")
+                }
+            }
+
+            state("pressed") {
+                draw {
+                    val p = px
+                    val w = width
+                    val h = height
+                    fillRect(0, p, w, h - p, "border")
+                    fillRect(p, p + 2, w - p * 2, h - p - 4, "primary")
+                    fillRect(p, p + 2, w - p * 2, p, "bright")
+                    fillRect(p, p + 2, p, h - p * 4, "bright")
+                    fillRect(w - p * 2, p + 2, p, h - p * 4, "bright")
+                    fillRect(p, h - p * 2, w - p * 2, p, "bright")
+                }
+            }
+
+            state("disabled") {
+                draw {
+                    val p = px
+                    val w = width
+                    val h = height
+                    fillRect(0, 0, w, h, "disabledBorder")
+                    fillRect(p, p, w - p * 2, h - p * 2, "disabled")
+                    fillRect(p, p, w - p * 2, p, "disabled")
+                    fillRect(p, p, p, h - p * 3, "disabled")
+                    fillRect(w - p * 2, p, p, h - p * 3, "disabled")
+                    fillRect(p, h - p * 2, w - p * 2, p, "disabled")
+                }
+            }
+        }
+
+        /**
+         * Replace the lightness of [originalHex] with the hue+saturation of [tintHex].
+         */
+        private fun tintColor(originalHex: String, tintHex: String): String {
+            val src = QColor(originalHex)
+            val t = QColor(tintHex)
+            val l = src.lightness()
+            val h = t.hslHue()
+            val s = t.hslSaturation()
+            val effectiveHue = if (h < 0) src.hslHue() else h
+            return QColor.fromHsl(effectiveHue, s, l).name()
         }
 
         /**
@@ -214,7 +317,7 @@ class TPushButton(
             }
         }
 
-        operator fun invoke(parent: QWidget? = null, block: TPushButton.() -> Unit = {}): TPushButton =
-            TPushButton(parent).apply(block)
+        operator fun invoke(parent: QWidget? = null, tint: String? = null, block: TPushButton.() -> Unit = {}): TPushButton =
+            TPushButton(parent, tint).apply(block)
     }
 }

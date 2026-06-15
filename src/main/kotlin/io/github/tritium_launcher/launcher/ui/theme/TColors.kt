@@ -5,6 +5,7 @@ import io.qt.gui.QColor
 /**
  * Provides all colors provided by Themes.
  */
+@Suppress("unused")
 object TColors {
 
     object Editor {
