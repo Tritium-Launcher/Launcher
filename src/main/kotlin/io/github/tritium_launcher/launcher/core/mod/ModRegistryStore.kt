@@ -22,6 +22,7 @@ data class ModRegistryEntry(
     val installedAt: Long? = null,
     val enabled: Boolean = true,
     val excludedFromRelease: Boolean = false,
+    val localOnly: Boolean = false,
     val side: String = "BOTH",
     val releaseType: String = "release",
     val requiresManualDownload: Boolean = false,
@@ -94,6 +95,7 @@ class ModRegistryStore(projectDir: VPath) {
         installedAt = entry.installedAt?.let { Instant.fromEpochMilliseconds(it) },
         enabled = entry.enabled,
         excludedFromRelease = entry.excludedFromRelease,
+        localOnly = entry.localOnly,
         requiresManualDownload = entry.requiresManualDownload,
         dependencies = entry.dependencies,
     )
@@ -112,6 +114,7 @@ class ModRegistryStore(projectDir: VPath) {
         installedAt = mod.installedAt?.toEpochMilliseconds(),
         enabled = mod.enabled,
         excludedFromRelease = mod.excludedFromRelease,
+        localOnly = mod.localOnly,
         side = mod.side.name,
         releaseType = mod.releaseType,
         requiresManualDownload = mod.requiresManualDownload,

@@ -104,6 +104,8 @@ object ImportProjectCreator {
                         put("fileName", mod.fileName)
                         put("side", mod.side.name)
                         put("sourceProjectId", mod.sourceProjectId?.let { JsonPrimitive(it) } ?: JsonNull)
+                        put("sourceVersionId", mod.sourceVersionId?.let { JsonPrimitive(it) } ?: JsonNull)
+                        put("sourceIconUrl", mod.sourceIconUrl?.let { JsonPrimitive(it) } ?: JsonNull)
                         put("dependencyIds", buildJsonArray {
                             mod.dependencyIds.forEach { add(it) }
                         })

@@ -77,6 +77,9 @@ object ProjectBootstrap {
                                 "Merged version json written to {}",
                                 merged?.toAbsolute()?.toString()?.redactUserPath() ?: "null"
                             )
+
+                            ProjectTaskMngr.updateProgress(bootstrapTaskId, 85.0)
+
                             ProjectTaskMngr.update(bootstrapTaskId, detail = "Finalizing bootstrap")
                             ProjectTaskMngr.updateProgress(bootstrapTaskId, 95.0)
                             bootstrapSucceeded = true

@@ -16,6 +16,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.net.URI
 import kotlin.time.Clock
 
 private val logger = logger("io.github.tritium_launcher.launcher.templates.generation.builtin.import")
@@ -37,6 +38,8 @@ class ImportModsStep(
         val fileName: String,
         val side: String,
         val sourceProjectId: String?,
+        val sourceVersionId: String? = null,
+        val sourceIconUrl: String? = null,
         val dependencyIds: List<String>
     )
 
@@ -55,6 +58,8 @@ class ImportModsStep(
                     fileName = obj["fileName"]?.jsonPrimitive?.contentOrNull ?: "",
                     side = obj["side"]?.jsonPrimitive?.contentOrNull ?: "BOTH",
                     sourceProjectId = obj["sourceProjectId"]?.jsonPrimitive?.contentOrNull,
+                    sourceVersionId = obj["sourceVersionId"]?.jsonPrimitive?.contentOrNull,
+                    sourceIconUrl = obj["sourceIconUrl"]?.jsonPrimitive?.contentOrNull,
                     dependencyIds = obj["dependencyIds"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
                 )
             }
@@ -76,12 +81,27 @@ class ImportModsStep(
                         val hash = ModDatabase.sha1(bytes)
 
                         val iconFile = run {
-                            val iconBytes = readModJarIcon(destJar)
-                            if (iconBytes != null) {
-                                val f = ModDatabase.iconPathFor(mod.sourceProjectId ?: mod.modId)
-                                f.writeBytesAtomic(iconBytes)
-                                f
-                            } else null
+                            val iconUrl = mod.sourceIconUrl?.takeIf { it.isNotBlank() }
+                            if (iconUrl != null) {
+                                try {
+                                    val iconBytes = URI(iconUrl).toURL().openStream().readBytes()
+                                    val f = ModDatabase.iconPathFor(mod.sourceProjectId ?: mod.modId)
+                                    f.writeBytesAtomic(iconBytes)
+                                    f
+                                } catch (_: Exception) {
+                                    readModJarIcon(destJar)?.let { bytes ->
+                                        val f = ModDatabase.iconPathFor(mod.sourceProjectId ?: mod.modId)
+                                        f.writeBytesAtomic(bytes)
+                                        f
+                                    }
+                                }
+                            } else {
+                                readModJarIcon(destJar)?.let { bytes ->
+                                    val f = ModDatabase.iconPathFor(mod.sourceProjectId ?: mod.modId)
+                                    f.writeBytesAtomic(bytes)
+                                    f
+                                }
+                            }
                         }
 
                         val projectId = mod.sourceProjectId ?: mod.modId
@@ -93,7 +113,7 @@ class ImportModsStep(
                             side = ModSide.valueOf(mod.side),
                             releaseType = "release",
                             source = sourceId,
-                            versionId = mod.sourceProjectId ?: mod.modId,
+                            versionId = mod.sourceVersionId.orEmpty(),
                             versionLabel = "",
                             iconPath = iconFile?.toAbsolute()?.toString(),
                             projectUrl = null,

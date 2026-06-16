@@ -95,7 +95,7 @@ class ThemesPanel internal constructor(): QWidget() {
         setupConnections()
 
         CoroutineScope(Dispatchers.Main).launch {
-            ThemeMngr.currentThemeId.collect { themeId ->
+            ThemeMngr.currentThemeId.collect { _ ->
                 themeListener()
             }
         }
@@ -389,6 +389,7 @@ class ThemesPanel internal constructor(): QWidget() {
             val font = QFont(family, size)
             QApplication.setFont(font)
             applyFontToWidgets(font)
+            @Suppress("unchecked_cast")
             val node = SettingsMngr.findSetting(CoreSettingKeys.GlobalFont) as? SettingNode<String>
             node?.let { SettingsMngr.updateValue(it, "$family|$size") }
         } catch (e: Exception) {
@@ -417,6 +418,7 @@ class ThemesPanel internal constructor(): QWidget() {
         if(isUpdating) return
         val family = editorFontComboBox.currentText.takeIf { it.isNotBlank() } ?: return
         val size = editorFontSizeSpinner.value
+        @Suppress("unchecked_cast")
         val node = SettingsMngr.findSetting(CoreSettingKeys.EditorFont) as? SettingNode<String>
         node?.let { SettingsMngr.updateValue(it, "$family|$size") }
     }

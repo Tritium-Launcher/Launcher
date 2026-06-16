@@ -685,6 +685,7 @@ class InstalledModsPanel(
             withContext(Dispatchers.IO) {
                 ModDatabase(project.projectDir).use { db ->
                     val mod = db.getByProjectId(projectId) ?: return@use
+                    if (mod.localOnly) return@use
                     excluded = !mod.excludedFromRelease
                     db.setExcludedFromRelease(projectId, excluded)
                 }
@@ -827,11 +828,11 @@ private class ModListRow(
         val metaText = buildString {
             append(mod.modId)
             if (mod.versionLabel.isNotBlank()) append(" · ${mod.versionLabel}")
-            if (updateOption != null) append(" · v${updateOption!!.label} available")
             if (mod.side != ModSide.BOTH) append(" · ${mod.side.name}")
             append(" · ${mod.releaseType}")
             if (!mod.enabled) append(" · DISABLED")
             if (mod.excludedFromRelease) append(" · DEV")
+            if (mod.localOnly) append(" · LOCAL-ONLY")
         }
         metaLabel = QLabel(metaText).apply {
             val f = QFont(font())
@@ -902,8 +903,12 @@ private class ModListRow(
         }
 
         val releaseLabel = if (mod.excludedFromRelease) "Include in Release" else "Exclude from Release"
-        menu.addAction(releaseLabel)?.let {
-            it.triggered.connect { releaseToggled.emit(mod.projectId) }
+        menu.addAction(releaseLabel)?.let { action ->
+            if (mod.localOnly) {
+                action.enabled = false
+                action.toolTip = "This mod is local-only and won't be included in releases"
+            }
+            action.triggered.connect { releaseToggled.emit(mod.projectId) }
         }
 
         menu.addSeparator()

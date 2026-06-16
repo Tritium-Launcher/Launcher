@@ -346,6 +346,7 @@ object LauncherDetector {
                 if (!seenDirs.add(canonical)) continue
                 val entries = Files.list(jPath).toList()
                 for (instancePath in entries) {
+                    if (!Files.isDirectory(instancePath)) continue
                     val instanceDir = VPath.get(instancePath.toString())
                     val meta = launcher.parser(instanceDir)
                     if (meta != null) {

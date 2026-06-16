@@ -36,6 +36,7 @@ data class ImportableMod(
     var sha1Hash: String? = null,
     var fileFingerprint: Long? = null,
     var sourceProjectId: String? = null,
+    var sourceVersionId: String? = null,
     var sourceIconUrl: String? = null,
     var sourceAvailable: Boolean? = null,
     var sourceStatus: String? = null,

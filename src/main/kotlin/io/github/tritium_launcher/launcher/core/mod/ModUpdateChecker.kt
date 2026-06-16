@@ -34,6 +34,7 @@ object ModUpdateChecker {
         val context = resolveContext(project) ?: return null
         val source = resolveSource(context) ?: return null
         if (source.id != mod.source) return null
+        if (mod.versionId.isBlank()) return null
 
         return try {
             val versions = source.versions(context, mod.projectId)

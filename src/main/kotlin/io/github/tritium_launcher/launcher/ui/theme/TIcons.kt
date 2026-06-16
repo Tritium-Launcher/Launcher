@@ -71,6 +71,8 @@ object TIcons {
     val QuestionMark get() = pix("ui/question", 16, 16)
     val Unknown      get() = pix("ui/unknown_question", 16, 16)
 
+    internal val Companion get() = pix("ui/companion_mod", 16, 16)
+
     val NewProject  get() = pix("dashboard/new_project", 32, 32)
     val Import      get() = pix("dashboard/folder_import", 32, 32)
     val Git         get() = pix("dashboard/git", 32, 32)

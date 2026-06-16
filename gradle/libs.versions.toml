@@ -50,7 +50,7 @@ kotlinx-serialization-hocon = { module = "org.jetbrains.kotlinx:kotlinx-serializ
 kotlinx-serialization-properties = { module = "org.jetbrains.kotlinx:kotlinx-serialization-properties", version.ref = "kotlinx-serialization" }
 kotlin-json5 = { module = "li.songe:json5", name = "json5", version.ref = "kotlin-json5"}
 ktoml-core = { module = "com.akuleshov7:ktoml-core", name = "ktoml-core", version.ref = "ktoml"}
-ktoml-file = { module = "com.akuleshov7:ktoml-core", name = "ktoml-file", version.ref = "ktoml"}
+ktoml-file = { module = "com.akuleshov7:ktoml-file", name = "ktoml-file", version.ref = "ktoml"}
 yamlkt = { module = "net.mamoe.yamlkt:yamlkt", name = "yamlkt", version.ref = "yamlkt"}
 knbt = { module = "net.benwoodworth.knbt:knbt", name = "knbt", version.ref = "knbt"}
 

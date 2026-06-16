@@ -176,16 +176,23 @@ val compileGrammarNative by tasks.registering {
     }
     doLast {
         cmakeBuildDir.mkdirs()
-        ProcessBuilder("cmake", srcDir.path, "-DCMAKE_BUILD_TYPE=Release")
+        val javaHome = System.getProperty("java.home")
+        val cmakeEnv = mapOf("JAVA_HOME" to javaHome)
+        val configure = ProcessBuilder("cmake", srcDir.path, "-DCMAKE_BUILD_TYPE=Release")
+            .directory(cmakeBuildDir)
+            .inheritIO()
+            .apply { environment().putAll(cmakeEnv) }
+            .start()
+        if (configure.waitFor() != 0) {
+            throw GradleException("cmake configuration failed for tree-sitter-javascript grammar")
+        }
+        val build = ProcessBuilder("cmake", "--build", ".", "--target", "ktreesitter-javascript", "--parallel")
             .directory(cmakeBuildDir)
             .inheritIO()
             .start()
-            .waitFor()
-        ProcessBuilder("cmake", "--build", ".", "--target", "ktreesitter-javascript", "--parallel")
-            .directory(cmakeBuildDir)
-            .inheritIO()
-            .start()
-            .waitFor()
+        if (build.waitFor() != 0) {
+            throw GradleException("cmake build failed for tree-sitter-javascript grammar")
+        }
     }
 }
 
@@ -209,6 +216,13 @@ tasks.processResources {
         os.isWindows -> if (isArm64) "windows/arm64" else "windows/x64"
         os.isMacOsX  -> if (isArm64) "macos/arm64"   else "macos/x64"
         else         -> if (isArm64) "linux/arm64"   else "linux/x64"
+    }
+
+    doFirst {
+        val libFile = nativeLibDir.get().file(nativeGrammarLibName).asFile
+        if (!libFile.exists()) {
+            logger.warn("Native grammar library not found at ${libFile}; JS syntax highlighting disabled")
+        }
     }
 
     inputs.property("version", tritiumVersion)

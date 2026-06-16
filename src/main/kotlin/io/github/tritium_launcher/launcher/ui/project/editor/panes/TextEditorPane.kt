@@ -283,7 +283,7 @@ private class LineNumberGutter(private val editor: QTextEdit) : QWidget() {
 
         var block = doc.begin()
         var lineNum = 1
-        val layout = doc.documentLayout()
+        val layout = doc.documentLayout()!!
 
         while (block.isValid) {
             val rect = layout.blockBoundingRect(block)

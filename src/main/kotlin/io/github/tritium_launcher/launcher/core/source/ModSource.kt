@@ -149,6 +149,7 @@ data class ModInstallPlan(
 data class HashProjectInfo(
     val projectId: String,
     val projectTitle: String,
+    val versionId: String? = null,
 )
 
 data class ResolvedFile(

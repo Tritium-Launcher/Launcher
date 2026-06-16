@@ -68,7 +68,7 @@ class ProjectViewWindow internal constructor(
     private var backgroundLayer: ProjectBackgroundWidget
     private val editorArea = EditorArea(project)
     private var sidePanelMngr: SidePanelMngr
-    private lateinit var notificationOverlay: Toaster
+    private var notificationOverlay = Toaster(this.project, this)
     private val settingsDialog = SettingsDialog(this)
     private val statePersistTimer = QTimer(this).apply {
         isSingleShot = true
@@ -409,9 +409,7 @@ class ProjectViewWindow internal constructor(
 
     override fun showEvent(event: @Nullable QShowEvent?) {
         super.showEvent(event)
-        if(::notificationOverlay.isInitialized) {
             notificationOverlay.reposition()
-        }
         if (!uiStateRestored) {
             QTimer.singleShot(0) { restoreUIState() }
         }
@@ -422,7 +420,7 @@ class ProjectViewWindow internal constructor(
         super.resizeEvent(event)
         QTimer.singleShot(50) { unlockDockWidths() }
         backgroundLayer.setGeometry(0, 0, width(), height())
-        if(::notificationOverlay.isInitialized) notificationOverlay.reposition()
+        notificationOverlay.reposition()
         scheduleStatePersist()
     }
 

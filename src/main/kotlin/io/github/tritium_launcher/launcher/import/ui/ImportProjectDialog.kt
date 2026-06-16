@@ -1475,22 +1475,58 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         currentValidationJob = ioScope.launch {
             log.warn("validateModsAgainstSource: starting validation for {} mods", totalMods)
 
+            // Compute source-specific fingerprints if they weren't set during the initial scan
+            if (totalMods > 0 && allMods.none { it.fileFingerprint != null }) {
+                log.warn("validateModsAgainstSource: computing fingerprints for {} mods", totalMods)
+                withContext(Dispatchers.IO) {
+                    allMods.forEachIndexed { index, mod ->
+                        try {
+                            ensureActive()
+                            val bytes = mod.jarPath.toJFile().readBytes()
+                            val fp = source.computeFileFingerprint(bytes)
+                            synchronized(modListGuard) {
+                                if (index in importableMods.indices) {
+                                    importableMods[index] = importableMods[index].copy(fileFingerprint = fp)
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            log.warn("Failed to compute fingerprint for {}: {}", mod.fileName, t.message)
+                        }
+                    }
+                }
+            }
+
+            val modsForBatch: List<ImportableMod>
+            synchronized(modListGuard) {
+                modsForBatch = importableMods.toList()
+            }
+
             val fingerprintMatched = mutableSetOf<Int>()
             try {
-                val fingerprints = allMods.mapNotNull { it.fileFingerprint }.distinct()
+                val fingerprints = modsForBatch.mapNotNull { it.fileFingerprint }.distinct()
                 if (fingerprints.isNotEmpty()) {
                     val fpResults = source.resolveProjectInfosByFingerprints(fingerprints)
+                    log.warn("validateModsAgainstSource: batch fingerprint: {} fingerprints sent, {} matched", fingerprints.size, fpResults.size)
                     if (fpResults.isNotEmpty()) {
+                        val projectIds = fpResults.values.mapNotNull { it.projectId.toLongOrNull() }.distinct()
+                        val iconUrls = if (projectIds.isNotEmpty() && source is CurseForge) {
+                            source.batchModDetails(projectIds)
+                                .mapValues { it.value.iconUrl }
+                        } else emptyMap()
+
                         withContext(Dispatchers.Main) {
-                            allMods.forEachIndexed { index, mod ->
+                            modsForBatch.forEachIndexed { index, mod ->
                                 val fp = mod.fileFingerprint
                                 if (fp != null && fp in fpResults) {
                                     val info = fpResults[fp]!!
                                     fingerprintMatched.add(index)
+                                    val iconUrl = iconUrls[info.projectId.toLongOrNull()]
                                     synchronized(modListGuard) {
                                         if (index in importableMods.indices) {
                                             importableMods[index] = importableMods[index].copy(
                                                 sourceProjectId = info.projectId,
+                                                sourceVersionId = info.versionId,
+                                                sourceIconUrl = iconUrl,
                                                 sourceAvailable = true,
                                                 sourceStatus = "Available"
                                             )
@@ -1501,7 +1537,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                         val dataIdx = item?.data(Qt.ItemDataRole.UserRole) as? Int ?: continue
                                         if (dataIdx == index) {
                                             (modListWidget.itemWidget(item) as? ImportableModRow)
-                                                ?.updateAvailability(true, info.projectId, null, "Available")
+                                                ?.updateAvailability(true, info.projectId, iconUrl, "Available")
                                             break
                                         }
                                     }
@@ -1532,6 +1568,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                         if (originalIndex in importableMods.indices) {
                                             importableMods[originalIndex] = importableMods[originalIndex].copy(
                                                 sourceProjectId = result?.projectId,
+                                                sourceVersionId = result?.versionId,
                                                 sourceIconUrl = result?.iconUrl,
                                                 sourceAvailable = result != null,
                                                 sourceStatus = status

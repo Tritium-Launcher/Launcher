@@ -1,6 +1,7 @@
 package io.github.tritium_launcher.launcher.ui.project.menu.builtin
 
 import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.launcher.companion.CompanionInfoDialog
 import io.github.tritium_launcher.launcher.core.TritiumEvent
 import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.core.mod.ModDatabase
@@ -815,6 +816,7 @@ object BuiltinMenuItems {
             return
         }
 
+        CompanionInfoDialog.showIfNeeded(project)
         GameLauncher.launch(project)
     }
 
@@ -830,7 +832,7 @@ object BuiltinMenuItems {
             startDir,
             "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
         )
-        val selectedPath = chosen?.result?.trim().orEmpty()
+        val selectedPath = chosen.result.trim()
         if (selectedPath.isBlank()) return
 
         val selected = VPath.get(selectedPath).expandHome().toAbsolute().normalize()

@@ -181,7 +181,9 @@ suspend fun extractAndPrepareCursePack(
             fileName = fileName,
             side = ModSide.BOTH,
             iconBytes = null,
-            checked = file.required
+            checked = file.required,
+            sourceProjectId = file.projectID.toString(),
+            sourceVersionId = file.fileID.toString()
         )
     }.toMutableList()
 

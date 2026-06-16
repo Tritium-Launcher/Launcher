@@ -62,6 +62,7 @@ data class CachedMod(
     val sha1Hash: String?,
     val fileFingerprint: Long? = null,
     val sourceProjectId: String?,
+    val sourceVersionId: String? = null,
     val sourceIconUrl: String?,
     val sourceAvailable: Boolean?,
     val sourceStatus: String?,
@@ -131,6 +132,7 @@ fun tryLoadImportCache(
             original.copy(
                 fileFingerprint = cached.fileFingerprint,
                 sourceProjectId = cached.sourceProjectId,
+                sourceVersionId = cached.sourceVersionId,
                 sourceIconUrl = cached.sourceIconUrl,
                 sourceAvailable = cached.sourceAvailable,
                 sourceStatus = cached.sourceStatus,
@@ -165,6 +167,7 @@ fun saveImportCache(instance: DetectedInstance, sourceId: String, mods: List<Imp
                 sha1Hash = m.sha1Hash,
                 fileFingerprint = m.fileFingerprint,
                 sourceProjectId = m.sourceProjectId,
+                sourceVersionId = m.sourceVersionId,
                 sourceIconUrl = m.sourceIconUrl,
                 sourceAvailable = m.sourceAvailable,
                 sourceStatus = m.sourceStatus,

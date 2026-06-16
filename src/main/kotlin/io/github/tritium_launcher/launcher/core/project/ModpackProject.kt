@@ -4,6 +4,7 @@ import io.github.tritium_launcher.launcher.*
 import io.github.tritium_launcher.launcher.accounts.MCVersion
 import io.github.tritium_launcher.launcher.accounts.MCVersionType
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
+import io.github.tritium_launcher.launcher.companion.CompanionModProvider
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectTemplateExecutor
 import io.github.tritium_launcher.launcher.core.project.templates.TemplateExecutionResult
 import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
@@ -28,7 +29,7 @@ import io.qt.gui.QPixmap
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
-import java.net.URL
+import java.net.URI
 import java.nio.file.Path
 
 /**
@@ -61,7 +62,6 @@ class ModpackProjectType : ProjectType {
         val mcVersion: String
     )
 
-    private var companionModVersion: String = ""
     private var companionModEntries: List<CompanionModEntry> = emptyList()
 
     override fun createSetupWidget(
@@ -217,7 +217,7 @@ class ModpackProjectType : ProjectType {
         form.addRow(separatorLabel)
 
         // MARK: Companion Mod checkbox
-        val companionLabel = label("Include Companion Mod:")
+        val companionLabel = label("Include Companion Mod:") { visible = false }
         val companionCheckbox = QCheckBox().apply {
             isChecked = true
             visible = false
@@ -348,35 +348,36 @@ class ModpackProjectType : ProjectType {
             return a.compareTo(b)
         }
 
-        fun updateCompanionModVisibility() {
+        fun updateCompanionModVisibility(): Boolean {
             val loaderId = modLoaderCombo.currentData as? String
             val mcVersion = mcCombo.currentData as? String
             val hasMatch = loaderId != null && mcVersion != null &&
                 companionModEntries.any { it.loader == loaderId && it.mcVersion == mcVersion }
+            companionLabel.visible = hasMatch
             companionCheckbox.visible = hasMatch
+            return hasMatch
         }
 
         fun fetchCompanionModVersions() {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val content = URL("https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/main/versions.json")
-                        .openStream().bufferedReader().use { it.readText() }
+                    val url = URI("https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/gh-pages/companion-versions.json").toURL()
+                    val content = url.openStream().bufferedReader().use { it.readText() }
                     val root = Json.parseToJsonElement(content).jsonObject
-                    val modVersion = root["modVersion"]?.jsonPrimitive?.contentOrNull ?: return@launch
-                    val supported = root["supported"]?.jsonArray ?: return@launch
-                    val entries = supported.flatMap { element ->
+                    val entries = root["entries"]?.jsonArray?.mapNotNull { element ->
                         val obj = element.jsonObject
-                        val mcVersion = obj["mcVersion"]?.jsonPrimitive?.contentOrNull ?: return@flatMap emptyList()
+                        val mcVersion = obj["mcVersion"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                         val loaders = obj["loaders"]?.jsonArray
                             ?.mapNotNull { it.jsonPrimitive.contentOrNull }
-                            ?: return@flatMap emptyList()
+                            ?: return@mapNotNull null
                         loaders.map { CompanionModEntry(loader = it, mcVersion = mcVersion) }
-                    }
-                    companionModVersion = modVersion
+                    }?.flatten() ?: emptyList()
                     companionModEntries = entries
-                    runOnGuiThread { updateCompanionModVisibility() }
+                    runOnGuiThread {
+                        companionCheckbox.visible = updateCompanionModVisibility()
+                    }
                 } catch (t: Throwable) {
-                    logger.info("Failed to fetch companion mod versions", t)
+                    logger.warn("Failed to fetch companion mod versions", t)
                 }
             }
         }
@@ -523,22 +524,8 @@ class ModpackProjectType : ProjectType {
         StandardProjectSteps.iconStep(iconPath)?.let { steps += it }
 
         val includeCompanion = vars["includeCompanionMod"]?.toBoolean() ?: false
-        if(includeCompanion && companionModVersion.isNotBlank()) {
-            val mcVer = vars["minecraftVersion"] ?: ""
-            val loaderId = vars["modLoader"] ?: ""
-            if(companionModEntries.any { it.loader == loaderId && it.mcVersion == mcVer }) {
-                val downloadUrl = "https://github.com/Tritium-Launcher/Tritium-Companion/releases/download/v${companionModVersion}/tritiumcompanion-${loaderId}-${companionModVersion}.jar"
-                val destFilename = downloadUrl.substringAfterLast('/')
-                steps += GeneratorStepDescriptor(
-                    "companion-mod",
-                    "fetch",
-                    JsonObject(mapOf(
-                        "url" to JsonPrimitive(downloadUrl),
-                        "dest" to JsonPrimitive("mods/$destFilename")
-                    )),
-                    affects = listOf("mods/$destFilename")
-                )
-            }
+        if(includeCompanion && companionModEntries.any { it.loader == loader.id && it.mcVersion == mcVer }) {
+            CompanionModProvider.installIfNeeded(projectRoot, mcVer, loader.id)
         }
 
         if(gitInit) {

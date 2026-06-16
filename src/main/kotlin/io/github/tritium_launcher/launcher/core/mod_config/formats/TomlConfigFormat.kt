@@ -81,7 +81,7 @@ class TomlConfigFormat : ConfigFormat {
                 ConfigDouble(unsignedValue.toDouble())
             }
         }
-        is TomlArray -> ConfigArray((value.content as List<Any>).map { arrayValueToConfig(it) }.toMutableList())
+        is TomlArray -> @Suppress("unchecked_cast") ConfigArray((value.content as List<Any>).map { arrayValueToConfig(it) }.toMutableList())
         is TomlNull -> ConfigNull()
         is TomlDateTime -> ConfigString(value.content.toString())
     }

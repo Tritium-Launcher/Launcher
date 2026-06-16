@@ -221,6 +221,10 @@ class CurseForge : ModSource(), Registrable {
 
     override suspend fun versions(context: ModBrowserContext, projectId: String): List<ModVersionOption> {
         logger.debug("CurseForge versions: projectId={} mc={} loader={}", projectId, context.minecraftVersion, context.modLoaderId)
+        if (projectId.isBlank() || projectId.toIntOrNull() == null) {
+            logger.warn("CurseForge versions: non-numeric projectId '{}', returning empty versions", projectId)
+            return emptyList()
+        }
         try {
             val allFiles = mutableListOf<CurseFileInfo>()
             var index = 0
@@ -329,7 +333,7 @@ class CurseForge : ModSource(), Registrable {
 
             val match = (response.data.exactMatches + response.data.partialMatches).firstOrNull() ?: return null
             val modId = match.file.modId ?: return null
-            HashProjectInfo(modId.toString(), match.file.displayName)
+            HashProjectInfo(projectId = modId.toString(), projectTitle = match.file.displayName, versionId = match.file.id.toString())
         } catch (e: ClientRequestException) {
             when (e.response.status) {
                 Unauthorized, Forbidden ->
@@ -355,7 +359,10 @@ class CurseForge : ModSource(), Registrable {
     override fun computeFileFingerprint(bytes: ByteArray): Long = curseFingerprint(bytes)
 
     override suspend fun resolveProjectInfosByFingerprints(fingerprints: List<Long>): Map<Long, HashProjectInfo> {
-        if (fingerprints.isEmpty()) return emptyMap()
+        if (fingerprints.isEmpty()) {
+            logger.debug("CurseForge batch fingerprint: no fingerprints to resolve")
+            return emptyMap()
+        }
         return try {
             val response = retryOnThrottle {
                 client.post("fingerprints/432") {
@@ -366,18 +373,31 @@ class CurseForge : ModSource(), Registrable {
                         })
                     })
                 }
-            }.let { response ->
-                if (!response.status.isSuccess()) {
-                    logger.error("CurseForge batch fingerprint lookup returned {}", response.status)
+            }.let { httpResponse ->
+                if (!httpResponse.status.isSuccess()) {
+                    logger.error("CurseForge batch fingerprint lookup returned {}", httpResponse.status)
                     return@let null
                 }
-                response.body<CurseFingerprintResponse>()
+                try {
+                    httpResponse.body<CurseFingerprintResponse>()
+                } catch (e: Exception) {
+                    logger.error("CurseForge batch fingerprint deserialization failed: {}", e.message)
+                    return@let null
+                }
             } ?: return emptyMap()
 
+            val exact = response.data.exactMatches.size
+            val partial = response.data.partialMatches.size
+            logger.debug("CurseForge batch fingerprint: {} fingerprints, {} exact, {} partial", fingerprints.size, exact, partial)
             (response.data.exactMatches + response.data.partialMatches).mapNotNull { match ->
                 val modId = match.file.modId ?: return@mapNotNull null
-                match.id to HashProjectInfo(modId.toString(), match.file.displayName)
-            }.toMap()
+                val fp = match.file.fileFingerprint ?: match.id
+                fp to HashProjectInfo(
+                    projectId = modId.toString(),
+                    projectTitle = match.file.displayName,
+                    versionId = match.file.id.toString()
+                )
+            }.toMap().also { logger.debug("CurseForge batch fingerprint resolved {} mods", it.size) }
         } catch (e: Exception) {
             logger.error("CurseForge batch fingerprint lookup failed: {}", e.message)
             emptyMap()

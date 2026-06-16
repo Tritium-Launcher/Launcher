@@ -17,12 +17,14 @@ private val searchLog = logger(ModSearchHelper::class)
  * @param iconUrl URL of the project icon, if available.
  * @param isFileMatch Whether the match came from a precise file fingerprint/hash lookup.
  * @param status Human-readable status string ("Available", "Matched by file hash", etc.).
+ * @param versionId ID of the specific matched version on the source, if known.
  */
 data class SourceMatch(
     val projectId: String,
     val iconUrl: String?,
     val isFileMatch: Boolean = true,
-    val status: String = "Available"
+    val status: String = "Available",
+    val versionId: String? = null
 )
 
 private val loaderNameToId = mapOf(
@@ -147,7 +149,7 @@ suspend fun findModOnSource(
         try {
             val fpInfo = source.resolveProjectInfoByFingerprint(mod.fileFingerprint!!)
             if (fpInfo != null) {
-                return SourceMatch(fpInfo.projectId, iconUrl = null, isFileMatch = true, status = "Available")
+                return SourceMatch(fpInfo.projectId, iconUrl = null, isFileMatch = true, status = "Available", versionId = fpInfo.versionId)
             }
         } catch (_: Exception) { }
     }
@@ -156,7 +158,7 @@ suspend fun findModOnSource(
         try {
             val hashInfo = source.resolveProjectInfoByHash(mod.sha1Hash!!)
             if (hashInfo != null) {
-                return SourceMatch(hashInfo.projectId, iconUrl = null, status = "Matched by file hash")
+                return SourceMatch(hashInfo.projectId, iconUrl = null, status = "Matched by file hash", versionId = hashInfo.versionId)
             }
         } catch (_: Exception) { }
     }
@@ -191,9 +193,9 @@ suspend fun findModOnSource(
                     )
                     if (isExact || isContains) {
                         matched = true
-                        val verified = verifyVersionOnSource(source, searchContext, context, r.id, mod)
-                        if (verified) {
-                            return SourceMatch(r.id, r.iconUrl, isFileMatch = true, status = "Available")
+                        val versionId = verifyVersionOnSource(source, searchContext, context, r.id, mod)
+                        if (versionId != null) {
+                            return SourceMatch(r.id, r.iconUrl, isFileMatch = true, status = "Available", versionId = versionId)
                         }
                         if (bestNameMatch == null || isExact) {
                             bestNameMatch = SourceMatch(r.id, r.iconUrl, isFileMatch = false, status = "Available (name match)")
@@ -216,7 +218,8 @@ suspend fun findModOnSource(
 }
 
 /**
- * Verifies whether a project on a mod source has a version compatible with a given mod.
+ * Verifies whether a project on a mod source has a version compatible with a given mod
+ * and returns the matched version's ID.
  *
  * Strategies used in order:
  * 1. **MC version + loader match** — checks if any version matches both the mod's MC version
@@ -229,7 +232,7 @@ suspend fun findModOnSource(
  * @param matchContext Context for filtering matched versions.
  * @param projectId The source project ID to check.
  * @param mod The mod being verified.
- * @return `true` if a compatible version exists.
+ * @return The matched version ID, or `null` if no compatible version exists.
  */
 suspend fun verifyVersionOnSource(
     source: ModSource,
@@ -237,14 +240,14 @@ suspend fun verifyVersionOnSource(
     matchContext: ModBrowserContext,
     projectId: String,
     mod: ImportableMod
-): Boolean {
+): String? {
     return try {
         val versions = source.versions(fetchContext, projectId)
         val mcVersion = matchContext.minecraftVersion
         val loaderId = matchContext.modLoaderId
 
         if (mcVersion != null || loaderId != null) {
-            val matched = versions.any { v ->
+            val matched = versions.firstOrNull { v ->
                 val mcMatch = mcVersion == null || v.gameVersions.any { gv ->
                     gv == mcVersion || gv.startsWith("$mcVersion.")
                 }
@@ -255,26 +258,26 @@ suspend fun verifyVersionOnSource(
                     (v.loaders.any { it.equals("quilt", ignoreCase = true) } && loaderId.equals("fabric", ignoreCase = true))
                 mcMatch && loaderMatch
             }
-            if (matched) return true
+            if (matched != null) return matched.id
         }
 
         if (mod.sha1Hash != null) {
-            val byHash = versions.any { v -> v.fileHash?.equals(mod.sha1Hash, ignoreCase = true) == true }
-            if (byHash) {
+            val byHash = versions.firstOrNull { v -> v.fileHash?.equals(mod.sha1Hash, ignoreCase = true) == true }
+            if (byHash != null) {
                 searchLog.warn("verifyVersionOnSource: projectId={} matched by SHA-1 hash", projectId)
-                return true
+                return byHash.id
             }
         }
 
         val jarName = mod.fileName.removeSuffix(".jar").lowercase()
-        val byFilename = versions.any { v ->
+        val byFilename = versions.firstOrNull { v ->
             v.fileName.equals(mod.fileName, ignoreCase = true) ||
             v.fileName?.lowercase()?.contains(jarName) == true ||
             v.label.lowercase().contains(jarName)
         }
-        if (byFilename) {
+        if (byFilename != null) {
             searchLog.warn("verifyVersionOnSource: projectId={} matched by filename '{}'", projectId, mod.fileName)
-            return true
+            return byFilename.id
         }
 
         searchLog.warn("verifyVersionOnSource: projectId={} mc={} loader={} versions={} no match. jar='{}'", projectId, mcVersion, loaderId, versions.size, mod.fileName)
@@ -292,9 +295,9 @@ suspend fun verifyVersionOnSource(
                     i, v.gameVersions, v.loaders, v.label, v.fileName, v.fileHash, mcOk, loaderOk, fnOk, hashOk)
             }
         }
-        false
+        null
     } catch (e: Exception) {
         searchLog.warn("verifyVersionOnSource: projectId={} mc={} loader={} failed: {}", projectId, matchContext.minecraftVersion, matchContext.modLoaderId, e.message)
-        false
+        null
     }
 }

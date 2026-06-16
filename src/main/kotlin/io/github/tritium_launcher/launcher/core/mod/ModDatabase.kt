@@ -42,6 +42,7 @@ data class InstalledMod(
     val installedAt: Instant? = null,
     val enabled: Boolean = true,
     val excludedFromRelease: Boolean = false,
+    val localOnly: Boolean = false,
     val requiresManualDownload: Boolean = false,
     val dependencies: List<String> = emptyList()
 )
@@ -83,6 +84,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
                 installed_at INTEGER,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 excluded_from_release INTEGER NOT NULL DEFAULT 0,
+                local_only INTEGER NOT NULL DEFAULT 0,
                 requires_manual_download INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
@@ -92,6 +94,14 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
                 //language=sql
                 """
                 ALTER TABLE installed_mods ADD COLUMN requires_manual_download INTEGER NOT NULL DEFAULT 0
+                """.trimIndent()
+            )
+        } catch (_: Exception) { }
+        try {
+            c.createStatement().execute(
+                //language=sql
+                """
+                ALTER TABLE installed_mods ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0
                 """.trimIndent()
             )
         } catch (_: Exception) { }
@@ -145,8 +155,8 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             (project_id, mod_id, file_name, display_name, side, release_type,
              source, version_id, version_label, icon_path, project_url,
              file_hash, installed_at, enabled, excluded_from_release,
-             requires_manual_download)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             local_only, requires_manual_download)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """.trimIndent()
         ).use { ps ->
             ps.setString(1, mod.projectId)
@@ -164,8 +174,12 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             if (mod.installedAt != null) ps.setLong(13, mod.installedAt.toEpochMilliseconds()) else ps.setNull(13, java.sql.Types.INTEGER)
             ps.setInt(14, if (mod.enabled) 1 else 0)
             ps.setInt(15, if (mod.excludedFromRelease) 1 else 0)
-            ps.setInt(16, if (mod.requiresManualDownload) 1 else 0)
+            ps.setInt(16, if (mod.localOnly) 1 else 0)
+            ps.setInt(17, if (mod.requiresManualDownload) 1 else 0)
             ps.executeUpdate()
+        }
+        if (mod.localOnly) {
+            removeFromRelease(mod.projectId)
         }
     }
 
@@ -307,6 +321,15 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
         }
     }
 
+    fun setLocalOnly(projectId: String, locked: Boolean) {
+        needsBackup = true
+        connection().prepareStatement("UPDATE installed_mods SET local_only = ? WHERE project_id = ?").use { ps ->
+            ps.setInt(1, if (locked) 1 else 0)
+            ps.setString(2, projectId)
+            ps.executeUpdate()
+        }
+    }
+
     fun getEnabled(): List<InstalledMod> {
         val result = mutableListOf<InstalledMod>()
         connection().createStatement().use { stmt ->
@@ -356,7 +379,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             stmt.executeQuery(
                 """SELECT m.* FROM installed_mods m
                    INNER JOIN release_mods r ON m.project_id = r.project_id
-                   WHERE m.enabled = 1
+                   WHERE m.enabled = 1 AND m.local_only = 0
                    ORDER BY m.installed_at DESC"""
             ).use { rs ->
                 while (rs.next()) result.add(rowToMod(rs))
@@ -518,6 +541,7 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             installedAt = rs.getLong("installed_at").let { if (rs.wasNull()) null else Instant.fromEpochMilliseconds(it) },
             enabled = rs.getInt("enabled") != 0,
             excludedFromRelease = rs.getInt("excluded_from_release") != 0,
+            localOnly = rs.getInt("local_only") != 0,
             requiresManualDownload = rs.getInt("requires_manual_download") != 0,
             dependencies = getDependencies(projectId),
         )

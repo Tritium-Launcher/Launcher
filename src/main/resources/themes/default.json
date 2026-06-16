@@ -105,6 +105,7 @@
     "ui/small_play": "icons/ui/small_play.svg",
     "ui/small_menu": "icons/ui/small_menu.svg",
     "ui/external_arrow": "icons/ui/external_arrow.svg",
+    "ui/companion_mod": "icons/ui/companion_mod.svg",
 
     "dashboard/new_project": "icons/dashboard/new_project.svg",
     "dashboard/folder_import": "icons/dashboard/folder_import.svg",
