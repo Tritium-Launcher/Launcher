@@ -40,6 +40,15 @@ def main() -> None:
     pkgbuild_path.write_text(text)
 
     pkgname = get_scalar('pkgname', text) or 'tritium-launcher-bin'
+    pkgver_resolved = get_scalar('pkgver', text) or version
+    pkgrel_resolved = get_scalar('pkgrel', text) or '1'
+
+    def resolve_vars(val: str) -> str:
+        subs = {'pkgname': pkgname, 'pkgver': pkgver_resolved, 'pkgrel': pkgrel_resolved}
+        for k, v in subs.items():
+            val = val.replace(f'${{{k}}}', v).replace(f'${k}', v)
+        return val
+
     lines = [
         '# Generated from PKGBUILD',
         f'pkgbase = {pkgname}',
@@ -56,12 +65,12 @@ def main() -> None:
     for var in ('arch', 'license', 'groups', 'checkdepends', 'makedepends',
                 'optdepends', 'provides', 'conflicts', 'replaces', 'depends'):
         for val in get_array(var, text):
-            lines.append(f'{var} = {val}')
+            lines.append(f'{var} = {resolve_vars(val)}')
 
     for var in ('source', 'noextract', 'md5sums', 'sha1sums', 'sha256sums',
                 'sha384sums', 'sha512sums', 'b2sums'):
         for val in get_array(var, text):
-            lines.append(f'{var} = {val}')
+            lines.append(f'{var} = {resolve_vars(val)}')
 
     srcinfo_path.write_text('\n'.join(lines) + '\n')
 
