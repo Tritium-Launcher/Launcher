@@ -1,45 +1,46 @@
-## 0.1.6
-
----
+# 0.1.6
 ### New
-* Added an Animated Scrolling effect (**Experimental**, disabled by default).
-* Added a Keymap system.
-* Added a Rust utility which generates the Item database used by the Item Browser, and sets up KubeJS Typings.
-* Added Code Completion (JS only for now).
-* Added a Mod Config Editor Pane, which supports editing the following config types:
-  * TOML
-  * JSON, JSONC, JSON5
-  * Properties
-  * Yaml
-  * Forge CFG
-* Added a Mod Browser Pane, currently supporting Modrinth. Curseforge implementation is on its way.
-* Added an Item Browser dock panel.
-* Added a ModPack detail dock panel.
-* Added a context menu for Project Files.
-* Added Project Files View Modes.
-* Added custom Tooltip backgrounds (**Experimental**, disabled by default).
-* KubeJS Extension. Provides Code Completion with dumped Typings, using FlatBuffers, with a Database as backup.
-* Added Seasonal Events.
-* Added ability to set a background image for the Project view.
-* Added Auto-save.
-* Added Rainbow Brackets (**Experimental**, disabled by default).
-* Added Extensions panel to Dashboard.
+* Added an experimental Animated Scrolling effect (disabled by default)
+* Added experimental custom Tooltip backgrounds (disabled by default)
+* Added experimental Rainbow Brackets (disabled by default)
+* Added the Keymap system
+* Added new Dock panels: Item Browser, Installed Mods, Mod Browser
+* Added Mod Config editor pane. Currently supported file types:
+    - TOML
+    - JSON, JSONC, JSON5
+    - Properties
+    - Yaml
+    - Forge CFG
+* Added Context Menu for Project Files
+* Added Tree-Sitter code completion (JavaScript only)
+* Added File Auto-Save
+* Added Extensions dashboard panel
+* Added Seasonal Events
+* Added KubeJS Extension
+* Added a Rust utility which takes Registry Objects and KubeJS Typings data dumped using the Companion Mod and assembles it for use in Tritium
+* Added CurseForge and Modrinth user accounts
+* Implemented Importing instances, from these sources:
+    - MultiMC and its derivatives
+    - Curse App
+    - GDLauncher
+    - ATLauncher
+    - CurseForge ZIP
+    - Modrinth MRPACK
+    - Existing Tritium project
 
 ### Gradle
-* Added Tree-Sitter.
-* Added extra Serialization libs for Mod Config parsing.
-* Added some args to improve performance.
+* Added Tree-Sitter
+* Added more serialization libs for Mod Config parsing
 
 ### Companion Mod
-* Improved WebSocket connections.
-* Added KubeJS Typings support.
-* Added an Item renderer which then dumps for use in Tritium's Item Browser.
+* Improved WebSocket connections
+* Added KubeJS Typings support
+* Added an Item Renderer to dump rendered BlockItem models
 
-### Other
-* General cleanup.
-* Settings View opens faster.
-* Listeners use Kotlin flows instead of array lists.
-* Added better logging handling for Qt runtime warnings.
-* Hopefully probably maybe possibly potentially fixed Icons DPR and scaling issues.
-* Fixed window state geometry getting corrupted to oblivion due to band affiliation.
-* LSPs work now, with support for JSON, XML and Python (needs some work on the installation / providing part).
+### Technical
+* General cleanup and optimizations
+* Listeners use Kotlin Flows instead of array lists
+* Added better Qt error handling
+* Several SVG icon scaling and loading issue fixes
+* Fixed window state geometry getting corrupted to oblivion due to band affiliation
+* LSPs work better now, with support for JSON, XML and Python. They are not downloaded automatically yet, the user has to install the packages.
