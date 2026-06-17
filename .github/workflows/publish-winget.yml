@@ -49,7 +49,8 @@ jobs:
           }
 
           $version = $env:TAG_NAME.TrimStart('v')
-          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$($env:TAG_NAME)/tritium-windows-x64.msi"
+          $releaseTag = "v$version"
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$releaseTag/tritium-windows-x64.msi"
           $prTitle = "Update ${{ env.WINGET_PACKAGE_IDENTIFIER }} to $version"
 
           $available = $false

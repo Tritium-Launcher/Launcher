@@ -60,8 +60,9 @@ jobs:
           fi
 
           version="${TAG_NAME#v}"
+          release_tag="v${version}"
           aur_repo_dir="$RUNNER_TEMP/aur-tritium-launcher-bin"
-          installer_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/tritium-linux-x64.tar.gz"
+          installer_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}/tritium-linux-x64.tar.gz"
 
           GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" \
             git clone ssh://aur@aur.archlinux.org/tritium-launcher-bin.git "$aur_repo_dir"
