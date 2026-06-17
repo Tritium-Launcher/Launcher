@@ -9,10 +9,10 @@ def get_scalar(var: str, src: str) -> str | None:
 
 
 def get_array(var: str, src: str) -> list[str]:
-    m = re.search(rf'^{var}=\(\s*\n((?:\s*\'[^\']*\'\s*\n)*)\s*\)', src, re.MULTILINE)
+    m = re.search(rf'^{var}=\((.*?)\)', src, re.DOTALL | re.MULTILINE)
     if not m:
         return []
-    return re.findall(r"'(.*?)'", m.group(1))
+    return [g1 if g1 else g2 for g1, g2 in re.findall(r"'(.*?)'|\"(.*?)\"", m.group(1))]
 
 
 def main() -> None:
@@ -43,6 +43,7 @@ def main() -> None:
     lines = [
         '# Generated from PKGBUILD',
         f'pkgbase = {pkgname}',
+        f'pkgname = {pkgname}',
         f'pkgver = {get_scalar("pkgver", text) or version}',
         f'pkgrel = {get_scalar("pkgrel", text) or "1"}',
     ]
