@@ -1,5 +1,6 @@
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
+import io.github.tritium_launcher.launcher.companion.CompanionModProvider
 import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.TritiumEvent
 import io.github.tritium_launcher.launcher.core.TritiumEventBus
@@ -552,6 +553,9 @@ class ModDetailPane(
         shared.versionsCache[details.id]?.firstOrNull()?.label ?: details.latestVersion
 
     private fun resolveSource(): ModSource? {
+        if (modId == CompanionModProvider.COMPANION_MOD_ID) {
+            return BuiltinRegistries.ModSource.get(CompanionModProvider.COMPANION_SOURCE)
+        }
         val sourceId = ((project as? Project<*>)?.typedMeta as? ModpackMeta)?.source
         return sourceId?.let { id -> BuiltinRegistries.ModSource.all().find { s -> s.id == id } }
     }

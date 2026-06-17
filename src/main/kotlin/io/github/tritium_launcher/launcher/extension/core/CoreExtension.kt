@@ -4,6 +4,7 @@ import io.github.tritium_launcher.launcher.accounts.CurseForgeAccount
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAccountProvider
 import io.github.tritium_launcher.launcher.accounts.ModrinthAccount
 import io.github.tritium_launcher.launcher.applyRainbowOverlay
+import io.github.tritium_launcher.launcher.companion.CompanionModSource
 import io.github.tritium_launcher.launcher.core.mod_config.ConfigFormat
 import io.github.tritium_launcher.launcher.core.modloader.Fabric
 import io.github.tritium_launcher.launcher.core.modloader.NeoForge
@@ -90,6 +91,7 @@ internal object CoreExtension : Extension {
 
             modSources.register(Modrinth())
             modSources.register(CurseForge())
+            modSources.register(CompanionModSource())
 
             projectTypes.register(ModpackProjectType())
 

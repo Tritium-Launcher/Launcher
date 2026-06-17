@@ -1,5 +1,6 @@
 package io.github.tritium_launcher.launcher.ui.project.sidebar
 
+import io.github.tritium_launcher.launcher.companion.CompanionModProvider
 import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.TritiumEvent
 import io.github.tritium_launcher.launcher.core.TritiumEventBus
@@ -170,8 +171,10 @@ class InstalledModsPanel(
                 val mod = withContext(Dispatchers.IO) {
                     ModDatabase(project.projectDir).use { db -> db.getByProjectId(projectId) }
                 }
+                val modId = if (mod?.source == CompanionModProvider.COMPANION_SOURCE)
+                    CompanionModProvider.COMPANION_MOD_ID else projectId
                 val title = mod?.displayName ?: projectId
-                onOpenDetailRequested?.invoke(projectId, title)
+                onOpenDetailRequested?.invoke(modId, title)
             }
         }
 
@@ -254,6 +257,8 @@ class InstalledModsPanel(
 
         val jarFiles = modsDirFile.listFiles { f -> f.fileName().endsWith(".jar", ignoreCase = true) }
         for (jarFile in jarFiles) {
+            val jarName = jarFile.fileName()
+            if (jarName == CompanionModProvider.COMPANION_FILE_NAME) continue
             val bytes = try { jarFile.bytesOrNothing() } catch (_: Exception) { continue }
             val hash = ModDatabase.sha1(bytes)
             if (hash in existingHashes) continue

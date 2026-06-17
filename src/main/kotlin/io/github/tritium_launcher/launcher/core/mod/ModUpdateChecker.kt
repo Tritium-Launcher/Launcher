@@ -1,5 +1,6 @@
 package io.github.tritium_launcher.launcher.core.mod
 
+import io.github.tritium_launcher.launcher.companion.CompanionModProvider
 import io.github.tritium_launcher.launcher.core.project.ModpackMeta
 import io.github.tritium_launcher.launcher.core.project.Project
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
@@ -56,24 +57,29 @@ object ModUpdateChecker {
         project: ProjectBase,
         mods: List<InstalledMod>? = null
     ): Map<String, ModVersionOption> {
-        val context = resolveContext(project) ?: return emptyMap()
-        val source = resolveSource(context) ?: return emptyMap()
+        val context = resolveContext(project)
+        val source = context?.let { resolveSource(it) }
 
         val installedMods = mods ?: withContext(Dispatchers.IO) {
-            ModDatabase(project.projectDir).use { db -> db.getBySource(source.id) }
+            if (source != null) {
+                ModDatabase(project.projectDir).use { db -> db.getBySource(source.id) }
+            } else {
+                emptyList()
+            }
         }
 
         val results = coroutineScope {
-            installedMods
-                .map { mod ->
-                    async {
-                        val update = checkMod(project, mod)
-                        if (update != null) mod.projectId to update else null
+            installedMods.map { mod ->
+                async {
+                    when {
+                        mod.source == CompanionModProvider.COMPANION_SOURCE ->
+                            CompanionModProvider.checkUpdate(mod)?.let { mod.projectId to it }
+                        source != null && mod.source == source.id ->
+                            checkMod(project, mod)?.let { mod.projectId to it }
+                        else -> null
                     }
                 }
-                .awaitAll()
-                .filterNotNull()
-                .toMap()
+            }.awaitAll().filterNotNull().toMap()
         }
 
         return results
