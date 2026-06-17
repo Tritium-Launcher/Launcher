@@ -33,7 +33,7 @@ import kotlin.math.max
 class ProjectRegistryBrowserSidePanelProvider : SidePanelProvider, SidePanelTitleBarAccessoryProvider {
     override val id: String = "registry_browser"
     override val displayName: String = "Item Browser"
-    override var icon: QIcon? = TIcons.SmallGrass.icon
+    override var icon: QIcon? = TIcons.ItemBrowser.icon
     override val order: Int = 15
     override val closeable: Boolean = false
     override val floatable: Boolean = false

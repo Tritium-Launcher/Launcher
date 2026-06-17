@@ -99,6 +99,8 @@ object TIcons {
     val SmallMenu      get() = pix("ui/small_menu", 16, 16)
     val ExternalArrow  get() = pix("ui/external_arrow", 12, 12)
 
+    val ItemBrowser    get() = pix("ui/item_browser", 16, 16)
+
     /**
      * Creates a [QPixmap] from specified Icon paths
      */
