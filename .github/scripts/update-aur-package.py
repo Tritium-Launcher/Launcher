@@ -52,7 +52,6 @@ def main() -> None:
     lines = [
         '# Generated from PKGBUILD',
         f'pkgbase = {pkgname}',
-        f'pkgname = {pkgname}',
         f'pkgver = {get_scalar("pkgver", text) or version}',
         f'pkgrel = {get_scalar("pkgrel", text) or "1"}',
     ]
@@ -72,6 +71,7 @@ def main() -> None:
         for val in get_array(var, text):
             lines.append(f'{var} = {resolve_vars(val)}')
 
+    lines.append(f'pkgname = {pkgname}')
     srcinfo_path.write_text('\n'.join(lines) + '\n')
 
 
