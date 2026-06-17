@@ -1,0 +1,75 @@
+name: Publish Winget Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.7)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  WINGET_PACKAGE_IDENTIFIER: TritiumLauncher.Tritium
+
+jobs:
+  winget:
+    name: Submit Winget Manifest
+    runs-on: windows-2025
+    steps:
+      - name: Download wingetcreate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Invoke-WebRequest "https://aka.ms/wingetcreate/latest" -OutFile "wingetcreate.exe"
+
+      - name: Submit Winget update (x64)
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          WINGET_AUTOMATION_READY: ${{ vars.WINGET_AUTOMATION_READY }}
+          TAG_NAME: ${{ github.event.inputs.tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:WINGET_TOKEN)) {
+            Write-Host "WINGET_CREATE_GITHUB_TOKEN is not set. Skipping Winget submission."
+            exit 0
+          }
+
+          if ($env:WINGET_AUTOMATION_READY -ne "true") {
+            Write-Host "WINGET_AUTOMATION_READY is not true. Skipping Winget submission."
+            exit 0
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TAG_NAME)) {
+            throw "Release tag input is empty; cannot submit Winget manifest."
+          }
+
+          $version = $env:TAG_NAME.TrimStart('v')
+          $installerUrl = "https://github.com/${{ github.repository }}/releases/download/$($env:TAG_NAME)/tritium-windows-x64.msi"
+          $prTitle = "Update ${{ env.WINGET_PACKAGE_IDENTIFIER }} to $version"
+
+          $available = $false
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $installerUrl -Method Head | Out-Null
+              $available = $true
+              break
+            } catch {
+              Start-Sleep -Seconds 15
+            }
+          }
+          if (-not $available) {
+            throw "MSI asset is not reachable at $installerUrl"
+          }
+
+          .\wingetcreate.exe update "${{ env.WINGET_PACKAGE_IDENTIFIER }}" `
+            --version "$version" `
+            --urls "$installerUrl" `
+            --submit `
+            --token "$env:WINGET_TOKEN" `
+            --prtitle "$prTitle" `
+            --no-open
