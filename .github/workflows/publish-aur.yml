@@ -76,37 +76,10 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/tritium-linux-x64.tar.gz" "$installer_url"
           tarball_sha="$(sha256sum "$RUNNER_TEMP/tritium-linux-x64.tar.gz" | awk '{print $1}')"
 
-          python3 - "$aur_repo_dir/PKGBUILD" "$version" "$tarball_sha" <<'PY'
-          from pathlib import Path
-          import re
-          import sys
-
-          pkgbuild = Path(sys.argv[1])
-          version = sys.argv[2]
-          tarball_sha = sys.argv[3]
-          text = pkgbuild.read_text()
-
-          text, version_count = re.subn(r'^pkgver=.*$', f'pkgver={version}', text, count=1, flags=re.MULTILINE)
-          if version_count != 1:
-              raise SystemExit('Failed to update pkgver in PKGBUILD')
-
-          text, sha_count = re.subn(
-              r"(sha256sums=\(\s*\n\s*')[^']+(')",
-              rf"\1{tarball_sha}\2",
-              text,
-              count=1,
-              flags=re.MULTILINE,
-          )
-          if sha_count != 1:
-              raise SystemExit('Failed to update source tarball sha256 in PKGBUILD')
-
-          pkgbuild.write_text(text)
-          PY
+          python3 .github/scripts/update-aur-package.py "$aur_repo_dir" "$version" "$tarball_sha"
 
           (
             cd "$aur_repo_dir"
-            makepkg --printsrcinfo > .SRCINFO
-
             if git diff --quiet; then
               echo "AUR package is already up to date."
               exit 0
