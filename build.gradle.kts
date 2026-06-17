@@ -180,8 +180,7 @@ val compileGrammarNative by tasks.registering {
         val cmakeEnv = mapOf("JAVA_HOME" to javaHome)
         val configure = ProcessBuilder(
             "cmake", srcDir.path,
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${cmakeBuildDir.path}"
+            "-DCMAKE_BUILD_TYPE=Release"
         )
             .directory(cmakeBuildDir)
             .inheritIO()
@@ -200,10 +199,16 @@ val compileGrammarNative by tasks.registering {
 
         val libFile = cmakeBuildDir.resolve(nativeGrammarLibName)
         if (!libFile.exists()) {
-            throw GradleException(
-                "Native grammar library was not produced at expected path: ${libFile}. " +
-                "cmake exited successfully but the output file is missing."
-            )
+            val found = cmakeBuildDir.walkTopDown().maxDepth(3).find { it.name == nativeGrammarLibName }
+            if (found != null) {
+                found.copyTo(libFile, overwrite = true)
+                logger.lifecycle("Copied native grammar library from {} to {}", found, libFile)
+            } else {
+                throw GradleException(
+                    "Native grammar library was not produced at expected path: ${libFile}. " +
+                    "Searched subdirectories up to 3 levels deep. cmake exited successfully but output is missing."
+                )
+            }
         }
     }
 }
