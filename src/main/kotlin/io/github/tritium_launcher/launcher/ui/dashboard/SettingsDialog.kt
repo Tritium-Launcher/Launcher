@@ -18,6 +18,7 @@ class SettingsDialog(parent: QWidget? = null) : QDialog(parent) {
 
     init {
         objectName = "settingsDialog"
+        setProperty("keymapFocusGroup", "settings")
         windowTitle = "Settings"
         modal = false
         resize(qs(1080, 760))
@@ -32,13 +33,14 @@ class SettingsDialog(parent: QWidget? = null) : QDialog(parent) {
         setThemedStyle {
             selector("#settingsDialog") { backgroundColor(TColors.Surface0) }
         }
+
+        view.reload()
     }
 
     /**
      * Opens the dialog and optionally focuses a settings [link].
      */
     fun open(link: SettingsLink? = null) {
-        view.reload()
         if (link != null) {
             view.openLink(link)
         }

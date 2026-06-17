@@ -1,10 +1,14 @@
 package io.github.tritium_launcher.launcher.platform
 
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.nio.file.Files
-import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Tracks a single active game process per project path scope.
@@ -13,7 +17,8 @@ object GameProcessMngr {
     private val logger = logger()
     private val lock = Any()
     private val trackedByScope = LinkedHashMap<String, TrackedProcess>()
-    private val listeners = CopyOnWriteArrayList<(GameProcessEvent) -> Unit>()
+    private val _events = MutableSharedFlow<GameProcessEvent>(replay = 0)
+    val events: SharedFlow<GameProcessEvent> = _events.asSharedFlow()
 
     enum class Source {
         Launch,
@@ -30,18 +35,17 @@ object GameProcessMngr {
         val attachedAtEpochMs: Long
     )
 
-    data class GameProcessEvent(
-        val type: Type,
-        val context: GameProcessContext,
-        val exitCode: Int? = null
-    ) {
-        enum class Type {
-            Attached,
-            Detached,
-            Exited,
-            KillRequested,
-            KillFailed
-        }
+    /**
+     * Events emitted during the lifecycle of a tracked game process.
+     */
+    sealed interface GameProcessEvent {
+        val context: GameProcessContext
+
+        data class Attached(override val context: GameProcessContext) : GameProcessEvent
+        data class Detached(override val context: GameProcessContext) : GameProcessEvent
+        data class Exited(override val context: GameProcessContext, val exitCode: Int) : GameProcessEvent
+        data class KillRequested(override val context: GameProcessContext) : GameProcessEvent
+        data class KillFailed(override val context: GameProcessContext) : GameProcessEvent
     }
 
     /**
@@ -80,7 +84,7 @@ object GameProcessMngr {
     fun detach(projectPath: VPath): Boolean {
         val scope = scopeOf(projectPath)
         val removed = synchronized(lock) { trackedByScope.remove(scope) } ?: return false
-        emit(GameProcessEvent(GameProcessEvent.Type.Detached, removed.toContext(isAttached = false)))
+        emit(GameProcessEvent.Detached(removed.toContext(isAttached = false)))
         return true
     }
 
@@ -105,7 +109,7 @@ object GameProcessMngr {
     fun killByScope(projectScope: String, force: Boolean = true): Boolean {
         val scope = projectScope.trim()
         val tracked = synchronized(lock) { trackedByScope[scope] } ?: return false
-        emit(GameProcessEvent(GameProcessEvent.Type.KillRequested, tracked.toContext()))
+        emit(GameProcessEvent.KillRequested(tracked.toContext()))
         return try {
             if (tracked.process != null) {
                 tracked.process.destroy()
@@ -123,7 +127,7 @@ object GameProcessMngr {
             }
         } catch (t: Throwable) {
             logger.warn("Failed to kill tracked game process (pid={})", tracked.handle.pid(), t)
-            emit(GameProcessEvent(GameProcessEvent.Type.KillFailed, tracked.toContext()))
+            emit(GameProcessEvent.KillFailed(tracked.toContext()))
             false
         }
     }
@@ -153,14 +157,6 @@ object GameProcessMngr {
         return synchronized(lock) { trackedByScope.values.map { it.toContext() } }
     }
 
-    /**
-     * Subscribe to process events.
-     */
-    fun addListener(listener: (GameProcessEvent) -> Unit): () -> Unit {
-        listeners += listener
-        return { listeners -= listener }
-    }
-
     private fun attachInternal(
         scope: String,
         projectName: String,
@@ -180,10 +176,10 @@ object GameProcessMngr {
 
         val displaced = synchronized(lock) { trackedByScope.put(scope, tracked) }
         if (displaced != null && displaced !== tracked) {
-            emit(GameProcessEvent(GameProcessEvent.Type.Detached, displaced.toContext(isAttached = false)))
+            emit(GameProcessEvent.Detached(displaced.toContext(isAttached = false)))
         }
 
-        emit(GameProcessEvent(GameProcessEvent.Type.Attached, tracked.toContext()))
+        emit(GameProcessEvent.Attached(tracked.toContext()))
         tracked.handle.onExit().whenComplete { _, throwable ->
             if (throwable != null) {
                 logger.debug("Game process exit watcher raised error (pid={})", tracked.handle.pid(), throwable)
@@ -206,21 +202,26 @@ object GameProcessMngr {
         }
         if (!shouldEmit) return
         emit(
-            GameProcessEvent(
-                type = GameProcessEvent.Type.Exited,
+            GameProcessEvent.Exited(
                 context = tracked.toContext(isRunning = false, isAttached = false),
-                exitCode = exitCode
+                exitCode = exitCode ?: 0
             )
         )
     }
 
     private fun emit(event: GameProcessEvent) {
-        listeners.forEach { listener ->
-            try {
-                listener(event)
-            } catch (t: Throwable) {
-                logger.warn("Game process listener failed", t)
-            }
+        _events.tryEmit(event)
+        when (event) {
+            is GameProcessEvent.Attached -> TritiumEventBus.publish(
+                TritiumEvent.GameAttached(event.context.projectScope, event.context.projectName, event.context.pid)
+            )
+            is GameProcessEvent.Detached -> TritiumEventBus.publish(
+                TritiumEvent.GameDetached(event.context.projectScope, event.context.projectName, event.context.pid)
+            )
+            is GameProcessEvent.Exited -> TritiumEventBus.publish(
+                TritiumEvent.GameExited(event.context.projectScope, event.context.projectName, event.context.pid, event.exitCode)
+            )
+            else -> {}
         }
     }
 

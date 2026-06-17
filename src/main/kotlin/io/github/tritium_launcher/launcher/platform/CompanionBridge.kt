@@ -6,13 +6,15 @@ import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.client.request.*
+import io.ktor.http.*
 import io.ktor.websocket.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.json.*
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Bridge response payload.
@@ -33,9 +35,9 @@ data class CompanionBridgeResponse(
  * Websocket client for bridge requests.
  *
  * Communication model:
- * - Opens a short-lived websocket per request.
- * - Sends a single JSON request frame.
- * - Reads one JSON response frame and closes.
+ * - Maintains a persistent websocket connection.
+ * - Dispatches incoming messages to a SharedFlow.
+ * - Correlates request/responses using unique ids.
  */
 object CompanionBridge {
     private val logger = logger()
@@ -43,6 +45,22 @@ object CompanionBridge {
     private val httpClient = HttpClient(CIO) {
         install(WebSockets)
     }
+
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var connectionJob: Job? = null
+
+    @Volatile
+    private var activeSession: DefaultClientWebSocketSession? = null
+
+    private val _events = MutableSharedFlow<CompanionBridgeResponse>(extraBufferCapacity = 64)
+
+    /**
+     * Flow of all incoming messages from the bridge (both responses and spontaneous events).
+     */
+    val events = _events.asSharedFlow()
+
+    private val responseDeferreds = ConcurrentHashMap<String, CompletableDeferred<CompanionBridgeResponse>>()
+
     @Volatile
     private var sessionToken: String? = null
 
@@ -56,7 +74,61 @@ object CompanionBridge {
     private const val AUTH_HEADER = "X-Tritium-Token"
 
     /** Active websocket endpoint. */
-    fun endpoint(): String = "ws://${CoreSettingValues.companionWsHost()}:${CoreSettingValues.companionWsPort()}/tritium"
+    fun endpoint(): String = "ws://${CoreSettingValues.companionWsHost}:${CoreSettingValues.companionWsPort()}/tritium"
+
+    /**
+     * Ensures the persistent connection is active.
+     */
+    fun ensureConnected() {
+        if (connectionJob?.isActive == true) return
+        connectionJob = scope.launch {
+            while (isActive) {
+                try {
+                    logger.info("Connecting to Companion websocket at {}...", endpoint())
+                    httpClient.webSocket(
+                        method = HttpMethod.Get,
+                        host = CoreSettingValues.companionWsHost,
+                        port = CoreSettingValues.companionWsPort(),
+                        path = "/tritium",
+                        request = {
+                            sessionToken?.let { token ->
+                                header(AUTH_HEADER, token)
+                            }
+                        }
+                    ) {
+                        activeSession = this
+                        logger.info("Companion websocket connected.")
+                        try {
+                            for (frame in incoming) {
+                                if (frame is Frame.Text) {
+                                    handleIncoming(frame.readText())
+                                }
+                            }
+                        } finally {
+                            activeSession = null
+                            logger.info("Companion websocket incoming stream closed.")
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    logger.warn("Companion websocket error, retrying in 5s: {}", t.message)
+                    activeSession = null
+                    delay(5000.milliseconds)
+                }
+            }
+        }
+    }
+
+    private fun handleIncoming(text: String) {
+        val response = parseResponse(text, "")
+        val id = response.id
+        if (id != null) {
+            val deferred = responseDeferreds.remove(id)
+            deferred?.complete(response)
+        }
+        _events.tryEmit(response)
+    }
 
     /**
      * Sets the per-session auth token used for websocket handshakes.
@@ -164,61 +236,31 @@ object CompanionBridge {
             put("payload", payload)
         }
 
-        var session: DefaultClientWebSocketSession? = null
+        ensureConnected()
+
+        val deferred = CompletableDeferred<CompanionBridgeResponse>()
+        responseDeferreds[requestId] = deferred
 
         return try {
-            session = withTimeout(effectiveTimeoutMs) {
-                httpClient.webSocketSession {
-                    url(endpoint())
-                    sessionToken?.let { token ->
-                        header(AUTH_HEADER, token)
-                    }
-                }
+            val session = activeSession ?: withTimeout(5000.milliseconds) {
+                while (activeSession == null) delay(100.milliseconds)
+                activeSession!!
             }
 
-            withTimeout(effectiveTimeoutMs) {
-                session.send(Frame.Text(requestPayload.toString()))
+            session.send(Frame.Text(requestPayload.toString()))
+
+            withTimeout(effectiveTimeoutMs.milliseconds) {
+                deferred.await()
             }
-            val rawResponse = withTimeout(effectiveTimeoutMs) {
-                readSingleTextResponse(session)
-            }
-            parseResponse(rawResponse, requestId)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-            CompanionBridgeResponse(
-                ok = false,
-                message = "Request interrupted while talking to Companion websocket: ${e.message}."
-            )
+        } catch (_: TimeoutCancellationException) {
+            responseDeferreds.remove(requestId)
+            CompanionBridgeResponse(ok = false, message = "Request timed out after ${effectiveTimeoutMs}ms")
         } catch (t: Throwable) {
+            responseDeferreds.remove(requestId)
             CompanionBridgeResponse(
                 ok = false,
-                message = "Failed to reach Companion websocket at ${endpoint()}: ${t.message ?: t::class.simpleName.orEmpty()}"
+                message = "Failed to send request: ${t.message ?: t::class.simpleName.orEmpty()}"
             )
-        } finally {
-            if (session != null) {
-                runCatching {
-                    session.close(CloseReason(CloseReason.Codes.NORMAL, "done"))
-                }
-            }
-        }
-    }
-
-    /**
-     * Reads frames until a single text response is received or the socket closes.
-     */
-    private suspend fun readSingleTextResponse(session: DefaultClientWebSocketSession): String {
-        while (true) {
-            when (val frame = session.incoming.receive()) {
-                is Frame.Text -> return frame.readText()
-                is Frame.Close -> {
-                    val reason = frame.readReason()
-                    throw IllegalStateException(
-                        "Companion websocket closed unexpectedly (${reason?.code?.toInt() ?: -1}): ${reason?.message.orEmpty()}"
-                    )
-                }
-                else -> {
-                }
-            }
         }
     }
 
@@ -233,7 +275,7 @@ object CompanionBridge {
             )
 
         val responseId = root["id"]?.jsonPrimitive?.contentOrNull
-        if (!responseId.isNullOrBlank() && responseId != expectedRequestId) {
+        if (!responseId.isNullOrBlank() && expectedRequestId.isNotBlank() && responseId != expectedRequestId) {
             logger.debug("Companion websocket response id mismatch: expected {}, received {}", expectedRequestId, responseId)
         }
 

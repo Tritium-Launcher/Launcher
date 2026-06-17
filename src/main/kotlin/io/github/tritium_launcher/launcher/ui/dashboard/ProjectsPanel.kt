@@ -3,8 +3,9 @@ package io.github.tritium_launcher.launcher.ui.dashboard
 import io.github.tritium_launcher.launcher.*
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
-import io.github.tritium_launcher.launcher.core.project.ProjectMngrListener
+import io.github.tritium_launcher.launcher.core.project.ProjectMngrEvent
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.launcher.import.ui.ImportProjectDialog
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard.Companion.bgDashboardLogger
@@ -23,10 +24,7 @@ import io.qt.gui.QIcon
 import io.qt.gui.QKeyEvent
 import io.qt.gui.QShowEvent
 import io.qt.widgets.*
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -75,7 +73,8 @@ class ProjectsPanelPrefs(private val file: VPath) {
 }
 
 /** Dashboard project list panel with pluggable styles. */
-class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
+class ProjectsPanel internal constructor(): QWidget() {
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentProjects: List<ProjectBase> = emptyList()
     private var searchFilter: String = ""
 
@@ -123,19 +122,28 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             if (refreshInFlight) refreshPending = true else refresh()
         }
 
-        ProjectMngr.addListener(this)
+        setupStyleRegistry()
         scheduleRefresh()
 
         setThemedStyle {
             selector("#projectsPanel") { backgroundColor(TColors.Surface0) }
         }
 
-        setupStyleRegistry()
+        scope.launch {
+            ProjectMngr.projectEvents.collect { event ->
+                when (event) {
+                    is ProjectMngrEvent.Created -> scheduleRefresh()
+                    is ProjectMngrEvent.FailedToGenerate -> {}
+                    is ProjectMngrEvent.Opened -> {}
+                    is ProjectMngrEvent.FinishedLoading -> {}
+                }
+            }
+        }
     }
 
     /** Stops watching and releases style resources. */
     fun exit() {
-        ProjectMngr.removeListener(this)
+        scope.cancel()
         styleInstances.values.forEach { it.dispose() }
     }
 
@@ -180,23 +188,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
         if (dvdHotkeyBuffer == "dvd") activateDvdStyle()
     }
 
-    /** Handles project creation events. */
-    override fun onProjectCreated(project: ProjectBase) { scheduleRefresh() }
-
-    /** Handles project deletion events. */
-    override fun onProjectDeleted(project: ProjectBase) { scheduleRefresh() }
-
-    /** Handles project updates. */
-    override fun onProjectUpdated(project: ProjectBase) { scheduleRefresh() }
-
-    /** Handles project load completion events. */
-    override fun onProjectsFinishedLoading(projects: List<ProjectBase>) {}
-
-    /** Handles project generation failures. */
-    override fun onProjectFailedToGenerate(project: ProjectBase, errorMsg: String, exception: Exception?) {}
-
-    /** Handles project opened events. */
-    override fun onProjectOpened(project: ProjectBase) {}
+    // ProjectMngrListener methods removed - now using projectEvents flow
 
     /**
      * Prompts for a `trproj.json` file and imports the owning project.
@@ -231,7 +223,6 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
         val projectFile = if (file.fileName() == "trproj.json") file else projectDir.resolve("trproj.json")
 
         if (!projectFile.exists()) {
-            // TODO: Add an import method for instances from other launchers
             Dashboard.logger.warn(
                 "Import skipped for '{}' because trproj.json was not found in '{}'",
                 selectedFile,
@@ -267,7 +258,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
     private fun refresh() {
         lastRefreshMs = System.currentTimeMillis()
         refreshInFlight = true
-        GlobalScope.launch(Dispatchers.IO) {
+        scope.launch(Dispatchers.IO) {
             bgDashboardLogger.info("Refreshing projects...")
             val projects = ProjectMngr.refreshProjects(ProjectMngr.RefreshSource.DASHBOARD)
             QTimer.singleShot(0) {
@@ -290,11 +281,10 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
         if (!immediate) searchDebounceTimer.stop()
     }
 
-    /** Opens a project and closes the dashboard. */
+    /** Opens a project; ProjectWindows handles dashboard visibility after success. */
     private fun openProject(project: ProjectBase) {
         if (project.typeId == ProjectMngr.INVALID_CATALOG_PROJECT_TYPE) return
         try { ProjectMngr.openProject(project) } catch (t: Throwable) { Dashboard.logger.error("Failed to open project: ${t.message}", t) }
-        Dashboard.I?.let { try { it.close() } catch (_: Throwable) {} }
     }
 
     /** Builds the top toolbar; keeps existing buttons intact. */
@@ -349,7 +339,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             icon = QIcon(TIcons.Import)
             iconSize = qs(32, 32)
-            onClicked { showImportProjectDialog() }
+            onClicked { ImportProjectDialog(this).exec() }
         }
 
         val cloneFromGit = TPushButton {

@@ -6,17 +6,35 @@
  */
 package io.github.tritium_launcher.launcher.bootstrap
 
+import io.github.tritium_launcher.launcher.appInstance
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.extension.ExtensionDirectoryLoader
 import io.github.tritium_launcher.launcher.extension.ExtensionLoader
+import io.github.tritium_launcher.launcher.extension.ExtensionStateManager
 import io.github.tritium_launcher.launcher.extension.core.CoreExtension
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.launcher.keymap.*
 import io.github.tritium_launcher.launcher.registry.RegistryMngr
 import io.github.tritium_launcher.launcher.settings.SettingsMngr
+import io.github.tritium_launcher.launcher.ui.logging.LogDialogMngr
+import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.ktor.utils.io.core.*
+import io.qt.core.Qt
+import io.qt.gui.QTextCursor
+import io.qt.widgets.QApplication
+import io.qt.widgets.QTextEdit
+import io.qt.widgets.QWidget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import org.koin.core.context.GlobalContext
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
-import org.koin.core.module.Module
 import org.koin.dsl.module
 import org.koin.logger.slf4jLogger
 
@@ -33,20 +51,22 @@ private val registryCoreModule = module {
  */
 internal fun startHost(loadExtDir: VPath): List<Closeable> {
     val core = listOf(registryCoreModule)
-    val discoveredModules = mutableListOf<Module>()
     val loaders = mutableListOf<Closeable>()
 
-    discoveredModules += ExtensionLoader.discoveredModules()
+    val discovered = ExtensionLoader.discover()
+    val dirResult = ExtensionDirectoryLoader.loadFrom(loadExtDir)
+    loaders += dirResult.loaders
 
-    val result = ExtensionDirectoryLoader.loadFrom(loadExtDir)
-    discoveredModules += result.modules
-    loaders += result.loaders
+    val allExtensions = discovered + dirResult.extensions + CoreExtension
+    ExtensionLoader.allExtensions = allExtensions
 
-    discoveredModules += CoreExtension.modules
+    val extState = ExtensionStateManager.load()
+    val enabledExtensions = allExtensions.filter { it.isBuiltin || extState.getOrDefault(it.namespace, true) }
+    val extModules = enabledExtensions.flatMap { it.modules }
 
     startKoin {
         slf4jLogger()
-        modules(core + discoveredModules)
+        modules(core + extModules)
     }
 
     val registryMngr = GlobalContext.get().get<RegistryMngr>()
@@ -61,4 +81,70 @@ internal fun startHost(loadExtDir: VPath): List<Closeable> {
 internal fun stopHost(loaders: List<Closeable> = emptyList()) {
     loaders.forEach { it.close() }
     stopKoin()
+}
+
+internal fun startSettings() {
+    fun applyKeymapOverrides(e: TritiumEvent.SettingChanged) {
+        val raw = (e.newValue as? String)?.trim().orEmpty()
+        if(raw.isBlank()) return
+        runCatching { Json.decodeFromString(
+            MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+            raw
+        ) }.onSuccess { overrides ->
+            KeymapMngr.applyOverridesFromStrings(overrides)
+        }
+    }
+
+    CoroutineScope(Dispatchers.Main).onEvent<TritiumEvent.SettingChanged> { e ->
+        when ("${e.namespace}:${e.nodeKey}") {
+            CoreSettingKeys.UiBackgroundImage.toString() -> ThemeMngr.refresh()
+            CoreSettingKeys.KeymapActionsOverview.toString() -> applyKeymapOverrides(e)
+        }
+    }
+}
+
+internal fun startKeymap() {
+     fun resolveFocusGroupFromWidgetTree(): String? {
+        var node: QWidget? = QApplication.focusWidget()
+        while (node != null) {
+            val property = node.property("keymapFocusGroup")?.toString()?.trim()
+            if (!property.isNullOrBlank()) return property
+            node = node.parentWidget()
+        }
+        return null
+    }
+
+    KeymapBootstrap.initializeDefaults()
+    ActionRegistry.register(
+        id = "logs.open_dialog",
+        label = "Open Log Viewer",
+    ) {
+        LogDialogMngr.openDialog()
+    }
+    KeymapMngr.declareDefault(
+        "logs.open_dialog",
+        KeyBinding.Single(Keystroke.ctrlShift(Qt.Key.Key_I.value()))
+    )
+    ActionRegistry.registerHandler(
+        id = "editor.start_new_line",
+        allowKeyboardShortcuts = true,
+        focusGroups = setOf("editor")
+    ) {
+        (QApplication.focusWidget() as? QTextEdit)?.let { edit ->
+            val cursor = edit.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfLine)
+            edit.setTextCursor(cursor)
+            edit.insertPlainText("\n")
+        }
+    }
+    KeymapMngr.declareDefault(
+        "editor.start_new_line",
+        KeyBinding.Single(Keystroke(Qt.Key.Key_Return.value(), Qt.KeyboardModifier.ShiftModifier.value()))
+    )
+    val keymapDispatcher = KeymapDispatcher(ActionRegistry)
+    appInstance?.installEventFilter(keymapDispatcher)
+    KeymapFocusMngr.registerResolver("qt.focus_widget") {
+        resolveFocusGroupFromWidgetTree()
+    }
+    KeymapMngr.initWithPersistence()
 }

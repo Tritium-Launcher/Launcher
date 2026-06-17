@@ -12,14 +12,14 @@ import kotlinx.serialization.json.*
 object ModpackTemplateDescriptor : TemplateDescriptor<ModpackMeta>, ProjectFileLoader {
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
-    override val typeId: String = "modpack"
+    override val typeId: String = "source"
     override val serializer = ModpackMeta.serializer()
     override val projectName: String = "Modpack"
     override val defaultIcon: String = TIcons.defaultProjectIcon
     override val currentSchema: Int = 1
 
     /**
-     * Create a typed project from modpack metadata.
+     * Create a typed project from source metadata.
      */
     override fun createProjectFromMeta(meta: ModpackMeta, schemaVersion: Int, projectDir: VPath): ProjectBase {
         val rawMeta: JsonObject = json.encodeToJsonElement(serializer, meta).jsonObject

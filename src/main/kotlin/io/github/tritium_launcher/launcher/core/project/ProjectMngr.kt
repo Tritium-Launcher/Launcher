@@ -1,6 +1,8 @@
 package io.github.tritium_launcher.launcher.core.project
 
 import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
 import io.github.tritium_launcher.launcher.core.project.templates.MigrationRegistry
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectFileLoader
 import io.github.tritium_launcher.launcher.core.project.templates.TemplateDescriptor
@@ -14,6 +16,7 @@ import io.github.tritium_launcher.launcher.ui.project.ProjectWindows
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.qt.widgets.QApplication
 import io.qt.widgets.QMessageBox
+import kotlinx.coroutines.flow.*
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -22,8 +25,17 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import java.io.IOException
 import java.nio.file.Files
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.prefs.Preferences
+
+/**
+ * Events emitted by [ProjectMngr].
+ */
+sealed class ProjectMngrEvent {
+    data class Created(val project: ProjectBase) : ProjectMngrEvent()
+    data class FailedToGenerate(val project: ProjectBase, val errorMsg: String, val exception: Exception?) : ProjectMngrEvent()
+    data class Opened(val project: ProjectBase) : ProjectMngrEvent()
+    data class FinishedLoading(val projects: List<ProjectBase>) : ProjectMngrEvent()
+}
 
 /**
  * Central manager for loading and tracking cataloged projects on disk.
@@ -38,16 +50,19 @@ object ProjectMngr {
     private val logger = logger()
     @Volatile var generationActive: Boolean = false
 
-    private val listeners = CopyOnWriteArrayList<ProjectMngrListener>()
+    private val _activeProject = MutableStateFlow<ProjectBase?>(null)
+    val activeProjectFlow: StateFlow<ProjectBase?> = _activeProject.asStateFlow()
+    val activeProject: ProjectBase?
+        get() = _activeProject.value
+
+    private val _projectEvents = MutableSharedFlow<ProjectMngrEvent>(replay = 0)
+    val projectEvents: SharedFlow<ProjectMngrEvent> = _projectEvents.asSharedFlow()
 
     private val _projectsLock = Any()
     private val _projects = mutableListOf<ProjectBase>()
     val projects: List<ProjectBase>
         get() = synchronized(_projectsLock) { _projects.toList() }
 
-    @Volatile
-    var activeProject: ProjectBase? = null
-        private set
     val projectsDir = fromTR(TConstants.Dirs.PROJECTS)
     private val catalogFile = fromTR(VPath.get("projects/catalog.json")).toAbsolute()
 
@@ -68,27 +83,23 @@ object ProjectMngr {
         val projects: List<String> = emptyList()
     )
 
-    /**
-     * Register a listener for project events.
-     */
-    fun addListener(listener: ProjectMngrListener) { listeners.add(listener) }
-    /**
-     * Unregister a listener.
-     */
-    fun removeListener(listener: ProjectMngrListener) { listeners.remove(listener) }
-
     private fun notifyProjectCreated(project: ProjectBase) {
-        listeners.forEach { it.onProjectCreated(project) }
+        _projectEvents.tryEmit(ProjectMngrEvent.Created(project))
+        TritiumEventBus.publish(TritiumEvent.ProjectCreated(project))
     }
     private fun notifyProjectFailedToGenerate(project: ProjectBase, errorMsg: String, exception: Exception?) {
-        listeners.forEach { it.onProjectFailedToGenerate(project, errorMsg, exception) }
+        _projectEvents.tryEmit(ProjectMngrEvent.FailedToGenerate(project, errorMsg, exception))
+        TritiumEventBus.publish(TritiumEvent.ProjectFailedToGenerate(project, errorMsg))
     }
     private fun notifyProjectOpened(project: ProjectBase) {
-        listeners.forEach { it.onProjectOpened(project) }
+        _activeProject.value = project
+        _projectEvents.tryEmit(ProjectMngrEvent.Opened(project))
+        TritiumEventBus.publish(TritiumEvent.ProjectOpened(project))
     }
     private fun notifyFinishedLoading() {
         val snapshot = synchronized(_projectsLock) { _projects.toList() }
-        listeners.forEach { it.onProjectsFinishedLoading(snapshot) }
+        _projectEvents.tryEmit(ProjectMngrEvent.FinishedLoading(snapshot))
+        TritiumEventBus.publish(TritiumEvent.ProjectFinishedLoading(snapshot))
     }
 
     private fun loadProjectFromDir(dir: VPath): ProjectBase? {
@@ -103,7 +114,7 @@ object ProjectMngr {
         val schemaVersion = trMeta.schemaVersion
         val metaElem = trMeta.meta.jsonObjectOrEmpty()
 
-        val descriptor = TemplateRegistry.get(typeId)
+        val descriptor = resolveTemplateDescriptor(typeId)
         if(descriptor is ProjectFileLoader) {
             return try {
                 descriptor.loadFromProjectFile(trMeta, dir)
@@ -145,6 +156,17 @@ object ProjectMngr {
     fun loadProject(dir: VPath): ProjectBase? = loadProjectFromDir(dir)
 
     private fun JsonElement.jsonObjectOrEmpty(): JsonObject = (this as? JsonObject) ?: JsonObject(emptyMap())
+
+    /**
+     * Resolves a project template descriptor.
+     */
+    private fun resolveTemplateDescriptor(typeId: String): TemplateDescriptor<*>? {
+        TemplateRegistry.get(typeId)?.let { return it }
+        return when (typeId) {
+            "modpack" -> TemplateRegistry.get(ModpackTemplateDescriptor.typeId)
+            else -> null
+        }
+    }
 
     /** Converts a path into a stable absolute catalog key. */
     private fun normalizeCatalogPath(path: VPath): String {
@@ -356,9 +378,9 @@ object ProjectMngr {
             _projects.removeAll { normalizeCatalogPath(it.projectDir) == normalized }
         }
 
-        val currentActive = activeProject
+        val currentActive = _activeProject.value
         if (currentActive != null && normalizeCatalogPath(currentActive.projectDir) == normalized) {
-            activeProject = null
+            _activeProject.value = null
         }
         return true
     }
@@ -462,13 +484,14 @@ object ProjectMngr {
      * Open a project in the UI and mark it as active.
      */
     fun openProject(project: ProjectBase) {
-        logger.info("Loading project {}", project.name)
         addProjectToCatalog(project.projectDir, project.name)
         val previousActive = activeProject
-        val openMode = resolveOpenMode(project) ?: return
+        val openMode = resolveOpenMode(project) ?: run {
+            return
+        }
+
         val wasDifferent = previousActive !== project
-        activeProject = project
-        val closeDashboard = CoreSettingValues.closeDashboardOnProjectOpen() && wasDifferent
+        val closeDashboard = CoreSettingValues.closeDashboardOnProjectOpen && wasDifferent
 
         try {
             ProjectWindows.openProject(
@@ -477,7 +500,7 @@ object ProjectMngr {
                 mode = openMode
             )
         } catch (e: Exception) {
-            logger.debug("Failed to open project", e)
+            logger.error("ProjectWindows.openProject failed for '{}'", project.name, e)
         }
 
         notifyProjectOpened(project)
@@ -531,17 +554,24 @@ object ProjectMngr {
     }
 
     private fun resolveOpenMode(project: ProjectBase): ProjectWindows.OpenMode? {
-        val existing = ProjectWindows.anyOpenWindow() ?: return ProjectWindows.OpenMode.NEW_WINDOW
+        val existing = ProjectWindows.anyOpenWindow() ?: run {
+            return ProjectWindows.OpenMode.NEW_WINDOW
+        }
+
         val targetCanonical = project.path.toString().trim()
         if (existing.projectCanonicalPath() == targetCanonical) {
             return ProjectWindows.OpenMode.NEW_WINDOW
         }
 
-        return when (CoreSettingValues.projectOpenPromptMode()) {
+        val promptMode = CoreSettingValues.projectOpenPromptMode
+        return when (promptMode) {
             CoreSettingValues.ProjectOpenPromptMode.Always -> promptOpenMode(project)
-            CoreSettingValues.ProjectOpenPromptMode.Never -> when (CoreSettingValues.projectOpenDefaultTarget()) {
-                CoreSettingValues.ProjectOpenDefaultTarget.Current -> ProjectWindows.OpenMode.CURRENT_WINDOW
-                CoreSettingValues.ProjectOpenDefaultTarget.New -> ProjectWindows.OpenMode.NEW_WINDOW
+            CoreSettingValues.ProjectOpenPromptMode.Never -> {
+                val defaultTarget = CoreSettingValues.projectOpenDefaultTarget
+                when (defaultTarget) {
+                    CoreSettingValues.ProjectOpenDefaultTarget.Current -> ProjectWindows.OpenMode.CURRENT_WINDOW
+                    CoreSettingValues.ProjectOpenDefaultTarget.New -> ProjectWindows.OpenMode.NEW_WINDOW
+                }
             }
         }
     }

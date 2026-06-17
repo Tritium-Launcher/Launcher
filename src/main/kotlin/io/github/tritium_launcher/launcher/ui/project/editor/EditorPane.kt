@@ -2,19 +2,33 @@ package io.github.tritium_launcher.launcher.ui.project.editor
 
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.io.VPath
+import io.qt.gui.QIcon
 import io.qt.widgets.QWidget
 
 /**
  * Extendable impl for Editor Panes, which could be for editing text, menus, or other kinds of widgets.
  * A secondary class implementing [EditorPaneProvider] is necessary for registration.
- * @see TextEditorPane
- * @see io.github.tritium_launcher.launcher.ui.project.editor.pane.ImageViewerPane
+ * @see io.github.tritium_launcher.launcher.ui.project.editor.panes.TextEditorPane
+ * @see io.github.tritium_launcher.launcher.ui.project.editor.panes.ImageViewerPane
  * @see EditorArea
  */
 abstract class EditorPane(
     val project: ProjectBase,
-    val file: VPath
+    val file: VPath? = null
 ) {
+    open val allowAutoSave: Boolean = true
+
+    var modified: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                onModifiedChanged?.invoke(value)
+            }
+        }
+
+    var onModifiedChanged: ((Boolean) -> Unit)? = null
+    var onTitleChanged: ((String) -> Unit)? = null
+    var onIconChanged: ((QIcon?) -> Unit)? = null
 
     abstract fun widget(): QWidget
 

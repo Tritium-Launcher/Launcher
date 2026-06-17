@@ -5,10 +5,14 @@ import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxLanguage
+import kotlinx.coroutines.*
 import org.eclipse.lsp4j.*
 import org.eclipse.lsp4j.launch.LSPLauncher
 import org.eclipse.lsp4j.services.LanguageServer
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Manages one LSP connection per project/language pair.
@@ -18,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object LSPMngr {
     private val connections = ConcurrentHashMap<Pair<ProjectBase, String>, LSPConnection>()
-    private val refCounts = ConcurrentHashMap<Pair<ProjectBase, String>, java.util.concurrent.atomic.AtomicInteger>()
+    private val refCounts = ConcurrentHashMap<Pair<ProjectBase, String>, AtomicInteger>()
     private val logger = logger()
 
     /**
@@ -32,10 +36,19 @@ object LSPMngr {
         val cmd = resolveCmd(lang) ?: return null
 
         val key = project to lang.id
-        val connection = connections.computeIfAbsent(key) {
-            LSPConnection(project, lang.id, cmd).apply { start() }
+        val connection = connections.compute(key) { _, existing ->
+            if(existing == null || existing.isClosed || existing.ready.isCompletedExceptionally) {
+                existing?.stop()
+                LSPConnection(project, lang.id, cmd) { failed ->
+                    connections.remove(key, failed)
+                    refCounts.remove(key)
+                }.apply { start() }
+            } else {
+                existing
+            }
         }
-        refCounts.computeIfAbsent(key) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+        if(connection == null) return null
+        refCounts.computeIfAbsent(key) { AtomicInteger(0) }.incrementAndGet()
         return connection
     }
 
@@ -54,26 +67,32 @@ object LSPMngr {
     }
 
     private fun resolveCmd(lang: SyntaxLanguage): List<String>? {
-        val options = lang.lspCmds ?: lang.lspCmd?.let { listOf(it) }
-        if(options == null) {
-            logger.info("LSP disabled for '{}' (no lspCmd configured)", lang.id)
+        val lsp = lang.lsp
+        if(lsp == null) {
+            logger.info("LSP disabled for '{}' (no lsp definition)", lang.id)
             return null
         }
 
-        for(option in options) {
-            val exe = option.firstOrNull() ?: continue
-            if(isExecutableOnPath(exe)) {
-                if(options.size > 1) {
-                    logger.info("LSP for '{}' selected cmd={}", lang.id, option.joinToString(" "))
-                }
-                return option
+        for (server in lsp.servers) {
+            // 1. Check if the server is on PATH
+            val exe = server.command.firstOrNull() ?: continue
+            if (isExecutableOnPath(exe)) {
+                logger.info("LSP for '{}' selected server='{}' from PATH", lang.id, server.id)
+                return server.command
+            }
+
+            // 2. Check if the server is installed in Tritium's lsps directory
+            val installedBinary = LSPInstaller.getBinaryPath(lang, server)
+            if (installedBinary != null && installedBinary.exists() && installedBinary.toJFile().canExecute()) {
+                logger.info("LSP for '{}' selected server='{}' from local install", lang.id, server.id)
+                return listOf(installedBinary.toString())
             }
         }
 
         logger.warn(
             "No LSP executable found for '{}' (tried: {})",
             lang.id,
-            options.joinToString(" | ") { it.joinToString(" ") }
+            lsp.servers.joinToString(", ") { it.id }
         )
         return null
     }
@@ -97,11 +116,21 @@ object LSPMngr {
  * The [ready] future completes after initialize/initialized handshake finishes.
  * Editors should wait for it before sending didOpen/didChange.
  */
-class LSPConnection(val project: ProjectBase, val langId: String, val cmd: List<String>) {
+class LSPConnection(
+    val project: ProjectBase,
+    val langId: String,
+    val cmd: List<String>,
+    private val onFailedStart: ((LSPConnection) -> Unit)? = null
+) {
     private var process: Process? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var watcherJob: Job? = null
     lateinit var server: LanguageServer
     val client = TritiumLanguageClient()
-    val ready = java.util.concurrent.CompletableFuture<Unit>()
+    val ready = CompletableFuture<Unit>()
+    @Volatile var isClosed: Boolean = false
+        private set
+    var semanticTokensLegend: SemanticTokensLegend? = null
 
     private val logger = logger()
 
@@ -115,8 +144,21 @@ class LSPConnection(val project: ProjectBase, val langId: String, val cmd: List<
                 .directory(project.projectDir.toJFile())
             process = pb.start()
 
+            // Watch for unexpected process exit so adapters can check isClosed
+            val proc = process!!
+            watcherJob = scope.launch {
+                try {
+                    val exitCode = runInterruptible { proc.waitFor() }
+                    if (!isClosed) {
+                        logger.info("LSP '{}' process exited unexpectedly (code {})", langId, exitCode)
+                        isClosed = true
+                    }
+                } catch (_: InterruptedException) {
+                }
+            }
+
             val launcher = LSPLauncher.createClientLauncher(
-                client, process!!.inputStream, process!!.outputStream
+                client, proc.inputStream, proc.outputStream
             )
             launcher.startListening()
             server = launcher.remoteProxy
@@ -137,19 +179,38 @@ class LSPConnection(val project: ProjectBase, val langId: String, val cmd: List<
                         completion = CompletionCapabilities()
                         hover = HoverCapabilities()
                         publishDiagnostics = PublishDiagnosticsCapabilities()
+
+                        semanticTokens = SemanticTokensCapabilities(
+                            SemanticTokensClientCapabilitiesRequests(
+                                SemanticTokensClientCapabilitiesRequestsFull(false),
+                                false
+                            ),
+                            tokenTypesList,
+                            tokenModifiersList,
+                            listOf(TokenFormat.Relative)
+                        )
                     }
                 }
             }
-            server.initialize(params).thenRun {
+
+            server.initialize(params).thenAccept { result ->
+                if(isClosed) return@thenAccept
+
+                semanticTokensLegend = result.capabilities?.semanticTokensProvider?.legend
+
                 server.initialized(InitializedParams())
                 ready.complete(Unit)
             }.exceptionally { t ->
+                onFailedStart?.invoke(this)
                 ready.completeExceptionally(t)
+                stop()
                 null
             }
         } catch (t: Throwable) {
             logger.error("Failed to start Language Server for '{}'", langId, t)
+            onFailedStart?.invoke(this)
             ready.completeExceptionally(t)
+            stop()
         }
     }
 
@@ -157,12 +218,71 @@ class LSPConnection(val project: ProjectBase, val langId: String, val cmd: List<
      * Stops the underlying server process.
      */
     fun stop() {
+        if(isClosed) {
+            return
+        }
+        isClosed = true
+        watcherJob?.cancel()
+        scope.cancel()
         try {
-            server.shutdown().thenRun { server.exit() }
+            val shutdown = if(this::server.isInitialized) {
+                server.shutdown()
+            } else {
+                CompletableFuture.completedFuture(null)
+            }
+            shutdown.orTimeout(2, TimeUnit.SECONDS).whenComplete { _, _ ->
+                try {
+                    if(this::server.isInitialized) {
+                        server.exit()
+                    }
+                } catch (t: Throwable) {
+                    logger.warn("LSP exit failed for '{}'", langId, t)
+                } finally {
+                    process?.destroy()
+                }
+            }
         } catch (t: Throwable) {
             logger.warn("LSP shutdown failed for '{}'", langId, t)
-        } finally {
             process?.destroy()
         }
     }
 }
+
+private val tokenTypesList = listOf(
+    SemanticTokenTypes.Namespace,
+    SemanticTokenTypes.Type,
+    SemanticTokenTypes.Class,
+    SemanticTokenTypes.Enum,
+    SemanticTokenTypes.Interface,
+    SemanticTokenTypes.Struct,
+    SemanticTokenTypes.TypeParameter,
+    SemanticTokenTypes.Parameter,
+    SemanticTokenTypes.Variable,
+    SemanticTokenTypes.Property,
+    SemanticTokenTypes.EnumMember,
+    SemanticTokenTypes.Event,
+    SemanticTokenTypes.Function,
+    SemanticTokenTypes.Method,
+    SemanticTokenTypes.Macro,
+    SemanticTokenTypes.Keyword,
+    SemanticTokenTypes.Modifier,
+    SemanticTokenTypes.Comment,
+    SemanticTokenTypes.String,
+    SemanticTokenTypes.Number,
+    SemanticTokenTypes.Regexp,
+    SemanticTokenTypes.Operator,
+    SemanticTokenTypes.Decorator
+)
+
+private val tokenModifiersList = listOf(
+    SemanticTokenModifiers.Declaration,
+    SemanticTokenModifiers.Definition,
+    SemanticTokenModifiers.Readonly,
+    SemanticTokenModifiers.Static,
+    SemanticTokenModifiers.Deprecated,
+    SemanticTokenModifiers.Abstract,
+    SemanticTokenModifiers.Async,
+    SemanticTokenModifiers.Modification,
+    SemanticTokenModifiers.Documentation,
+    SemanticTokenModifiers.DefaultLibrary
+)

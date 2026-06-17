@@ -14,6 +14,10 @@ import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.QSizePolicy
 import io.qt.widgets.QWidget
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Minecraft-styled on/off switch widget.
@@ -120,6 +124,9 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
 
     override fun sizeHint(): QSize = qs(DEFAULT_WIDTH, DEFAULT_HEIGHT)
 
+    /**
+     * Toggle States
+     */
     private enum class State(val key: String) {
         Off("off"),
         On("on"),
@@ -128,6 +135,7 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
     }
 
     companion object {
+        private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
         private const val SPRITE_WIDTH = 20
         private const val SPRITE_HEIGHT = 12
         private const val DEFAULT_WIDTH = 40
@@ -136,13 +144,18 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
         private var skin = buildSkin()
 
         init {
-            ThemeMngr.addListener {
-                val prev = skin
-                skin = buildSkin()
-                prev.clearCache(disposePixmaps = true)
+            scope.launch {
+                ThemeMngr.currentThemeId.collect {
+                    val prev = skin
+                    skin = buildSkin()
+                    prev.clearCache(disposePixmaps = true)
+                }
             }
         }
 
+        /**
+         * Build sprites
+         */
         private fun buildSkin() = pixelSkin {
             pixelSize = 1
 
@@ -189,7 +202,6 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
             }
         }
 
-        // Exact ON sprite shape from provided reference.
         private val ON_ROWS = arrayOf(
             "00000000011111111111",
             "00000000012222222221",
@@ -205,7 +217,6 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
             "11111111111111111111"
         )
 
-        // Exact OFF sprite shape from provided reference.
         private val OFF_ROWS = arrayOf(
             "00000000000111111111",
             "02222222220333333333",
@@ -275,6 +286,9 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
             '7' to "disabledShadow"
         )
 
+        /**
+         * Create Sprite runs
+         */
         private fun compileRuns(rows: Array<String>): List<HorizontalRun> {
             val runs = ArrayList<HorizontalRun>(rows.size * 8)
             rows.forEachIndexed { y, row ->
@@ -295,7 +309,10 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
             }
             return runs
         }
-        
+
+        /**
+         * Draw Sprite runs from provided values
+         */
         private fun PixelDrawScope.drawSpriteRuns(
             runs: List<HorizontalRun>,
             symbolColors: Map<Char, String>

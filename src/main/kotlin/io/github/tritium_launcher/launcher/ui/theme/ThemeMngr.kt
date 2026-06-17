@@ -8,23 +8,38 @@ import io.github.tritium_launcher.launcher.io.watch
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr.generateSchema
 import io.qt.core.QByteArray
 import io.qt.core.QRectF
+import io.qt.core.QSize
 import io.qt.core.Qt
-import io.qt.gui.*
-import io.qt.svg.QSvgRenderer
+import io.qt.gui.QColor
+import io.qt.gui.QIcon
+import io.qt.gui.QPalette
+import io.qt.gui.QPixmap
 import io.qt.widgets.QApplication
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.descriptors.*
 import kotlinx.serialization.json.*
+import java.awt.RenderingHints.KEY_INTERPOLATION
+import java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+import java.awt.image.BufferedImage
+import java.awt.image.BufferedImage.TYPE_INT_ARGB
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.jar.JarFile
 import java.util.prefs.Preferences
+import javax.imageio.ImageIO
+import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.math.ceil
+import kotlin.math.min
 import kotlin.text.Charsets.UTF_8
 
 /**
@@ -34,11 +49,10 @@ import kotlin.text.Charsets.UTF_8
  * and provides icon/color lookup helpers for UI components.
  */
 object ThemeMngr {
-    private val listeners = CopyOnWriteArrayList<() -> Unit>()
-
-    @Volatile
-    var currentThemeId: String = ""
-        private set
+    private val _currentThemeId = MutableStateFlow("")
+    val currentThemeId: StateFlow<String> = _currentThemeId.asStateFlow()
+    val currentThemeIdValue: String
+        get() = _currentThemeId.value
 
     private val themes = mutableMapOf<String, ThemeFile>()
     private val bundledThemes = mutableMapOf<String, ThemeFile>()
@@ -50,7 +64,13 @@ object ThemeMngr {
     private val schemaFile: VPath = userThemesDir.resolve("schema.json")
     private var themeWatcher: VPathWatcher? = null
 
-    private val iconCache = ConcurrentHashMap<Quadruple<String, String, Int, Int>, QIcon>()
+    private const val MAX_CACHE_ENTRIES = 500
+    private val iconCache: MutableMap<Quadruple<String, String, Int, Int>, QPixmap> = Collections.synchronizedMap(
+        object : LinkedHashMap<Quadruple<String, String, Int, Int>, QPixmap>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Quadruple<String, String, Int, Int>, QPixmap>): Boolean =
+                size > MAX_CACHE_ENTRIES
+        }
+    )
 
 
     // TODO: Eventually move this to whatever the main Settings system will be
@@ -60,6 +80,17 @@ object ThemeMngr {
     private val json = Json { prettyPrint = true }
     internal val logger = logger()
 
+    /**
+     * Initialize the Theme Manager.
+     *
+     * Steps:
+     * - Load Default theme.
+     * - Load Bundled themes.
+     * - Load User themes.
+     * - Restore selected theme. If blank, sets active Theme as default theme.
+     * - Generate Theme JSON schema, if enabled.
+     * - Start watching User Themes directory
+     */
     fun init() {
         logger.info("Initializing Theme Manager...")
         try {
@@ -70,7 +101,7 @@ object ThemeMngr {
             loadUserThemes()
             restorePersistedSelectionIfAny()
 
-            if (currentThemeId.isBlank()) {
+            if (_currentThemeId.value.isBlank()) {
                 val chosen = when {
                     themes.containsKey(defaultTheme.meta.id) -> defaultTheme.meta.id
                     themes.isNotEmpty() -> themes.keys.first()
@@ -96,9 +127,9 @@ object ThemeMngr {
         }
     }
 
-    fun addListener(l: () -> Unit) = listeners.add(l)
-    fun removeListener(l: () -> Unit) = listeners.remove(l)
-
+    /**
+     * Loads Default theme
+     */
     fun loadDefault() {
         val resStream: InputStream = this::class.java.getResourceAsStream("/themes/default.json")
             ?: throw IllegalStateException("Missing bundled default theme at /themes/default.json")
@@ -117,6 +148,9 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Load User Themes
+     */
     private fun loadUserThemes() {
         try {
             val defaultId = defaultTheme.meta.id
@@ -161,6 +195,9 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Load Themes bundled with install
+     */
     private fun loadBundledThemes() {
         val pref = "themes/"
         val clazz = this::class.java
@@ -247,24 +284,29 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Sets active Theme
+     */
     fun setTheme(id: String) {
         val theme = themes[id] ?: run {
             logger.error("Requested theme '{}' not found", id)
             defaultTheme
         }
-        iconCache.clear()
-        currentThemeId = theme.meta.id
-        applyTheme(theme)
-        persistSelectedThemeId(currentThemeId)
-
-        val snapshot = ArrayList(listeners)
-        runOnGuiThread {
-            for(l in snapshot) {
-                try { l() } catch (t: Throwable) { logger.warn("Theme listener failed: {}", t.message) }
+        val oldId = _currentThemeId.value
+        if (oldId.isNotBlank()) {
+            synchronized(iconCache) {
+                iconCache.keys.removeIf { it.second == oldId }
             }
         }
+        _currentThemeId.value = theme.meta.id
+        applyTheme(theme)
+        persistSelectedThemeId(theme.meta.id)
+        loadThemeIcons()
     }
 
+    /**
+     * Applies Theme to UI
+     */
     private fun applyTheme(theme: ThemeFile) {
         runOnGuiThread {
             applyPalette(theme)
@@ -272,6 +314,9 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Applies Theme values to [QPalette]
+     */
     private fun applyPalette(theme: ThemeFile) {
         val base = QApplication.palette()
         val pal = QPalette(base)
@@ -343,6 +388,9 @@ object ThemeMngr {
         QApplication.setPalette(pal)
     }
 
+    /**
+     * Apply Theme values to Stylesheets
+     */
     private fun applyStylesheets(theme: ThemeFile) {
         try {
             val fallback = defaultForType(theme.meta.type) ?: defaultTheme
@@ -360,8 +408,14 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Get Colors from specified Theme
+     */
     private fun colorOf(theme: ThemeFile, key: String): String? = theme.colors[key]
 
+    /**
+     * Gets Hex values from Theme colors
+     */
     private fun resolveColorHex(theme: ThemeFile, fallback: ThemeFile, key: String, hardFallback: String): String {
         return colorOf(theme, key)
             ?: fallback.colors[key]
@@ -369,6 +423,9 @@ object ThemeMngr {
             ?: hardFallback
     }
 
+    /**
+     * Builds a global stylesheet for some Widgets
+     */
     private fun buildBaseWidgetStylesheet(theme: ThemeFile, fallback: ThemeFile): String {
         val surface1 = resolveColorHex(theme, fallback, "Surface1", "#303030")
         val text = resolveColorHex(theme, fallback, "Text", "#F5F5F5")
@@ -406,6 +463,9 @@ object ThemeMngr {
         """.trimIndent()
     }
 
+    /**
+     * Get a [QColor] from a Theme, using the color's key
+     */
     private fun resolveColor(theme: ThemeFile, key: String): QColor? {
         val fallback = defaultForType(theme.meta.type) ?: defaultTheme
         val hex = colorOf(theme, key) ?: fallback.colors[key] ?: defaultTheme.colors[key]
@@ -414,6 +474,9 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Create a "disabled" Color
+     */
     private fun disabledColor(color: QColor, type: ThemeType): QColor {
         val c = QColor(color)
         val alpha = (c.alpha() * 0.6).toInt().coerceAtLeast(30)
@@ -424,8 +487,11 @@ object ThemeMngr {
         }
     }
 
-    fun getIcon(iconKey: String, width: Int? = null, height: Int? = null, dpr: Double = 1.0): QIcon? {
-        val theme = themes[currentThemeId] ?: defaultTheme
+    /**
+     * Get an Icon from active Theme
+     */
+    fun getPixmap(iconKey: String, width: Int? = null, height: Int? = null, dpr: Double = 1.0): QPixmap? {
+        val theme = themes[_currentThemeId.value] ?: defaultTheme
         val mapping = theme.icons[iconKey] ?: return null
 
         val baseW = width ?: 16
@@ -435,13 +501,21 @@ object ThemeMngr {
         val h = ceil(baseH * dpr).toInt().coerceAtLeast(1)
 
         val cacheKey = Quadruple(mapping, theme.meta.id, w, h)
-        return iconCache[cacheKey] ?: loadIconFromReference(mapping, theme, baseW, baseH, dpr)?.also {
-            iconCache[cacheKey] = it
-        }
+        iconCache[cacheKey]?.let { return it }
+        val pix = loadIconFromReference(mapping, theme, w, h, dpr) ?: return null
+        iconCache[cacheKey] = pix
+        return pix
     }
 
+    fun getIcon(iconKey: String, width: Int? = null, height: Int? = null, dpr: Double = 1.0): QIcon? {
+        return getPixmap(iconKey, width, height, dpr)?.let { QIcon(it) }
+    }
+
+    /**
+     * Get Color hex value from active Theme, using color key
+     */
     fun getColorHex(key: String): String? {
-        val active = themes[currentThemeId] ?: themes.values.firstOrNull() ?: defaultTheme
+        val active = themes[_currentThemeId.value] ?: themes.values.firstOrNull() ?: defaultTheme
         val fromActive = active.colors[key]
         if(!fromActive.isNullOrBlank()) return fromActive
         val typeFallback = defaultForType(active.meta.type)
@@ -451,11 +525,17 @@ object ThemeMngr {
         return fromDefault?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Gets a [ThemeFile] depending on provided [ThemeType]
+     */
     private fun defaultForType(type: ThemeType): ThemeFile? = when(type) {
         ThemeType.Dark -> defaultTheme
         ThemeType.Light -> defaultLightTheme ?: defaultTheme
     }
 
+    /**
+     * Get [QColor] from active Theme, using color key
+     */
     fun getQColor(key: String): QColor? {
         val hex = getColorHex(key) ?: return null
         return try {
@@ -466,10 +546,11 @@ object ThemeMngr {
         }
     }
 
-    private fun loadIconFromReference(ref: String, theme: ThemeFile, baseW: Int, baseH: Int, dpr: Double = 1.0): QIcon? {
+    /**
+     * Loads an Icon from a provided Theme
+     */
+    private fun loadIconFromReference(ref: String, theme: ThemeFile, physW: Int, physH: Int, dpr: Double = 1.0): QPixmap? {
         try {
-            val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
-            val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
 
             val tried = mutableListOf<String>()
             val candidates = mutableListOf<InputStream?>()
@@ -606,18 +687,53 @@ object ThemeMngr {
                     }
                 }
 
-                val renderer = QSvgRenderer(QByteArray(svgText.toByteArray(UTF_8)))
+                val doc = DocumentBuilderFactory.newInstance()
+                    .newDocumentBuilder()
+                    .parse(svgText.byteInputStream())
+                val svgEl = doc.documentElement
 
-                val pix = QPixmap(physW, physH)
-                pix.fill(Qt.GlobalColor.transparent)
-                val painter = QPainter(pix)
-                try {
-                    renderer.render(painter, QRectF(0.0, 0.0, physW.toDouble(), physH.toDouble()))
-                } finally {
-                    painter.end()
+                val nW = svgEl.getAttribute("width").toIntOrNull()  ?: 16
+                val nH = svgEl.getAttribute("height").toIntOrNull() ?: 16
+
+                val img = BufferedImage(nW, nH, TYPE_INT_ARGB)
+
+                val rects = doc.getElementsByTagName("rect")
+                for(i in 0 until rects.length) {
+                    val rect = rects.item(i) as org.w3c.dom.Element
+                    val x = rect.getAttribute("x").toIntOrNull() ?: continue
+                    val y = rect.getAttribute("y").toIntOrNull() ?: continue
+                    val w = rect.getAttribute("width").toIntOrNull() ?: continue
+                    val h = rect.getAttribute("height").toIntOrNull() ?: continue
+                    val fill = rect.getAttribute("fill").takeIf { it.isNotBlank() && it != "none" } ?: continue
+                    val color = try { java.awt.Color.decode(fill) } catch (_: Exception) { continue }
+
+                    val alpha = rect.getAttribute("fill-opacity").toFloatOrNull()
+                        ?: rect.getAttribute("opacity").toFloatOrNull()
+                        ?: 1f
+                    val argb = (((alpha * 255).toInt() and 0xFF) shl 24) or
+                            ((color.red and 0xFF) shl 16) or
+                            ((color.green and 0xFF) shl 8) or
+                            (color.blue and 0xFF)
+
+                    for (py in y until (y + h)) {
+                        for (px in x until (x + w)) {
+                            if (px < nW && py < nH) img.setRGB(px, py, argb)
+                        }
+                    }
                 }
 
-                return QIcon(pix)
+                val scaledImg = BufferedImage(physW, physH, TYPE_INT_ARGB)
+                val g2 = scaledImg.createGraphics()
+                g2.setRenderingHint(KEY_INTERPOLATION, VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+                g2.drawImage(img, 0, 0, physW, physH, null)
+                g2.dispose()
+
+                val baos = ByteArrayOutputStream()
+                ImageIO.write(scaledImg, "PNG", baos)
+                val pix = QPixmap()
+                pix.loadFromData(QByteArray(baos.toByteArray()))
+                pix.setDevicePixelRatio(dpr)
+                return pix
             } else {
                 val pix = QPixmap()
                 val loaded = pix.loadFromData(raw)
@@ -628,8 +744,9 @@ object ThemeMngr {
                 val finalPix = if(physW > 0 && physH > 0) {
                     pix.scaled(qs(physW, physH), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                 } else pix
+                try { finalPix.setDevicePixelRatio(dpr) } catch (_: Throwable) {}
 
-                return QIcon(finalPix)
+                return finalPix
             }
         } catch (e: Exception) {
             logger.error("Failed to load icon reference '$ref': ${e.message}")
@@ -637,6 +754,23 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Makes a Rect for Icons to fill
+     */
+    private fun fitRect(sourceSize: QSize, targetW: Int, targetH: Int): QRectF {
+        val srcW = sourceSize.width().takeIf { it > 0 } ?: targetW
+        val srcH = sourceSize.height().takeIf { it > 0 } ?: targetH
+        val scale = min(targetW.toDouble() / srcW.toDouble(), targetH.toDouble() / srcH.toDouble())
+        val drawW = srcW * scale
+        val drawH = srcH * scale
+        val x = (targetW - drawW) / 2.0
+        val y = (targetH - drawH) / 2.0
+        return QRectF(x, y, drawW, drawH)
+    }
+
+    /**
+     * Start a thread for the user themes directory watcher
+     */
     private fun startWatcherThread() {
         try { themeWatcher?.close() } catch (_: Exception) {}
         themeWatcher = try {
@@ -657,7 +791,6 @@ object ThemeMngr {
                                 themes[theme.meta.id] = ThemeLoader.merge(base, theme)
 
                                 logger.info("Loaded user theme '${theme.meta.id}' from '$fileName'")
-                                listeners.forEach { it() }
                             } catch (e: Exception) {
                                 logger.error("Exception loading created theme '$fileName'", e)
                             }
@@ -674,7 +807,6 @@ object ThemeMngr {
                                 themes[theme.meta.id] = ThemeLoader.merge(base, theme)
 
                                 logger.info("Loaded user theme from '$fileName': '${theme.meta.id}'")
-                                listeners.forEach { it() }
                             } catch (e: Exception) {
                                 logger.error("Error loading created theme '$fileName'", e)
                             }
@@ -694,13 +826,10 @@ object ThemeMngr {
                                         logger.info("User theme removed, no bundled fallback removed. '$removedId'")
                                     }
 
-                                    if(removedId == currentThemeId) {
+                                    if(removedId == _currentThemeId.value) {
                                         val toApply = themes[removedId] ?: defaultForType(removedType ?: ThemeType.Dark) ?: defaultTheme
                                         applyTheme(toApply)
-                                        currentThemeId = toApply.meta.id
-                                        listeners.forEach { it() }
-                                    } else {
-                                        listeners.forEach { it() }
+                                        _currentThemeId.value = toApply.meta.id
                                     }
                                 }
                             } catch (e: Exception) {
@@ -713,7 +842,6 @@ object ThemeMngr {
 
                             try {
                                 loadUserThemes()
-                                listeners.forEach { it() }
                             } catch (e: Exception) {
                                 logger.error("Failed to rescan themes after overflow", e)
                             }
@@ -729,6 +857,9 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Validate provided [ThemeFile]
+     */
     private fun validateTheme(theme: ThemeFile) {
         val id = theme.meta.id
         val name = theme.meta.name
@@ -736,6 +867,9 @@ object ThemeMngr {
         if (name.isBlank()) throw IllegalArgumentException("Theme meta.name must not be blank")
     }
 
+    /**
+     * Generate a JSON Schema
+     */
     private fun generateSchema(condition: Boolean) {
         if (!condition) return
         try {
@@ -795,6 +929,11 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Build Descriptor properties for JSON Schema
+     *
+     * @see generateSchema
+     */
     private fun buildPropertiesForDescriptor(descriptor: SerialDescriptor): JsonObject {
         val properties = mutableMapOf<String, JsonElement>()
         for (i in 0 until descriptor.elementsCount) {
@@ -805,6 +944,9 @@ object ThemeMngr {
         return JsonObject(properties)
     }
 
+    /**
+     * Creates a [JsonElement] for theme schema
+     */
     @OptIn(ExperimentalSerializationApi::class)
     private fun schemaForDescriptor(descriptor: SerialDescriptor): JsonElement {
         return when (val kind = descriptor.kind) {
@@ -873,11 +1015,43 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * Gather all available Theme IDs
+     */
+    fun loadThemeIcons(sizes: List<Int> = listOf(16, 32), dpr: Double = 1.0) {
+        Thread {
+            val theme = themes[_currentThemeId.value] ?: return@Thread
+            for (key in theme.icons.keys) {
+                for (size in sizes) {
+                    getPixmap(key, size, size, dpr)
+                }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
     fun availableThemeIds(): List<String> = themes.keys.toList()
 
+    /**
+     * Triggers theme re-application by emitting the current theme again.
+     */
+    fun refresh() {
+        val theme = themes[_currentThemeId.value] ?: defaultTheme
+        applyTheme(theme)
+    }
+
+    /**
+     * Get Theme name for ID
+     */
     fun getThemeName(id: String): String? = themes[id]?.meta?.name
+
+    /**
+     * Get [ThemeType] for ID
+     */
     fun getThemeType(id: String): ThemeType? = themes[id]?.meta?.type
 
+    /**
+     * Gets a color hex value from provided theme ID and color key
+     */
     fun getThemeColorHex(id: String, key: String): String? {
         val theme = themes[id] ?: return null
         val fallback = defaultForType(theme.meta.type) ?: defaultTheme
@@ -886,6 +1060,9 @@ object ThemeMngr {
             ?: defaultTheme.colors[key]
     }
 
+    /**
+     * TODO: Replace prefs system
+     */
     private fun persistSelectedThemeId(id: String) {
         try {
             prefs.put(PREF_SELECTED_THEME, id)
@@ -896,6 +1073,9 @@ object ThemeMngr {
         }
     }
 
+    /**
+     * TODO: Replace prefs system
+     */
     private fun loadPersistedThemeId(): String? = try {
         prefs.get(PREF_SELECTED_THEME, null)
     } catch (e: Exception) {
@@ -903,6 +1083,9 @@ object ThemeMngr {
         null
     }
 
+    /**
+     * TODO: Replace prefs system
+     */
     private fun restorePersistedSelectionIfAny() {
         val persisted = loadPersistedThemeId()
         if(!persisted.isNullOrBlank() && themes.containsKey(persisted)) {

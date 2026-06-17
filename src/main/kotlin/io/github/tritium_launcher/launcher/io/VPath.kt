@@ -2,6 +2,7 @@ package io.github.tritium_launcher.launcher.io
 
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.matches
+import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.userHome
 import io.qt.core.QUrl
 import kotlinx.coroutines.withContext
@@ -12,6 +13,7 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import java.awt.Desktop
 import java.io.*
 import java.net.URI
 import java.nio.charset.Charset
@@ -275,6 +277,8 @@ data class VPath(
      */
     fun bytesOrNull(): ByteArray? = try {
         Files.readAllBytes(toJPath())
+    } catch (_: NoSuchFileException) {
+        null
     } catch (e: Exception) {
         logger.warn("Exception reading bytes for path '$this'", e)
         null
@@ -453,6 +457,24 @@ data class VPath(
     } catch (e: Exception) {
         logger.warn("Exception deleting file / directory at path '$this'", e)
         false
+    }
+
+    /**
+     * Move this file to the OS recycling bin / trash.
+     * Uses [java.awt.Desktop.moveToTrash]; falls back to [delete] if trash is not supported.
+     * @return true if the file was moved to trash (or deleted in fallback), false otherwise.
+     */
+    fun moveToTrash(): Boolean {
+        val file = toJFile()
+        if (!file.exists()) return false
+
+        try {
+            Desktop.getDesktop().moveToTrash(file)
+        } catch (e: Exception) {
+            logger.error("Exception when moving $this to trash, using fallback method.", e)
+        }
+
+        return Platform.linuxTrash(this)
     }
 
     /**
@@ -674,6 +696,23 @@ data class VPath(
 
     operator fun div(other: VPath): VPath = this.resolve(other)
     operator fun div(other: String): VPath = this.resolve(parse(other))
+
+    /**
+     * Append a suffix to the filename of this path.
+     * E.g. VPath("file") + ".txt" -> VPath("file.txt")
+     */
+    operator fun plus(suffix: String): VPath {
+        if (segments.isEmpty()) return this
+        val last = segments.last()
+        val newSegments = segments.toMutableList()
+        newSegments[newSegments.size - 1] = last + suffix
+        return VPath(root, newSegments)
+    }
+
+    /**
+     * Returns true if this path is a parent of (or equal to) [other].
+     */
+    operator fun contains(other: VPath): Boolean = other.startsWith(this)
 
     companion object {
 

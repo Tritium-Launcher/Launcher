@@ -1,30 +1,20 @@
 package io.github.tritium_launcher.launcher.ui.theme
 
 import io.github.tritium_launcher.launcher.currentDpr
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.referenceWidget
-import io.qt.core.Qt
-import io.qt.gui.QIcon
+import io.github.tritium_launcher.launcher.ui.theme.TIcons.pix
 import io.qt.gui.QPixmap
-import io.qt.widgets.QWidget
 import java.io.File
 import java.nio.file.Files
-import java.util.concurrent.ConcurrentHashMap
-import kotlin.math.ceil
+
 
 /**
  * Default icons used throughout Tritium, including get methods.
  */
 object TIcons {
-    private val cached = ConcurrentHashMap<String, QIcon>()
-
-    init {
-        ThemeMngr.addListener {
-            cached.clear()
-        }
-    }
 
     val Tritium get() = pix("ui/tritium", 16, 16)
+    val TritiumGrayscale get() = pix("ui/tritium_grayscale", 16, 16)
 
     /* File Icons */
     val File       get() = pix("file/file", 16, 16)
@@ -59,31 +49,47 @@ object TIcons {
     val Schematic   get() = pix("file/schematic", 16, 16)
     val NBT         get() = pix("file/nbt", 16, 16)
 
-    // Menu Icons
-    val CurseForge get() = pix("ui/curseforge")
-    val Modrinth   get() = pix("ui/modrinth")
+    /* Menu Icons */
 
-    val Fabric get() = pix("ui/fabric")
-    val NeoForge get() = pix("ui/neoforge")
+    val CurseForge get() = pix("ui/curseforge", 16, 16)
+    val Modrinth   get() = pix("ui/modrinth", 64, 64)
 
-    val QuestionMark get() = pix("ui/question")
+    /** Key constants for account service icons — pass to [pix] with a target size. */
+    const val CURSEFORGE = "ui/curseforge"
+    const val MODRINTH = "ui/modrinth"
+    const val MICROSOFT = "dashboard/microsoft"
+
+    val Fabric   get() = pix("ui/fabric", 16, 16)
+    val NeoForge get() = pix("ui/neoforge", 16, 16)
+
+    val Prism    get() = pix("ui/prism_launcher", 16, 16)
+    val GDL      get() = pix("ui/gd_launcher", 16, 16)
+    val ATL      get() = pix("ui/at_launcher", 16, 16)
+    val CFPack   get() = pix("ui/curseforge_pack", 16, 16)
+    val MRPack   get() = pix("ui/modrinth_pack", 16, 16)
+
+    val QuestionMark get() = pix("ui/question", 16, 16)
+    val Unknown      get() = pix("ui/unknown_question", 16, 16)
+
+    internal val Companion get() = pix("ui/companion_mod", 16, 16)
 
     val NewProject  get() = pix("dashboard/new_project", 32, 32)
     val Import      get() = pix("dashboard/folder_import", 32, 32)
     val Git         get() = pix("dashboard/git", 32, 32)
     val Search      get() = pix("dashboard/search", 32, 32)
-    val ListView    get() = pix("dashboard/list_view")
-    val GridView    get() = pix("dashboard/grid_view")
-    val CompactView get() = pix("dashboard/compact_view")
-    val Microsoft   get() = pix("dashboard/microsoft", 32, 32)
+    val ListView    get() = pix("dashboard/list_view", 16, 16)
+    val GridView    get() = pix("dashboard/grid_view", 16, 16)
+    val CompactView get() = pix("dashboard/compact_view", 16, 16)
+    val Microsoft   get() = pix("dashboard/microsoft", 64, 64)
     val SmallGrass  get() = pix("dashboard/tiny_grass", 32, 32)
 
-    val Build      get() = pix("menu/build", 16, 16)
-    val Run        get() = pix("menu/run", 16, 16)
-    val Rerun      get() = pix("menu/rerun", 16, 16)
-    val Stop       get() = pix("menu/stop", 16, 16)
-    val ForceStop  get() = pix("menu/force_stop", 16, 16)
-    val Download   get() = pix("menu/download", 16, 16)
+    val Build      get() = pix("menu/build", 12, 12)
+    val Run        get() = pix("menu/run", 12, 12)
+    val Rerun      get() = pix("menu/rerun", 12, 12)
+    val Stop       get() = pix("menu/stop", 12, 12)
+    val ForceStop  get() = pix("menu/force_stop", 12, 12)
+    val Download   get() = pix("menu/download", 12, 12)
+    val Settings   get() = pix("menu/settings", 12, 12)
 
     val Cross          get() = pix("ui/cross", 16, 16)
     val SmallCross     get() = pix("ui/small_cross", 16, 16)
@@ -91,73 +97,40 @@ object TIcons {
     val SmallPause     get() = pix("ui/small_pause", 16, 16)
     val SmallPlay      get() = pix("ui/small_play", 16, 16)
     val SmallMenu      get() = pix("ui/small_menu", 16, 16)
+    val ExternalArrow  get() = pix("ui/external_arrow", 12, 12)
 
-    private fun icon(keyOrPath: String, width: Int? = null, height: Int? = null): QIcon {
-        val dpr = try {
-            currentDpr(referenceWidget)
-        } catch (_: Throwable) { 1.0 }
+    /**
+     * Creates a [QPixmap] from specified Icon paths
+     */
+    private fun pix(keyOrPath: String, width: Int, height: Int, useDpr: Boolean = true): QPixmap {
+        val dpr = if (useDpr) {
+            try { currentDpr(referenceWidget) } catch (_: Throwable) { 1.0 }
+        } else 1.0
 
-        val baseW = width ?: 16
-        val baseH = height ?: baseW
-
-        val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
-        val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
-
-        val dprKey = String.format("%.3f", dpr)
-        val cacheKey = "$keyOrPath|${baseW}x${baseH}|${physW}x${physH}@$dprKey"
-
-        return cached.computeIfAbsent(cacheKey) {
-            ThemeMngr.getIcon(keyOrPath, baseW, baseH, dpr)
-                ?: run {
-                    val normalized = if(keyOrPath.startsWith("/")) keyOrPath else "/$keyOrPath"
-                    val url = this::class.java.getResource(normalized) ?: this::class.java.classLoader.getResource(keyOrPath)
-                    if(url != null) {
-                        val pix = QPixmap(url.toString())
-                        if(!pix.isNull) {
-                            val scaled = pix.scaled(qs(physW, physH), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                            try { scaled.setDevicePixelRatio(dpr) } catch (_: Throwable) {}
-                            QIcon(scaled)
-                        } else QIcon()
-                    } else QIcon()
-                }
-        }
+        return ThemeMngr.getPixmap(keyOrPath, width, height, dpr) ?: QPixmap()
     }
 
-    private fun pix(keyOrPath: String, width: Int = 16, height: Int = 16, useDpr: Boolean = true): QPixmap {
-        if(!useDpr) {
-            val icon = ThemeMngr.getIcon(keyOrPath, width, height, 1.0) ?: return QPixmap()
-            return icon.pixmap(width, height)
-        }
+    fun pixForKey(key: String, width: Int, height: Int) = pix(key, width, height)
 
-        val dpr = try {
-            currentDpr(referenceWidget)
-        } catch (_: Throwable) { 1.0 }
-
-        val icon = ThemeMngr.getIcon(keyOrPath, width, height, dpr) ?: return QPixmap()
-
-        return icon.pixmap(width, height)
+    /** Render a themed icon at the exact target [size] (square). */
+    fun pix(key: String, size: Int): QPixmap {
+        val dpr = try { currentDpr(referenceWidget) } catch (_: Throwable) { 1.0 }
+        return ThemeMngr.getPixmap(key, size, size, dpr) ?: QPixmap()
     }
 
-    fun debugIcon(keyOrPath: String, baseW: Int, baseH: Int, widget: QWidget?) {
-        val dpr = try { currentDpr(widget) } catch (_: Throwable) { 1.0 }
-        val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
-        val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
-        println("DEBUG ICON: key=$keyOrPath dpr=$dpr base=${baseW}x$baseH phys=${physW}x${physH}")
-
-        val ic = ThemeMngr.getIcon(keyOrPath, baseW, baseH, dpr)
-        println("  ThemeMngr.getIcon -> ${if (ic == null) "null" else "icon (isNull=${ic.isNull})"}")
-        ic?.let {
-            val pm = it.pixmap(baseW, baseH)
-            println("  icon.pixmap(logical) -> isNull=${pm.isNull} size=${pm.width()}x${pm.height()} dpr=${try { pm.devicePixelRatio() } catch(_: Throwable) { "?" }}")
-        }
-    }
-
+    /**
+     * When generating a Project without specifying an Icon, use a generic icon
+     * TODO: Get rid of this for a better system
+     */
     internal val defaultProjectIcon: String by lazy {
         resolveFileResource("/icons/folder.png")
             ?: renderFolderIconToTempPng()
             ?: ""
     }
 
+    /**
+     * Gets a file from bundled resources
+     */
     private fun resolveFileResource(path: String): String? {
         val url = javaClass.getResource(path) ?: return null
         return try {
@@ -167,9 +140,12 @@ object TIcons {
         }
     }
 
+    /**
+     * Temporary icon for rendering
+     */
     private fun renderFolderIconToTempPng(): String? {
         return try {
-            val pix = ThemeMngr.getIcon("file/folder", 16, 16, 1.0)?.pixmap(16, 16)
+            val pix = ThemeMngr.getPixmap("file/folder", 16, 16, 1.0)
             if(pix == null || pix.isNull) {
                 null
             } else {
@@ -182,3 +158,7 @@ object TIcons {
         }
     }
 }
+
+typealias IconKey = String
+
+fun IconKey.icon(size: Int): QPixmap = TIcons.pix(this, size)

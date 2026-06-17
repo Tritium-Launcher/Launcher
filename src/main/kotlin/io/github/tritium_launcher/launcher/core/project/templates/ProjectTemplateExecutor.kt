@@ -24,12 +24,14 @@ object ProjectTemplateExecutor {
      * @param projectRoot Root directory for generated files.
      * @param variables Variables available to steps.
      * @param steps Generator step descriptors to run in order.
+     * @param onStep Optional callback invoked before each step, with (stepId, index, total).
      */
     suspend fun run(
         templateId: String,
         projectRoot: Path,
         variables: Map<String, String>,
-        steps: List<GeneratorStepDescriptor>
+        steps: List<GeneratorStepDescriptor>,
+        onStep: (suspend (stepId: String, index: Int, total: Int) -> Unit)? = null
     ): TemplateExecutionResult = withContext(Dispatchers.IO) {
         val start = Instant.now()
         val ctx = GeneratorContext(
@@ -40,7 +42,8 @@ object ProjectTemplateExecutor {
             snapshotDir = projectRoot.resolve(".tr/snapshots")
         )
         val results = mutableListOf<StepExecutionResult>()
-        for (desc in steps) {
+        for ((i, desc) in steps.withIndex()) {
+            onStep?.invoke(desc.id, i, steps.size)
             val step = StepRegistry.create(desc)
             logger.info("Executing template step {} type={}", desc.id, desc.type)
             val res = step.execute(ctx)

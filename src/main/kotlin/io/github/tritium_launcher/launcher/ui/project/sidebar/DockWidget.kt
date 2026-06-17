@@ -4,7 +4,9 @@ import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
 import io.qt.widgets.QDockWidget
 import io.qt.widgets.QMainWindow
-import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 
 /**
  * Used in [io.github.tritium_launcher.launcher.ui.project.ProjectViewWindow] to display content in pop-out panes.
@@ -18,13 +20,11 @@ open class DockWidget(title: String, parent: QMainWindow?): QDockWidget(title, p
         get() = property("dockIndex") as? Int ?: 0
         set(value) {
             setProperty("dockIndex", value)
-            onIndexChangedListeners.forEach { it(value) }
+            _indexChanges.tryEmit(value)
         }
 
-    private val onIndexChangedListeners = CopyOnWriteArrayList<(Int) -> Unit>()
-
-    fun addOnIndexChanged(listener: (Int) -> Unit) { onIndexChangedListeners.add(listener) }
-    fun removeOnIndexChanged(listener: (Int) -> Unit) { onIndexChangedListeners.remove(listener) }
+    private val _indexChanges = MutableSharedFlow<Int>(replay = 0)
+    val indexChanges: SharedFlow<Int> = _indexChanges.asSharedFlow()
 
     fun applyIcon(icon: QIcon?) { if(icon != null) windowIcon = icon }
     fun applyIcon(icon: QPixmap?) { if(icon != null) windowIcon = QIcon(icon) }

@@ -2,6 +2,8 @@ package io.github.tritium_launcher.launcher.ui.project.editor.syntax.builtin
 
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.matches
+import io.github.tritium_launcher.launcher.ui.project.editor.syntax.LSPDefinition
+import io.github.tritium_launcher.launcher.ui.project.editor.syntax.LSPServerDefinition
 import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxLanguage
 import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxRule
 
@@ -10,30 +12,35 @@ class XmlLanguage : SyntaxLanguage {
     override val displayName: String = "XML"
 
     override val rules: List<SyntaxRule> = listOf(
-
-        // Doctype
-        SyntaxRule(Regex("<!DOCTYPE(?:.|\\R)*?>", RegexOption.DOT_MATCHES_ALL), "Keyword"),
-
-        // Processing Instructions (e.g., <?xml ... ?>)
-        SyntaxRule(Regex("<\\?.*?\\?>", RegexOption.DOT_MATCHES_ALL), "Keyword"),
-
-        // Tag names
-        SyntaxRule(Regex("</?[A-Za-z_][\\w:.-]*"), "Keyword"),
-
-        // Attributes
-        SyntaxRule(Regex("\\b[A-Za-z_][\\w:.-]*(?=\\s*=)"), "Key"),
-
-        // Entities
-        SyntaxRule(Regex("&(?:[A-Za-z_][\\w:.-]*|#\\d+|#x[0-9A-Fa-f]+);"), "Keyword"),
-
-        // String Values
-        SyntaxRule(Regex("\"(?:[^\"<&]|&[^;]+;)*\"|'(?:[^'<&]|&[^;]+;)*'"), "String"),
-
+        // CDATA blocks — before everything else so nothing matches inside them
+        SyntaxRule(Regex("<!\\[CDATA\\[.*?]]>", RegexOption.DOT_MATCHES_ALL), "String"),
         // Comments
-        SyntaxRule(Regex("<!--(?:.|\\R)*?-->", RegexOption.DOT_MATCHES_ALL), "Comment"),
+        SyntaxRule(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "Comment"),
+        // DOCTYPE declaration
+        SyntaxRule(Regex("<!DOCTYPE[^>]*>"), "Keyword"),
+        // Processing instructions
+        SyntaxRule(Regex("<\\?.*?\\?>", RegexOption.DOT_MATCHES_ALL), "Keyword"),
+        // Attribute values
+        SyntaxRule(Regex("\"[^\"]*\"|'[^']*'"), "String"),
+        // Attribute names
+        SyntaxRule(Regex("\\b([\\w:.-]+)(?=\\s*=)"), "Attribute"),
+        // Closing tags
+        SyntaxRule(Regex("</[\\w:.-]+>"), "Tag"),
+        // Opening/void tags — just the tag name portion
+        SyntaxRule(Regex("<[\\w:.-]+"), "Tag"),
+        // Punctuation: < > / = ?
+        SyntaxRule(Regex("[<>/=?!]"), "Punctuation"),
+        // Entity references
+        SyntaxRule(Regex("&(?:#\\d+|#x[0-9a-fA-F]+|[\\w:.-]+);"), "Constant"),
+    )
 
-        // CDATA
-        SyntaxRule(Regex("<!\\[CDATA\\[(?:.|\\R)*?]]>", RegexOption.DOT_MATCHES_ALL), "String")
+    override val lsp: LSPDefinition = LSPDefinition(
+        servers = listOf(
+            LSPServerDefinition(
+                id = "lemminx",
+                command = listOf("lemminx")
+            )
+        )
     )
 
     override fun matches(file: VPath): Boolean = file.extension().matches("xml", "svg", "svgs", "xhtml", "xsd")

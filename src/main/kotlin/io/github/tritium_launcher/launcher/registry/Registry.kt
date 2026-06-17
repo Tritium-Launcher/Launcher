@@ -5,7 +5,9 @@ import io.github.tritium_launcher.launcher.registry.exceptions.DuplicateRegistra
 import io.github.tritium_launcher.launcher.registry.exceptions.InvalidIdException
 import io.github.tritium_launcher.launcher.registry.exceptions.RegistryFrozenException
 import io.ktor.util.collections.*
-import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.reflect.KClass
@@ -14,9 +16,16 @@ private val LOCAL_ID = Regex("^[a-z0-9_.-]+$")
 private val NAMESPACED_ID = Regex("^[a-z0-9_.-]+:[a-z0-9_.-]+$")
 
 /**
+ * Events emitted by [Registry].
+ */
+sealed class RegistryEvent<T: Registrable> {
+    data class Registered<T: Registrable>(val fullId: String, val entry: T) : RegistryEvent<T>()
+}
+
+/**
  * Namespaced registry for extension-provided entries.
  *
- * Entries are keyed by a local [Registrable.id] and namespaced with the registering
+ * Entries are keyed by a local [Registrable.id] and namespace with the registering
  * extension id. Registries can be frozen to prevent further changes once startup
  * completes.
  */
@@ -27,8 +36,10 @@ class Registry<T: Registrable>(
 ) {
 
     private val entries = ConcurrentMap<String, T>()
-    private val listeners = CopyOnWriteArrayList<RegistryListener<T>>()
+    private val _events = MutableSharedFlow<RegistryEvent<T>>(replay = 0)
+    val events: SharedFlow<RegistryEvent<T>> = _events.asSharedFlow()
     private val frozen = AtomicBoolean(false)
+    private var cachedAll: List<T>? = null
 
     val isFrozen: Boolean get() = frozen.load()
 
@@ -55,7 +66,7 @@ class Registry<T: Registrable>(
         validateNamespacedId(namespacedId)
         val prev = entries.putIfAbsent(entry.id, entry)
         if(prev != null) throw DuplicateRegistrationException("Duplicate id '${entry.id}' in registry '$name'")
-        listeners.forEach { it.onRegister(namespacedId, entry) }
+        _events.tryEmit(RegistryEvent.Registered(namespacedId, entry))
     }
 
     /**
@@ -70,7 +81,7 @@ class Registry<T: Registrable>(
             validateNamespacedId(namespacedId)
             val prev = entries.putIfAbsent(entry.id, entry)
             if (prev != null) throw DuplicateRegistrationException("Duplicate id '${entry.id}' in registry '$name'")
-            listeners.forEach { it.onRegister(namespacedId, entry) }
+            _events.tryEmit(RegistryEvent.Registered(namespacedId, entry))
         }
     }
 
@@ -83,24 +94,19 @@ class Registry<T: Registrable>(
         val namespacedId = "${extId.trim()}:${entry.id}"
         validateNamespacedId(namespacedId)
         entries[entry.id] = entry
-        listeners.forEach { it.onRegister(namespacedId, entry) }
+        _events.tryEmit(RegistryEvent.Registered(namespacedId, entry))
     }
 
     fun get(id: String): T? = entries[id]
     fun require(id: String): T = get(id) ?: throw NoSuchElementException("No entry '$id' in registry '$name'")
-    fun all(): Collection<T> = entries.values.toList()
+    fun all(): Collection<T> = cachedAll ?: entries.values.toList()
     fun contains(id: String): Boolean = entries.containsKey(id)
     fun size(): Int = entries.size
 
-    fun addListener(listener: RegistryListener<T>) {
-        listeners += listener
+    fun freeze() {
+        frozen.store(true)
+        cachedAll = entries.values.toList()
     }
-
-    fun removeListener(listener: RegistryListener<T>) {
-        listeners -= listener
-    }
-
-    fun freeze() { frozen.store(true) }
 
     fun clear() {
         if(isFrozen) throw RegistryFrozenException("Registry '$name' is frozen")

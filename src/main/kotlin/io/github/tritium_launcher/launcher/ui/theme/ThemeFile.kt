@@ -3,6 +3,9 @@ package io.github.tritium_launcher.launcher.ui.theme
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+/**
+ * Parsed Theme File Data
+ */
 @Serializable
 data class ThemeFile(
     val meta: ThemeMeta,
@@ -11,6 +14,9 @@ data class ThemeFile(
     val stylesheets: Map<String, String> = emptyMap(),
 )
 
+/**
+ * Format for Theme Files
+ */
 @Serializable
 data class ThemeMeta(
     val id: String,

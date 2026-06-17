@@ -12,6 +12,7 @@ import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
@@ -33,7 +34,7 @@ import kotlin.time.ExperimentalTime
 class ProjectLogsSidePanelProvider : SidePanelProvider {
     override val id: String = "mc_logs"
     override val displayName: String = "MC Logs"
-    override val icon: QIcon = TIcons.Log.icon
+    override var icon: QIcon? = TIcons.Log.icon
     override val order: Int = 10
 
     override val preferredArea: Qt.DockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
@@ -124,6 +125,7 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
             setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
             document()?.maximumBlockCount = MAX_LOG_BLOCKS
         }
+        AnimatedScrollController.attach(logView)
 
         val logsDir = project.projectDir.resolve("logs")
         var activePath = logsDir.resolve("latest.log")

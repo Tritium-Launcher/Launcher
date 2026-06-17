@@ -1,6 +1,7 @@
 package io.github.tritium_launcher.launcher.ui.project.editor
 
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.qs
@@ -10,6 +11,8 @@ import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.github.tritium_launcher.launcher.ui.theme.qt.StyleBuilder
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollAxis
+import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.toolButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.widget
@@ -17,6 +20,10 @@ import io.qt.Nullable
 import io.qt.core.*
 import io.qt.gui.*
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * An individual Tab Bar for the Editor.
@@ -36,6 +43,14 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         updateBorderStyle()
         tabWidgets.forEach { it.updateColors() }
     }
+
+    private val scope = CoroutineScope(Dispatchers.Main)
+
+    private val smoothScroll = AnimatedScrollController.attach(
+        scrollArea,
+        axis = AnimatedScrollAxis.Horizontal,
+        interceptWheel = false
+    )
 
     var selectedHoveredTabColor: String = "rgba(255,255,255,0.18)"
         set(value) {
@@ -79,7 +94,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         setFixedHeight(tabBarHeight)
 
-        val mainLayout = hBoxLayout(this) {
+        hBoxLayout(this) {
             contentsMargins = 0.m
             widgetSpacing = 0
             addWidget(scrollArea)
@@ -114,18 +129,22 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
             onClicked { showTabListMenu() }
         }
 
-        ThemeMngr.addListener(themeListener)
-        destroyed.connect { ThemeMngr.removeListener(themeListener) }
-
         content.setFixedHeight(tabBarHeight)
         content.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        content.setLayout(contentLayout)
         scrollArea.setWidget(content)
 
         scrollArea.horizontalScrollBar()?.apply {
             valueChanged.connect { _ -> updateOverflowState() }
             rangeChanged.connect { _, _ -> updateOverflowState() }
         }
+
+        scope.launch {
+            ThemeMngr.currentThemeId.collect {
+                updateBorderStyle()
+                tabWidgets.forEach { tab -> tab.updateColors() }
+            }
+        }
+        destroyed.connect { scope.cancel() }
 
         val wheelFilter = object : QObject(scrollArea) {
             override fun eventFilter(
@@ -211,6 +230,11 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         w.update()
     }
 
+    fun setTabModifiedAt(idx: Int, modified: Boolean) {
+        val w = tabWidgets.getOrNull(idx) ?: return
+        w.isModified = modified
+    }
+
     fun setCurrentIndex(idx: Int) {
         if(idx < 0 || idx >= tabWidgets.size) return
         val prev = currentIndex
@@ -256,7 +280,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
                 else -> return@run
             }.coerceIn(sb.minimum, sb.maximum)
 
-            sb.value = newVal
+            scrollTo(newVal, animate = !instant)
         }
 
         if(instant) {
@@ -293,9 +317,12 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     }
 
     override fun paintEvent(event: @Nullable QPaintEvent?) {
-        val painter = QPainter(this)
-        painter.fillRect(rect, QColor(TColors.Surface0))
-        painter.end()
+        val bgImage = CoreSettingValues.uiBackgroundImage
+        if (bgImage.isNullOrBlank()) {
+            val painter = QPainter(this)
+            painter.fillRect(rect, QColor(TColors.Surface0))
+            painter.end()
+        }
         super.paintEvent(event)
     }
 
@@ -326,18 +353,27 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
             deltaPx = scrollByWholeTab(deltaPx)
         }
 
-        if(deltaPx == 0) {
+        if(deltaPx == 0) { e.accept(); return }
+
+        if(scrollBehavior == ScrollBehavior.WholeTab) {
+            val wholeDelta = scrollByWholeTab(deltaPx)
+            if(wholeDelta != 0) {
+                val sb = scrollArea.horizontalScrollBar() ?: run { e.accept(); return }
+                val newVal = (sb.value + wholeDelta).coerceIn(sb.minimum, sb.maximum)
+                scrollTo(newVal, false)
+            }
             e.accept()
             return
         }
 
-        val sb = scrollArea.horizontalScrollBar() ?: run {
+        val sb = scrollArea.horizontalScrollBar() ?: run { e.accept(); return }
+        if (!CoreSettingValues.uiAnimateScrolling) {
+            sb.value = (sb.value + deltaPx).coerceIn(sb.minimum, sb.maximum)
             e.accept()
             return
         }
 
-        val newVal = (sb.value + deltaPx).coerceIn(sb.minimum, sb.maximum)
-        sb.value = newVal
+        smoothScroll.nudgeBy(deltaPx)
 
         e.accept()
     }
@@ -371,11 +407,12 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     }
 
     private fun updateBorderStyle() {
-        val tabBarSurface = TColors.Surface0
+        val bgImage = CoreSettingValues.uiBackgroundImage
+        val isBgImageSet = !bgImage.isNullOrBlank()
+        val tabBarSurface = if (isBgImageSet) "transparent" else TColors.Surface0
         val surfaceWithBottomBorder: StyleBuilder.() -> Unit = {
             backgroundColor(tabBarSurface)
             border()
-            border(borderWidth, borderColor, "bottom")
             margin(0)
             padding(0)
         }
@@ -480,6 +517,14 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         QTimer.singleShot(0) { updateOverflowState() }
     }
 
+    private fun scrollTo(target: Int, animate: Boolean) {
+        smoothScroll.scrollTo(target, animate)
+    }
+
+    private fun stopScrollAnim() {
+        smoothScroll.stop()
+    }
+
     val count: Int get() = tabWidgets.size
 
     fun setTabText(idx: Int, text: String) {
@@ -505,4 +550,5 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         content.minimumWidth = widthHint
         content.maximumWidth = 16777215
     }
+
 }

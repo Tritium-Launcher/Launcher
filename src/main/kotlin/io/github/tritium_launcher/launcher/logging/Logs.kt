@@ -6,13 +6,15 @@ import ch.qos.logback.core.AppenderBase
 import io.github.tritium_launcher.launcher.fromTR
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.sanitizeForLogs
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import java.io.BufferedOutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.zip.GZIPOutputStream
 
 /**
@@ -27,7 +29,8 @@ object Logs {
     private val ARCHIVE_NAME_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
     private val lock = Any()
-    private val listeners = CopyOnWriteArrayList<(String) -> Unit>()
+    private val _entryFlow = MutableSharedFlow<String>(replay = 0)
+    val entryFlow: SharedFlow<String> = _entryFlow.asSharedFlow()
     private var prepared = false
 
     private val logsDirPath: VPath
@@ -76,9 +79,7 @@ object Logs {
             }
         }
 
-        listeners.forEach { listener ->
-            runCatching { listener(sanitizedEntry) }
-        }
+        _entryFlow.tryEmit(sanitizedEntry)
     }
 
     /**
@@ -92,16 +93,6 @@ object Logs {
                 currentLogPath.readTextOrNull().orEmpty()
             }.getOrDefault("")
         }
-    }
-
-    /**
-     * Subscribes to live appended log entries.
-     *
-     * @return Function that unsubscribes the listener.
-     */
-    fun addEntryListener(listener: (String) -> Unit): () -> Unit {
-        listeners.add(listener)
-        return { listeners.remove(listener) }
     }
 
     /**

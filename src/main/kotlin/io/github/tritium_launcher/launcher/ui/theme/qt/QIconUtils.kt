@@ -6,6 +6,9 @@ import io.qt.gui.QIcon
 import io.qt.gui.QPainter
 import io.qt.gui.QPixmap
 
+/**
+ * Makes a [QIcon] from this [QPixmap]
+ */
 val QPixmap.icon: QIcon get() = QIcon(this)
 
 /**

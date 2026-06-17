@@ -4,6 +4,7 @@ import io.github.tritium_launcher.launcher.*
 import io.github.tritium_launcher.launcher.accounts.MCVersion
 import io.github.tritium_launcher.launcher.accounts.MCVersionType
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
+import io.github.tritium_launcher.launcher.companion.CompanionModProvider
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectTemplateExecutor
 import io.github.tritium_launcher.launcher.core.project.templates.TemplateExecutionResult
 import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
@@ -15,8 +16,6 @@ import io.github.tritium_launcher.launcher.git.Git
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
-import io.github.tritium_launcher.launcher.ui.notifications.NotificationMngr
-import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
 import io.github.tritium_launcher.launcher.ui.project.menu.builtin.BuiltinMenuItems
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setStyle
@@ -30,13 +29,14 @@ import io.qt.gui.QPixmap
 import io.qt.widgets.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
+import java.net.URI
 import java.nio.file.Path
 
 /**
  * Project type for creating Modpack projects.
  */
 class ModpackProjectType : ProjectType {
-    override val id: String = "modpack"
+    override val id: String = "source"
     override val displayName: String = "Modpack" // TODO: Localization
     override val description: String = "Create a ModPack project"
     override val icon: QIcon = QIcon(TIcons.TrMeta)
@@ -56,6 +56,13 @@ class ModpackProjectType : ProjectType {
     private val licenses   = BuiltinRegistries.License
     private val modLoaders = BuiltinRegistries.ModLoader
     private val modSources = BuiltinRegistries.ModSource
+
+    private data class CompanionModEntry(
+        val loader: String,
+        val mcVersion: String
+    )
+
+    private var companionModEntries: List<CompanionModEntry> = emptyList()
 
     override fun createSetupWidget(
         projectRootHint: Path?,
@@ -158,7 +165,7 @@ class ModpackProjectType : ProjectType {
         }
 
         val iconRow = QWidget()
-        val iconRowLayout = hBoxLayout(iconRow) {
+        hBoxLayout(iconRow) {
             contentsMargins = 0.m
             setSpacing(8)
             addWidget(iconPathField)
@@ -208,6 +215,19 @@ class ModpackProjectType : ProjectType {
             minimumWidth = 50
         }
         form.addRow(separatorLabel)
+
+        // MARK: Companion Mod checkbox
+        val companionLabel = label("Include Companion Mod:") { visible = false }
+        val companionCheckbox = QCheckBox().apply {
+            isChecked = true
+            visible = false
+            toggled.connect { checked ->
+                initialVars["includeCompanionMod"] = if(checked) "true" else "false"
+            }
+            minimumWidth = 50
+        }
+        initialVars["includeCompanionMod"] = "true"
+        form.addRow(companionLabel, companionCheckbox)
 
         // MARK: Set if Git Repository should be initialized
         val gitLabel = label("Create Git Repository:")
@@ -328,12 +348,49 @@ class ModpackProjectType : ProjectType {
             return a.compareTo(b)
         }
 
+        fun updateCompanionModVisibility(): Boolean {
+            val loaderId = modLoaderCombo.currentData as? String
+            val mcVersion = mcCombo.currentData as? String
+            val hasMatch = loaderId != null && mcVersion != null &&
+                companionModEntries.any { it.loader == loaderId && it.mcVersion == mcVersion }
+            companionLabel.visible = hasMatch
+            companionCheckbox.visible = hasMatch
+            return hasMatch
+        }
+
+        fun fetchCompanionModVersions() {
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val url = URI("https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/gh-pages/companion-versions.json").toURL()
+                    val content = url.openStream().bufferedReader().use { it.readText() }
+                    val root = Json.parseToJsonElement(content).jsonObject
+                    val entries = root["entries"]?.jsonArray?.mapNotNull { element ->
+                        val obj = element.jsonObject
+                        val mcVersion = obj["mcVersion"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        val loaders = obj["loaders"]?.jsonArray
+                            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                            ?: return@mapNotNull null
+                        loaders.map { CompanionModEntry(loader = it, mcVersion = mcVersion) }
+                    }?.flatten() ?: emptyList()
+                    companionModEntries = entries
+                    runOnGuiThread {
+                        companionCheckbox.visible = updateCompanionModVisibility()
+                    }
+                } catch (t: Throwable) {
+                    logger.warn("Failed to fetch companion mod versions", t)
+                }
+            }
+        }
+
         fun updateCompatibleVersions() {
             val loaderId = modLoaderCombo.currentData as? String
             val mcVersion = mcCombo.currentData as? String
 
             if (loaderId == null || mcVersion == null) {
-                runOnGuiThread { modLoaderVerCombo.clear() }
+                runOnGuiThread {
+                    modLoaderVerCombo.clear()
+                    updateCompanionModVisibility()
+                }
                 return
             }
 
@@ -354,13 +411,14 @@ class ModpackProjectType : ProjectType {
                         modLoaderVerCombo.currentIndex = 0
                         (modLoaderVerCombo.currentData as? String)?.let { initialVars["modLoaderVersion"] = it }
                     }
+                    updateCompanionModVisibility()
                 }
             }
         }
 
         fun fetchAndPopulateMcVersions() {
             CoroutineScope(Dispatchers.IO).launch {
-                val includePreReleases = CoreSettingValues.includePreReleaseMinecraftVersions()
+                val includePreReleases = CoreSettingValues.includePreReleaseMinecraftVersions
                 val releaseTypes = if (includePreReleases) {
                     listOf(MCVersionType.Release, MCVersionType.Snapshot)
                 } else {
@@ -391,12 +449,13 @@ class ModpackProjectType : ProjectType {
         modLoaderCombo.currentIndexChanged.connect { updateCompatibleVersions() }
 
         fetchAndPopulateMcVersions()
+        fetchCompanionModVersions()
 
         return panel
     }
 
     /**
-     * Create the project on disk and write `trproj.json` plus modpack metadata.
+     * Create the project on disk and write `trproj.json` plus source metadata.
      */
     override suspend fun createProject(
         vars: Map<String, String>
@@ -459,74 +518,25 @@ class ModpackProjectType : ProjectType {
         val manifest = json.encodeToString(ModpackMeta.serializer(), modpackMeta)
 
         val steps = mutableListOf<GeneratorStepDescriptor>()
-        steps += GeneratorStepDescriptor(
-            "create-modpack-meta",
-            "createFile",
-            JsonObject(mapOf(
-                "path" to JsonPrimitive("trmodpack.json"),
-                "template" to JsonPrimitive(manifest),
-                "overwrite" to JsonPrimitive(true)
-            )),
-            affects = listOf("trmodpack.json")
-        )
+        steps += StandardProjectSteps.metadataStep("create-source-meta", manifest)
+        steps += StandardProjectSteps.exportRulesStep()
+        steps += StandardProjectSteps.placeholderSteps()
+        StandardProjectSteps.iconStep(iconPath)?.let { steps += it }
 
-        steps += GeneratorStepDescriptor(
-            "create-export-rules",
-            "createFile",
-            JsonObject(mapOf(
-                "path" to JsonPrimitive("trexportrules.json"),
-                "template" to JsonPrimitive("{}"),
-                "overwrite" to JsonPrimitive(false)
-            )),
-            affects = listOf("trexportrules.json")
-        )
-
-        // Ensure standard instance directories exist
-        fun placeholder(path: String) = GeneratorStepDescriptor(
-            "placeholder-$path",
-            "createFile",
-            JsonObject(mapOf(
-                "path" to JsonPrimitive("$path/.placeholder"),
-                "template" to JsonPrimitive("# placeholder to keep folder in VCS"),
-                "overwrite" to JsonPrimitive(false)
-            )),
-            affects = listOf("$path/**")
-        )
-        listOf("mods", "config", "defaultconfigs", "logs", "saves").forEach { dir ->
-            steps += placeholder(dir)
-        }
-
-        if(iconPath.isNotBlank()) {
-            val normalizedFileUrl = if(iconPath.startsWith("file://")) iconPath else "file://$iconPath"
-            steps += GeneratorStepDescriptor(
-                "copy-icon",
-                "fetch",
-                JsonObject(mapOf(
-                    "url" to JsonPrimitive(normalizedFileUrl),
-                    "dest" to JsonPrimitive("icon.png")
-                )),
-                affects = listOf("icon.png")
-            )
+        val includeCompanion = vars["includeCompanionMod"]?.toBoolean() ?: false
+        if(includeCompanion && companionModEntries.any { it.loader == loader.id && it.mcVersion == mcVer }) {
+            CompanionModProvider.installIfNeeded(projectRoot, mcVer, loader.id)
         }
 
         if(gitInit) {
-            steps += GeneratorStepDescriptor(
-                "gitignore",
-                "createFile",
-                JsonObject(mapOf(
-                    "path" to JsonPrimitive(".gitignore"),
-                    "template" to JsonPrimitive(".tr/\ntr*.json\n"),
-                    "overwrite" to JsonPrimitive(false)
-                )),
-                affects = listOf(".gitignore")
-            )
+            steps += StandardProjectSteps.gitignoreStep()
         }
 
         // Ensure project root exists before executing steps
         projectRoot.mkdirs()
 
         val execResult = ProjectTemplateExecutor.run(
-            templateId = "builtin.modpack:$packName",
+            templateId = "builtin.source:$packName",
             projectRoot = projectRoot.toJPath(),
             variables = vars,
             steps = steps
@@ -568,111 +578,7 @@ class ModpackProjectType : ProjectType {
             }
 
             // Kick heavy downloads to background
-            CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
-                val bootstrapTaskId = ProjectTaskMngr.start(
-                    projectPath = projectRoot,
-                    title = "Bootstrapping $packName",
-                    detail = "Preparing runtime files",
-                    progressPercent = 5.0
-                )
-                var bootstrapSucceeded = false
-                var failureDetail: String? = null
-                logger.info("Background bootstrap start for {} (MC {}, loader {} {})", packName, mcVer, loader.id, loaderVersion)
-                try {
-                    coroutineScope {
-                        val mcJob = async {
-                            ProjectTaskMngr.update(bootstrapTaskId, detail = "Setting up Minecraft $mcVer")
-                            ProjectTaskMngr.updateProgress(bootstrapTaskId, 20.0)
-                            val mcStart = System.currentTimeMillis()
-                            val ok = MicrosoftAuth.setupMinecraftInstance(mcVer, projectRoot)
-                            logger.info("Minecraft setup {} ({})", if(ok) "ok" else "failed", formatDurationMs(System.currentTimeMillis() - mcStart))
-                            ProjectTaskMngr.updateProgress(bootstrapTaskId, if (ok) 55.0 else 40.0)
-                            ok
-                        }
-
-                        val gitJob = async {
-                            if(gitInit) {
-                                try {
-                                    logger.info("Initializing git repo in {}", projectRoot.toString().redactUserPath())
-                                    Git.initRepo(projectRoot)
-                                } catch (t: Throwable) {
-                                    logger.warn("Git init failed in {}", projectRoot.toString().redactUserPath(), t)
-                                }
-                            }
-                        }
-
-                        val mcOk = mcJob.await()
-                        if (mcOk) {
-                            ProjectTaskMngr.update(
-                                bootstrapTaskId,
-                                detail = "Installing ${loader.displayName} $loaderVersion"
-                            )
-                            ProjectTaskMngr.updateProgress(bootstrapTaskId, 70.0)
-                            val loaderStart = System.currentTimeMillis()
-                            logger.info(
-                                "Installing loader {} {} into {}",
-                                loader.id,
-                                loaderVersion,
-                                projectRoot.toString().redactUserPath()
-                            )
-                            val ok = loader.installClient(loaderVersion, mcVer, projectRoot)
-                            logger.info("Loader install {} ({})", if(ok) "ok" else "failed", formatDurationMs(System.currentTimeMillis() - loaderStart))
-                            if (ok) {
-                                val merged = MicrosoftAuth.writeMergedVersionJson(mcVer, loader.id, loaderVersion, projectRoot)
-                                logger.info(
-                                    "Merged version json written to {}",
-                                    merged?.toAbsolute()?.toString()?.redactUserPath() ?: "null"
-                                )
-                                ProjectTaskMngr.update(bootstrapTaskId, detail = "Finalizing bootstrap")
-                                ProjectTaskMngr.updateProgress(bootstrapTaskId, 95.0)
-                                bootstrapSucceeded = true
-                            } else {
-                                failureDetail = "Failed to install ${loader.displayName}."
-                            }
-                        } else {
-                            logger.warn("Skipping loader install; Minecraft setup failed for {}", packName)
-                            failureDetail = "Failed to set up Minecraft runtime."
-                        }
-
-                        gitJob.await()
-                    }
-                } catch (t: Throwable) {
-                    logger.warn("Background bootstrap failed for {}", packName, t)
-                    failureDetail = t.message?.trim().takeUnless { it.isNullOrEmpty() }
-                        ?: "Unexpected bootstrap error."
-                } finally {
-                    if (bootstrapSucceeded) {
-                        ProjectTaskMngr.update(bootstrapTaskId, detail = "Bootstrap finished")
-                        ProjectTaskMngr.updateProgress(bootstrapTaskId, 100.0)
-                    }
-                    ProjectTaskMngr.finish(bootstrapTaskId)
-
-                    val projectRef = ProjectMngr.getProject(projectRoot)
-                    if (bootstrapSucceeded) {
-                        NotificationMngr.post(
-                            id = "bootstrap_success",
-                            project = projectRef,
-                            description = "Project '$packName' is ready.",
-                            metadata = mapOf(
-                                "source" to "modpack.bootstrap",
-                                "result" to "success",
-                            )
-                        )
-                    } else {
-                        val reason = failureDetail ?: "Unknown error."
-                        NotificationMngr.post(
-                            id = "bootstrap_failure",
-                            project = projectRef,
-                            description = "Project '$packName' bootstrap failed: $reason",
-                            metadata = mapOf(
-                                "source" to "modpack.bootstrap",
-                                "result" to "failed",
-                            )
-                        )
-                    }
-                }
-                logger.info("BACKGROUND BOOTSTRAP FINISHED for {} (success={})", packName, bootstrapSucceeded)
-            }
+            ProjectBootstrap.launch(projectRoot, packName, mcVer, loader, loaderVersion, gitInit)
         }
 
         logger.info("Modpack createProject finished: success={}", execResult.successful)

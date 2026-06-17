@@ -1,6 +1,6 @@
 pkgbase = tritium-launcher-bin
 	pkgdesc = Minecraft Launcher IDE for Modpack Developers
-	pkgver = 0.1.5
+	pkgver = 0.1.6
 	pkgrel = 1
 	url = https://github.com/Tritium-Launcher/Launcher
 	arch = x86_64

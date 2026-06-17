@@ -2,12 +2,18 @@ package io.github.tritium_launcher.launcher
 
 import io.github.tritium_launcher.launcher.io.VPath
 
+/**
+ * General constant values
+ */
 object TConstants {
     const val TR = "Tritium"
     const val TR_SERVICE = "TritiumLauncher"
     val VERSION: String by lazy { resolveVersion() }
     val TR_DIR: VPath = fromTR()
 
+    /**
+     * Directories in `~/tritium`
+     */
     object Dirs {
         const val PROJECTS = "projects"
         const val EXTENSIONS = "extensions"
@@ -17,9 +23,11 @@ object TConstants {
         const val MSAL = ".msal"
         const val ASSETS = "assets"
         const val SETTINGS = "settings"
+        const val LSPS = "lsps"
     }
 
     val EXT_DIR = fromTR(Dirs.EXTENSIONS)
+    val LSPS_DIR = fromTR(Dirs.LSPS)
     val classLoader: ClassLoader = javaClass.classLoader
 
     object Lists {
@@ -30,6 +38,9 @@ object TConstants {
         )
     }
 
+    /**
+     * Get current Tritium version
+     */
     private fun resolveVersion(): String {
         val fromManifest = TConstants::class.java.`package`?.implementationVersion?.trim()
         if (!fromManifest.isNullOrBlank()) return fromManifest

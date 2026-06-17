@@ -20,7 +20,11 @@ object BuiltinFileTypes {
         displayName = "File",
         icon = TIcons.File.icon,
         matches = { file, _ -> file.isFile() },
-        order = Int.MAX_VALUE
+        order = Int.MAX_VALUE,
+        createDefaultFile = { directory, name, _ ->
+            val file = directory.resolve(name)
+            runCatching { file.writeBytesAtomic(ByteArray(0)) }.getOrDefault(file)
+        }
     )
 
     val Folder = FileTypeDescriptor.create(
@@ -52,16 +56,6 @@ object BuiltinFileTypes {
         displayName = "JavaScript",
         icon = TIcons.JavaScript.icon,
         matches = { file, _ -> file.extension().matches("js", "jsx", "mdx", "mjs") }
-    )
-
-    val KubeScript = FileTypeDescriptor.create(
-        id = "kubescript",
-        displayName = "KubeJS Script",
-        icon = TIcons.KubeScript.icon,
-        matches = { file, _ ->
-            file.parent().toString().matches("startup_scripts", "server_scripts", "client_scripts") &&
-                    file.extension().matches("js")
-        }
     )
 
     val TS = FileTypeDescriptor.create(
@@ -241,11 +235,12 @@ object BuiltinFileTypes {
         icon = TIcons.ModConfig.icon,
         matches = { file, _ ->
             file.extension().matches(
-                "json", "json5", "toml", "properties", "cfg", "conf", "hocon", "yaml", "yml"
+                "json", "json5", "toml", "properties", "cfg", "yaml", "yml", "jsonc", "ini"
             ) &&
-                    file.parent().toString().matches("config", "defaultconfigs") &&
+                    file.parent().fileName().matches("config", "defaultconfigs") &&
                     file.parent().parent().exists()
-        }
+        },
+        order = -100
     )
 
     val ZenScript = FileTypeDescriptor.create(
@@ -293,7 +288,7 @@ object BuiltinFileTypes {
     )
 
     fun all() = listOf(
-        File, Folder, CSV, HTML, JS, KubeScript, TS, Image, Json, TOML, Archive, Jar, Markdown, CSS, Python, Shell,
+        File, Folder, CSV, HTML, JS, TS, Image, Json, TOML, Archive, Jar, Markdown, CSS, Python, Shell,
         Powershell, Yaml, ModConfig, ZenScript, AnvilRegion, SessionLock, NBT, Schematic, McFunction
     )
 }

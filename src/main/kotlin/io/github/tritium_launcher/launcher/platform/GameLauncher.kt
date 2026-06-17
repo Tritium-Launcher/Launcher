@@ -3,6 +3,7 @@ package io.github.tritium_launcher.launcher.platform
 import io.github.tritium_launcher.launcher.TConstants
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
 import io.github.tritium_launcher.launcher.accounts.ProfileMngr
+import io.github.tritium_launcher.launcher.core.mod.ModDatabase
 import io.github.tritium_launcher.launcher.core.modloader.LaunchContext
 import io.github.tritium_launcher.launcher.core.modloader.ModLoader
 import io.github.tritium_launcher.launcher.core.project.ModpackMeta
@@ -15,12 +16,14 @@ import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.redactUserPath
 import io.qt.gui.QGuiApplication
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.json.*
 import java.io.File
 import java.nio.file.Files
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.jar.JarFile
 
 /**
@@ -36,10 +39,11 @@ object GameLauncher {
     private val pathSeparator = File.pathSeparator ?: ":"
     private val ansiRegex = Regex("\\u001B\\[[;\\d]*[ -/]*[@-~]")
     private const val MAX_MISSING_LIB_LOG = 12
-    private const val MODPACK_PROJECT_TYPE_ID = "modpack"
+    private const val MODPACK_PROJECT_TYPE_ID = "source"
     private const val DEFAULT_MAX_HEAP_MB = 2_048
     private val runtimePreparingScopes = ConcurrentHashMap<String, RuntimePreparationContext>()
-    private val runtimePreparationListeners = CopyOnWriteArrayList<(RuntimePreparationEvent) -> Unit>()
+    private val _runtimePreparationEvents = MutableSharedFlow<RuntimePreparationEvent>(replay = 0)
+    val runtimePreparationEvents: SharedFlow<RuntimePreparationEvent> = _runtimePreparationEvents.asSharedFlow()
 
     data class RuntimePreparationContext(
         val projectScope: String,
@@ -47,14 +51,15 @@ object GameLauncher {
         val startedAtEpochMs: Long
     )
 
-    data class RuntimePreparationEvent(
-        val type: Type,
+    /**
+     * Events emitted during the lifecycle of runtime preparation.
+     */
+    sealed interface RuntimePreparationEvent {
         val context: RuntimePreparationContext
-    ) {
-        enum class Type {
-            Started,
-            Finished
-        }
+
+        data class Started(override val context: RuntimePreparationContext) : RuntimePreparationEvent
+        data class Finished(override val context: RuntimePreparationContext) : RuntimePreparationEvent
+        data class Failed(override val context: RuntimePreparationContext, val error: Throwable) : RuntimePreparationEvent
     }
 
     private data class LaunchSpec(
@@ -99,15 +104,25 @@ object GameLauncher {
     /**
      * Subscribe to game process lifecycle events.
      */
-    fun addGameProcessListener(listener: (GameProcessMngr.GameProcessEvent) -> Unit): () -> Unit =
-        GameProcessMngr.addListener(listener)
+    fun addGameProcessListener(listener: (GameProcessMngr.GameProcessEvent) -> Unit): () -> Unit {
+        val job = CoroutineScope(Dispatchers.Default).launch {
+            GameProcessMngr.events.collect { event ->
+                listener(event)
+            }
+        }
+        return { job.cancel() }
+    }
 
     /**
      * Subscribe to runtime preparation state changes.
      */
     fun addRuntimePreparationListener(listener: (RuntimePreparationEvent) -> Unit): () -> Unit {
-        runtimePreparationListeners += listener
-        return { runtimePreparationListeners -= listener }
+        val job = CoroutineScope(Dispatchers.Default).launch {
+            _runtimePreparationEvents.collect { event ->
+                listener(event)
+            }
+        }
+        return { job.cancel() }
     }
 
     /**
@@ -132,10 +147,10 @@ object GameLauncher {
         scope.launch {
             try {
                 prepareRuntimeInternal(project)
+                endRuntimePreparation(prepareCtx)
             } catch (t: Throwable) {
                 logger.error("Runtime preparation failed for {}", project.name, t)
-            } finally {
-                endRuntimePreparation(prepareCtx)
+                failRuntimePreparation(prepareCtx, t)
             }
         }
     }
@@ -148,16 +163,16 @@ object GameLauncher {
         scope.launch {
             try {
                 launchInternal(project)
+                endRuntimePreparation(prepareCtx)
             } catch (t: Throwable) {
                 logger.error("Launch failed for {}", project.name, t)
-            } finally {
-                endRuntimePreparation(prepareCtx)
+                failRuntimePreparation(prepareCtx, t)
             }
         }
     }
 
     /**
-    * Resolve metadata, ensure required files, and start the game process for a modpack project.
+    * Resolve metadata, ensure required files, and start the game process for a source project.
      */
     private suspend fun launchInternal(project: ProjectBase) {
         val spec = resolveLaunchSpec(project, logFailures = true) ?: return
@@ -252,12 +267,12 @@ object GameLauncher {
             gameDir = project.projectDir,
             assetsDir = assetsDir,
             assetIndexId = assetIndexId,
-            mcVersion = mcVersion,
             username = username,
             uuid = uuid,
             accessToken = accessToken,
             mergedId = mergedId,
-            launchMaximized = CoreSettingValues.gameLaunchMaximized()
+            launchMaximized = CoreSettingValues.gameLaunchMaximized
+
         )
         val jvmArgs = buildJvmArgs(versionObj, project.projectDir, nativesDir, classpath).toMutableList()
         loader.prepareLaunchJvmArgs(context, classpathEntries, jvmArgs)
@@ -306,6 +321,7 @@ object GameLauncher {
             launchJvmArgs.size,
             gameArgs.size
         )
+        val disabledModState = prepareDisabledMods(project.projectDir)
         try {
             val processBuilder = ProcessBuilder(command)
                 .directory(project.projectDir.toJFile())
@@ -333,9 +349,11 @@ object GameLauncher {
                 outputJob.join()
                 logger.info("Minecraft exited with code {}", exit)
                 CompanionBridge.clearSessionToken()
+                restoreDisabledMods(disabledModState)
             }
         } catch (t: Throwable) {
             CompanionBridge.clearSessionToken()
+            restoreDisabledMods(disabledModState)
             logger.error("Failed to start Minecraft process", t)
         }
     }
@@ -376,7 +394,8 @@ object GameLauncher {
         if (project.typeId != MODPACK_PROJECT_TYPE_ID) {
             return emptyList()
         }
-        val raw = CoreSettingValues.modpackJvmArgs()?.trim().orEmpty()
+        val raw = CoreSettingValues.modpackJvmArgs?.trim().orEmpty()
+
         if (raw.isEmpty()) {
             return emptyList()
         }
@@ -479,7 +498,6 @@ object GameLauncher {
         gameDir: VPath,
         assetsDir: VPath,
         assetIndexId: String,
-        mcVersion: String,
         username: String,
         uuid: String,
         accessToken: String,
@@ -1043,9 +1061,9 @@ object GameLauncher {
     }
 
     private fun resolveLaunchSpec(project: ProjectBase, logFailures: Boolean): LaunchSpec? {
-        if (project.typeId != "modpack") {
+        if (project.typeId != "source") {
             if (logFailures) {
-                logger.warn("Launch is only supported for modpack projects (type={})", project.typeId)
+                logger.warn("Launch is only supported for source projects (type={})", project.typeId)
             }
             return null
         }
@@ -1200,23 +1218,58 @@ object GameLauncher {
             logger.debug("Runtime preparation already active for project '{}'", project.name)
             return null
         }
-        emitRuntimePreparation(RuntimePreparationEvent(RuntimePreparationEvent.Type.Started, ctx))
+        emitRuntimePreparation(RuntimePreparationEvent.Started(ctx))
         return ctx
     }
 
     private fun endRuntimePreparation(context: RuntimePreparationContext) {
         val removed = runtimePreparingScopes.remove(context.projectScope, context)
         if (removed) {
-            emitRuntimePreparation(RuntimePreparationEvent(RuntimePreparationEvent.Type.Finished, context))
+            emitRuntimePreparation(RuntimePreparationEvent.Finished(context))
+        }
+    }
+
+    private fun failRuntimePreparation(context: RuntimePreparationContext, error: Throwable) {
+        val removed = runtimePreparingScopes.remove(context.projectScope, context)
+        if (removed) {
+            emitRuntimePreparation(RuntimePreparationEvent.Failed(context, error))
         }
     }
 
     private fun emitRuntimePreparation(event: RuntimePreparationEvent) {
-        runtimePreparationListeners.forEach { listener ->
-            try {
-                listener(event)
-            } catch (t: Throwable) {
-                logger.warn("Runtime preparation listener failed", t)
+        _runtimePreparationEvents.tryEmit(event)
+    }
+
+    private fun prepareDisabledMods(projectDir: VPath): List<Pair<File, String>> {
+        val renamed = mutableListOf<Pair<File, String>>()
+        try {
+            ModDatabase(projectDir).use { db ->
+                val allMods = db.getAll()
+                val disabled = allMods.filter { !it.enabled }
+                val modsDir = projectDir.resolve("mods").toJFile()
+                if (!modsDir.isDirectory) return@use
+                for (mod in disabled) {
+                    if (mod.fileName.isBlank()) continue
+                    val jar = File(modsDir, mod.fileName)
+                    if (!jar.exists()) continue
+                    val disabledFile = File(modsDir, "${mod.fileName}.disabled")
+                    if (jar.renameTo(disabledFile)) {
+                        renamed.add(jar to mod.fileName)
+                        logger.info("Disabled mod: {} -> {}.disabled", mod.fileName, mod.fileName)
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            logger.warn("Failed to prepare disabled mods for launch", t)
+        }
+        return renamed
+    }
+
+    private fun restoreDisabledMods(state: List<Pair<File, String>>) {
+        for ((originalFile, originalName) in state) {
+            val disabledFile = File(originalFile.parentFile, "$originalName.disabled")
+            if (disabledFile.exists() && disabledFile.renameTo(originalFile)) {
+                logger.info("Restored disabled mod: {} <- {}.disabled", originalName, originalName)
             }
         }
     }

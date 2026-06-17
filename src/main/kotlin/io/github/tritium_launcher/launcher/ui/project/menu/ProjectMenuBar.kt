@@ -4,18 +4,30 @@ import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectType
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.launcher.keymap.ActionRegistry
+import io.github.tritium_launcher.launcher.keymap.KeymapMngr
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.ui.project.ProjectViewWindow
+import io.github.tritium_launcher.launcher.ui.project.menu.builtin.BuiltinMenuItems
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
+import io.github.tritium_launcher.launcher.ui.widgets.LongPressButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
+import io.qt.core.QSize
 import io.qt.core.QTimer
 import io.qt.core.Qt
 import io.qt.gui.QAction
 import io.qt.gui.QGuiApplication
+import io.qt.gui.QIcon
+import io.qt.gui.QPixmap
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Command bar that replaces the native menu bar and supports:
@@ -30,33 +42,65 @@ import io.qt.widgets.*
  */
 class ProjectMenuBar : QWidget() {
     private val logger = logger()
+    private var attachedWindow: QMainWindow? = null
+    private var lastProject: ProjectBase? = null
+    private var lastSelection: Any? = null
 
     private val layout = hBoxLayout(this) {
         widgetSpacing = 0
         contentsMargins = 0.m
     }
 
+    // Center section widgets
+    private var centerSection: QWidget? = null
+    private var projectIconLabel: QLabel? = null
+    private var projectNameLabel: QLabel? = null
+    private var playBtn: QPushButton? = null
+    private var stopBtn: QPushButton? = null
+    private var settingsBtn: QPushButton? = null
+
+    /** Container for left-side menu items, overlaid to avoid shifting the center. */
+    private var leftOverlay: QWidget? = null
+
     init {
         objectName = "projectMenuBar"
+        setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
+        val keymapJob = CoroutineScope(Dispatchers.Main).launch {
+            KeymapMngr.activeKeymapFlow.collect {
+                val window = attachedWindow ?: return@collect
+                if (!window.isVisible) return@collect
+                QTimer.singleShot(0) {
+                    rebuildFor(window, lastProject, lastSelection)
+                }
+            }
+        }
+        destroyed.connect {
+            keymapJob.cancel()
+        }
         setThemedStyle {
             selector("#projectMenuBar") {
                 backgroundColor(TColors.Surface0)
-                border()
+                border(1, TColors.Surface1, "bottom")
+                minHeight(32)
             }
 
             selector("#projectMenuBar QPushButton, #projectMenuBar QToolButton") {
                 backgroundColor("transparent")
                 color(TColors.Text)
                 border()
-                minHeight(22)
+                minHeight(24)
+                borderRadius(4)
+                padding(4, 6, 4, 6)
             }
 
             selector("#projectMenuBar QPushButton:hover, #projectMenuBar QToolButton:hover") {
                 backgroundColor(TColors.Surface1)
+                borderRadius(4)
             }
 
             selector("#projectMenuBar QPushButton:pressed, #projectMenuBar QToolButton:pressed") {
                 backgroundColor(TColors.Surface2)
+                borderRadius(4)
             }
 
             selector("#projectMenuBar QPushButton:disabled, #projectMenuBar QToolButton:disabled") {
@@ -65,8 +109,35 @@ class ProjectMenuBar : QWidget() {
             }
 
             selector("#projectMenuBar QPushButton[menuIconOnly=\"true\"]") {
-                minWidth(26)
-                maxWidth(26)
+                minWidth(28)
+                maxWidth(28)
+            }
+
+            selector("#menuBarCenterSection") {
+                backgroundColor("transparent")
+            }
+
+            selector("#menuBarProjectIcon") {
+                minWidth(18)
+                minHeight(18)
+                maxWidth(18)
+                maxHeight(18)
+            }
+
+            selector("#menuBarProjectName") {
+                color(TColors.Text)
+                fontSize(13)
+                fontWeight(600)
+            }
+
+            selector("#menuBarSettingsBtn") {
+                minWidth(28)
+                maxWidth(28)
+                borderRadius(4)
+            }
+
+            selector("#menuBarSettingsBtn:hover") {
+                backgroundColor(TColors.Surface1)
             }
 
             // Hide the default drop-down indicator on top-level menu buttons.
@@ -79,10 +150,14 @@ class ProjectMenuBar : QWidget() {
     }
 
     fun attach(window: QMainWindow) {
+        attachedWindow = window
         window.setMenuWidget(this)
     }
 
     fun rebuildFor(window: QMainWindow, project: ProjectBase?, selection: Any?) {
+        attachedWindow = window
+        lastProject = project
+        lastSelection = selection
         clearLayout()
 
         val allItems = BuiltinRegistries.MenuItem.all().toList()
@@ -103,19 +178,200 @@ class ProjectMenuBar : QWidget() {
             val ctx = MenuActionContext(project, window, selection, it.meta)
             !isRightAligned(it) && it.isVisible(ctx)
         }
-        val rightItems = topSorted.filter {
-            val ctx = MenuActionContext(project, window, selection, it.meta)
-            isRightAligned(it) && it.isVisible(ctx)
+
+        /*
+         Left-side overlay container – holds menu item widgets in its own
+         layout so they get proper parenting + show(). Positioned manually
+         outside the main layout to avoid shifting the center section.
+        */
+        if (leftItems.isNotEmpty()) {
+            val container = QWidget(this)
+            container.objectName = "menuBarLeftOverlay"
+            val leftHBox = hBoxLayout(container) {
+                widgetSpacing = 0
+                contentsMargins = 0.m
+            }
+            leftItems.forEach { top ->
+                addTopItemTo(leftHBox, window, top, children, project, selection)
+            }
+            container.show()
+            leftOverlay = container
         }
 
-        leftItems.forEach { top ->
-            addTopItem(window, top, children, project, selection)
+        if (project != null) {
+            layout.addStretch(1)
+            addCenterSection(window, project, selection)
+            layout.addStretch(1)
+        } else {
+            layout.addStretch(1)
         }
-        layout.addStretch(1)
-        rightItems.forEach { top ->
-            addTopItem(window, top, children, project, selection)
-        }
+
+        createSettingsButton(window)
+
+        positionAllChildren()
         update()
+    }
+
+    private fun loadMenuIcon(key: String, targetSize: Int): QIcon {
+        val pix = TIcons.pixForKey(key, 24, 24)
+        if (!pix.isNull) {
+            val scaled = pix.scaled(targetSize, targetSize, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+            return scaled.icon
+        }
+        return pix.icon
+    }
+
+    private fun loadMenuIcon(icon: QIcon, targetSize: Int): QIcon {
+        val pix = icon.pixmap(targetSize, targetSize)
+        if (!pix.isNull) {
+            return pix.scaled(targetSize, targetSize, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation).icon
+        }
+        return icon
+    }
+
+    private fun addCenterSection(window: QMainWindow, project: ProjectBase, selection: Any?) {
+        centerSection?.let { cs ->
+            layout.removeWidget(cs)
+            cs.disposeLater()
+        }
+        centerSection = QWidget().apply {
+            objectName = "menuBarCenterSection"
+            val hbox = hBoxLayout(this) {
+                widgetSpacing = 12
+                contentsMargins = 0.m
+            }
+
+            val iconPix = runCatching {
+                val iconPath = project.getIconPath()
+                QPixmap(iconPath)
+            }.getOrNull()
+            projectIconLabel = label {
+                objectName = "menuBarProjectIcon"
+                if (iconPix != null && !iconPix.isNull) {
+                    pixmap = iconPix.scaled(18, 18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                }
+            }
+
+            projectNameLabel = label(project.name) {
+                objectName = "menuBarProjectName"
+            }
+
+            playBtn = LongPressButton().apply {
+                val playItem = BuiltinRegistries.MenuItem.all().find { it.id == "play" }
+                objectName = "menuBarPlayBtn"
+                setProperty("menuIconOnly", true)
+                isFlat = true
+                iconSize = QSize(24, 24)
+
+                fun refreshPlayState() {
+                    val ctx = playItem?.let { MenuActionContext(project, window, selection, it.meta) }
+                    isEnabled = playItem?.isEnabled(ctx) ?: true
+                    icon = playItem?.resolveIcon(ctx)?.let { loadMenuIcon(it, 24) } ?: loadMenuIcon("menu/run", 24)
+                    toolTip = playItem?.tooltip ?: "Play"
+                }
+                refreshPlayState()
+
+                if (playItem != null) {
+                    onNormalClick = {
+                        val actionCtx = MenuActionContext(project, window, selection, playItem.meta)
+                        playItem.action?.invoke(actionCtx)
+                        refreshPlayState()
+                    }
+                    onLongPress = {
+                        CoroutineScope(Dispatchers.Main).launch {
+                            BuiltinMenuItems.launchOrPrepare(project)
+                        }
+                    }
+                }
+
+                val stateTimer = QTimer(this).apply {
+                    interval = 200
+                    timeout.connect { refreshPlayState() }
+                    start()
+                }
+                destroyed.connect { stateTimer.stop() }
+            }
+
+            stopBtn = QPushButton().apply {
+                val stopItem = BuiltinRegistries.MenuItem.all().find { it.id == "stop_game" }
+                val useShiftHoverForceIcon = stopItem?.meta?.get("shiftHoverForceIcon") == "true"
+                objectName = "menuBarStopBtn"
+                setProperty("menuIconOnly", true)
+                isFlat = true
+                mouseTracking = true
+                iconSize = QSize(24, 24)
+
+                fun refreshStopState() {
+                    val ctx = stopItem?.let { MenuActionContext(project, window, selection, it.meta) }
+                    isEnabled = stopItem?.isEnabled(ctx) ?: false
+                    val showForceIcon = useShiftHoverForceIcon &&
+                        isEnabled &&
+                        underMouse() &&
+                        QGuiApplication.queryKeyboardModifiers().testFlag(Qt.KeyboardModifier.ShiftModifier)
+                    val resolvedIcon = if (showForceIcon) TIcons.ForceStop.icon else stopItem?.resolveIcon(ctx)
+                    icon = resolvedIcon?.let { loadMenuIcon(it, 24) } ?: loadMenuIcon("menu/stop", 24)
+                    toolTip = if (showForceIcon) "Force-stop game process" else (stopItem?.tooltip ?: "Stop")
+                }
+                refreshStopState()
+
+                if (stopItem != null) {
+                    clicked.connect {
+                        val actionCtx = MenuActionContext(project, window, selection, stopItem.meta)
+                        stopItem.action?.invoke(actionCtx)
+                        refreshStopState()
+                    }
+                }
+
+                val stateTimer = QTimer(this).apply {
+                    interval = 50
+                    timeout.connect { refreshStopState() }
+                    start()
+                }
+                destroyed.connect { stateTimer.stop() }
+            }
+
+            hbox.addWidget(projectIconLabel!!)
+            hbox.addWidget(projectNameLabel!!)
+            hbox.addWidget(playBtn!!)
+            hbox.addWidget(stopBtn!!)
+        }
+        layout.addWidget(centerSection)
+    }
+
+    private fun createSettingsButton(window: QMainWindow) {
+        settingsBtn = QPushButton(this).apply {
+            icon = loadMenuIcon("menu/settings", 22)
+            iconSize = QSize(22, 22)
+            objectName = "menuBarSettingsBtn"
+            toolTip = "Settings"
+            isFlat = true
+            setProperty("menuIconOnly", true)
+            clicked.connect {
+                (window as? ProjectViewWindow)?.openSettings()
+            }
+            show()
+        }
+    }
+
+    private fun positionAllChildren() {
+        val h = height
+        leftOverlay?.let { container ->
+            container.adjustSize()
+            container.move(0, (h - container.height()) / 2)
+            container.raise()
+        }
+
+        settingsBtn?.let { btn ->
+            btn.adjustSize()
+            val margin = 4
+            btn.move(width - btn.width() - margin, (h - btn.height()) / 2)
+            btn.raise()
+        }
+    }
+
+    override fun resizeEvent(event: io.qt.gui.QResizeEvent?) {
+        super.resizeEvent(event)
+        positionAllChildren()
     }
 
     private fun resolveProjectType(project: ProjectBase?): ProjectType? {
@@ -186,29 +442,42 @@ class ProjectMenuBar : QWidget() {
         project: ProjectBase?,
         selection: Any?
     ) {
+        addTopItemTo(layout, window, top, children, project, selection)
+    }
+
+    private fun addTopItemTo(
+        target: QLayout,
+        window: QMainWindow,
+        top: MenuItem,
+        children: Map<String, List<MenuItem>>,
+        project: ProjectBase?,
+        selection: Any?
+    ) {
         val ctx = MenuActionContext(project, window, selection, top.meta)
         if (!top.isVisible(ctx)) return
         when (top.kind) {
             MenuItemKind.WIDGET -> {
                 val widget = top.widgetFactory?.invoke(ctx)
                 if (widget != null) {
-                    layout.addWidget(widget)
+                    target.addWidget(widget)
                 }
             }
 
             MenuItemKind.ACTION -> {
-                layout.addWidget(makeActionButton(window, top, project, selection))
+                target.addWidget(makeActionButton(window, top, project, selection))
             }
 
             MenuItemKind.MENU -> {
-                layout.addWidget(makeMenuButton(window, top, children, project, selection))
+                target.addWidget(makeMenuButton(window, top, children, project, selection))
             }
 
             MenuItemKind.SEPARATOR -> {
-                layout.addWidget(makeSeparator())
+                target.addWidget(makeSeparator())
             }
         }
     }
+
+
 
     private fun makeSeparator(): QWidget {
         val sep = QFrame()
@@ -222,6 +491,7 @@ class ProjectMenuBar : QWidget() {
 
     private fun makeActionButton(window: QMainWindow, item: MenuItem, project: ProjectBase?, selection: Any?): QPushButton {
         val baseCtx = MenuActionContext(project, window, selection, item.meta)
+        registerActionHandler(item, window, project, selection)
         val iconOnly = item.meta["iconOnly"]?.equals("true", ignoreCase = true) == true
         val useShiftHoverForceIcon = item.meta["shiftHoverForceIcon"]?.equals("true", ignoreCase = true) == true
         val btn = QPushButton(if (iconOnly) "" else item.resolveTitle(baseCtx))
@@ -287,7 +557,7 @@ class ProjectMenuBar : QWidget() {
         btn.toolButtonStyle = Qt.ToolButtonStyle.ToolButtonTextOnly
         btn.autoRaise = true
 
-        val menu = QMenu(window)
+        val menu = QMenu(btn)
         val kids = childItems(item, children, window, project, selection)
         if (kids.isNotEmpty()) {
             for (child in kids) {
@@ -299,7 +569,7 @@ class ProjectMenuBar : QWidget() {
                 }
                 val submenuKids = childItems(child, children, window, project, selection)
                 if (submenuKids.isNotEmpty() && child.kind != MenuItemKind.ACTION) {
-                    val submenu = QMenu(child.resolveTitle(childCtx), window)
+                    val submenu = QMenu(child.resolveTitle(childCtx), menu)
                     submenuKids.forEach { grand ->
                         addActionToMenu(submenu, grand, window, project, selection, children)
                     }
@@ -312,10 +582,19 @@ class ProjectMenuBar : QWidget() {
 
         // Allow top-level action for menu button
         if (item.action != null) {
-            val act = QAction(item.resolveTitle(baseCtx), window)
+            registerActionHandler(item, window, project, selection)
+            val act = QAction(item.resolveTitle(baseCtx), menu)
             item.resolveIcon(baseCtx)?.let { act.icon = it }
             act.isEnabled = item.isEnabled(baseCtx)
-            item.shortcut?.let { act.setShortcut(it) }
+            val actionId = shortcutActionIdFor(item)
+            val mappedShortcuts = KeymapMngr.sequencesFor(actionId)
+            val hasExplicitOverride = KeymapMngr.activeKeymap.localOverrides().containsKey(actionId)
+            val hasDeclaredShortcut = actionId in KeymapMngr.declaredActionIds()
+            if (mappedShortcuts.isNotEmpty() || hasExplicitOverride || hasDeclaredShortcut) {
+                act.setShortcuts(mappedShortcuts)
+            } else {
+                item.shortcut?.let { act.setShortcut(it) }
+            }
             act.triggered.connect {
                 try {
                     val ctx = MenuActionContext(project, window, selection, item.meta)
@@ -325,6 +604,7 @@ class ProjectMenuBar : QWidget() {
                 }
             }
             menu.insertAction(menu.actions().firstOrNull(), act)
+            this.addAction(act)
         }
 
         btn.setMenu(menu)
@@ -348,7 +628,7 @@ class ProjectMenuBar : QWidget() {
 
         val subKids = childItems(item, children, window, project, selection)
         if (subKids.isNotEmpty() && item.kind != MenuItemKind.ACTION) {
-            val submenu = QMenu(item.resolveTitle(ctx), window)
+            val submenu = QMenu(item.resolveTitle(ctx), menu)
             subKids.forEach { sub ->
                 addActionToMenu(submenu, sub, window, project, selection, children)
             }
@@ -356,10 +636,19 @@ class ProjectMenuBar : QWidget() {
             return
         }
 
-        val act = QAction(item.resolveTitle(ctx), window)
+        val act = QAction(item.resolveTitle(ctx), menu)
+        registerActionHandler(item, window, project, selection)
         item.resolveIcon(ctx)?.let { act.icon = it }
         act.isEnabled = item.isEnabled(ctx)
-        item.shortcut?.let { act.setShortcut(it) }
+        val actionId = shortcutActionIdFor(item)
+        val mappedShortcuts = KeymapMngr.sequencesFor(actionId)
+        val hasExplicitOverride = KeymapMngr.activeKeymap.localOverrides().containsKey(actionId)
+        val hasDeclaredShortcut = actionId in KeymapMngr.declaredActionIds()
+        if (mappedShortcuts.isNotEmpty() || hasExplicitOverride || hasDeclaredShortcut) {
+            act.setShortcuts(mappedShortcuts)
+        } else {
+            item.shortcut?.let { act.setShortcut(it) }
+        }
         item.tooltip?.let { act.toolTip = it }
         act.triggered.connect {
             try {
@@ -370,6 +659,23 @@ class ProjectMenuBar : QWidget() {
             }
         }
         menu.addAction(act)
+        this.addAction(act)
+    }
+
+    private fun shortcutActionIdFor(item: MenuItem): String =
+        item.shortcutActionId ?: "menu.${item.id}"
+
+    private fun registerActionHandler(item: MenuItem, window: QMainWindow, project: ProjectBase?, selection: Any?) {
+        if (item.action == null) return
+        ActionRegistry.registerHandler(
+            id = shortcutActionIdFor(item),
+            allowKeyboardShortcuts = item.allowKeyboardShortcuts,
+            allowMouseShortcuts = item.allowMouseShortcuts,
+            focusGroups = item.shortcutFocusGroups
+        ) {
+            val actionCtx = MenuActionContext(project, window, selection, item.meta)
+            item.action.invoke(actionCtx)
+        }
     }
 
     private fun childItems(
@@ -389,13 +695,44 @@ class ProjectMenuBar : QWidget() {
     }
 
     private fun clearLayout() {
+        // 1. Manually remove and dispose of all actions associated with this widget
+        val currentActions = actions()
+        for (action in currentActions) {
+            removeAction(action)
+            action?.disposeLater()
+        }
+
+        // 2. Clear the layout and dispose of all widgets (buttons)
+        // Disposing the buttons will also dispose of their parented QMenu objects.
         val count = layout.count()
         for (i in 0 until count) {
             val item = layout.takeAt(0)
             item?.widget()?.let { w ->
                 w.hide()
+                // Explicitly unparent to stop any active shortcut participation immediately
+                w.setParent(null)
                 w.disposeLater()
             }
         }
+
+        leftOverlay?.let { w ->
+            w.hide()
+            w.setParent(null)
+            w.disposeLater()
+        }
+
+        settingsBtn?.let { btn ->
+            btn.hide()
+            btn.setParent(null)
+            btn.disposeLater()
+        }
+
+        leftOverlay = null
+        centerSection = null
+        projectIconLabel = null
+        projectNameLabel = null
+        playBtn = null
+        stopBtn = null
+        settingsBtn = null
     }
 }

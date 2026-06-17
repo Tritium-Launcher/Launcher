@@ -1,13 +1,17 @@
 package io.github.tritium_launcher.launcher.ui.project
 
+import io.github.tritium_launcher.launcher.applyRainbowOverlay
 import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.TritiumEvent
+import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.core.project.ProjectMngr
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.launcher.keymap.KeymapMngr
 import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.GameLauncher
+import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.dashboard.SettingsDialog
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
@@ -23,19 +27,25 @@ import io.github.tritium_launcher.launcher.ui.settings.SettingsLink
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
-import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.widget
 import io.github.tritium_launcher.launcher.util.ByteUtils
+import io.github.tritium_launcher.launcher.util.SeasonalEvents
+import io.github.tritium_launcher.launcher.util.SeasonalEvents.isPrideMonth
 import io.qt.Nullable
 import io.qt.core.QByteArray
+import io.qt.core.QEvent
 import io.qt.core.QTimer
+import io.qt.core.Qt
 import io.qt.core.Qt.DockWidgetArea
-import io.qt.core.Qt.ItemDataRole.UserRole
-import io.qt.core.Qt.WidgetAttribute.WA_TransparentForMouseEvents
 import io.qt.gui.*
-import io.qt.widgets.*
+import io.qt.widgets.QMainWindow
+import io.qt.widgets.QMessageBox
+import io.qt.widgets.QProgressBar
+import io.qt.widgets.QWidget
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
@@ -43,7 +53,9 @@ import kotlin.random.Random
  * The main window for active Projects.
  */
 class ProjectViewWindow internal constructor(
-    private val project: ProjectBase
+    private val project: ProjectBase,
+    initialUIState: ProjectUIState? = null,
+    initialOpenFiles: List<String>? = null
 ): QMainWindow() {
 
     private val logger = logger()
@@ -53,133 +65,158 @@ class ProjectViewWindow internal constructor(
     private val defaultWindowSize: Pair<Int, Int> = CoreSettingValues.projectWindowDefaultSize()
 
     private val menuBarBuilder = ProjectMenuBar()
-    private val menuBottomDivider = widget(this) {
-        objectName = "projectMenuBottomDivider"
-        setAttribute(WA_TransparentForMouseEvents, true)
-        setThemedStyle {
-            selector("#projectMenuBottomDivider") {
-                backgroundColor(TColors.Surface2)
-                border()
-            }
-        }
-        hide()
-    }
+    private var backgroundLayer: ProjectBackgroundWidget
     private val editorArea = EditorArea(project)
-    private lateinit var sidePanelMngr: SidePanelMngr
-    private lateinit var notificationOverlay: Toaster
+    private var sidePanelMngr: SidePanelMngr
+    private var notificationOverlay = Toaster(this.project, this)
     private val settingsDialog = SettingsDialog(this)
     private val statePersistTimer = QTimer(this).apply {
         isSingleShot = true
         interval = 3_000
         timeout.connect { persistState() }
     }
+    private val rebuildMenusTimer = QTimer(this).apply {
+        isSingleShot = true
+        interval = 50
+        timeout.connect { rebuildMenus() }
+    }
 
     private var uiState: ProjectUIState = ProjectUIState()
     private var lastPersistedState: ProjectUIState? = null
     private var suppressStatePersistence: Boolean = false
-    private var unsubscribeGameProcessListener: (() -> Unit)? = null
-    private var unsubscribeRuntimePreparationListener: (() -> Unit)? = null
-    private var unsubscribeTaskListener: (() -> Unit)? = null
+    private val savedDockWidths = mutableMapOf<String, Int>()
+    private var gameEventScope: CoroutineScope? = null
+    private var unsubscribeTaskListener: Job? = null
+    private var unsubscribeKeymapListener: Job? = null
 
     private val menuItemsRegistry = BuiltinRegistries.MenuItem
+    private var pendingOpenFiles: List<String>? = initialOpenFiles
+    private var uiStateRestored = false
 
     init {
-        uiState = loadState()
+        uiState = initialUIState ?: run {
+            loadState()
+        }
         lastPersistedState = uiState
-        windowTitle = "Tritium | " + project.name
+        windowTitle = "Tritium Launcher | " + project.name
+        windowIcon = if (isPrideMonth()) {
+            TIcons.TritiumGrayscale.applyRainbowOverlay(opacity = 0.5f).icon
+        } else {
+            QIcon(TIcons.Tritium.scaled(qs(256, 256), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation))
+        }
+
         menuBarBuilder.attach(this)
+        setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
+
+        backgroundLayer = ProjectBackgroundWidget(this)
+        backgroundLayer.lower()
+
+        val projectFilesTreeState = ProjectFilesSidePanelProvider.TreeState(
+            expandedPaths = if (uiState.projectFilesViewStates.isNotEmpty())
+                uiState.projectFilesViewStates.first().expandedPaths.toSet()
+            else uiState.projectFilesExpandedPaths.toSet(),
+            selectedPath = if (uiState.projectFilesViewStates.isNotEmpty())
+                uiState.projectFilesViewStates.first().selectedPath
+            else uiState.projectFilesSelectedPath
+        )
+        ProjectFilesSidePanelProvider.setPendingInitialDockState(
+            ProjectFilesSidePanelProvider.DockState(
+                activeViewId = uiState.projectFilesActiveViewId,
+                viewStates = listOf(
+                    ProjectFilesSidePanelProvider.ViewState("project_files", projectFilesTreeState)
+                )
+            )
+        )
 
         sidePanelMngr = SidePanelMngr(
             project = project,
             parent = this,
-            onStateChanged = { scheduleStatePersist() }
-        ) { id, dock ->
-            if(id == "project_files") {
-                val tree = (dock.widget() as? QTreeWidget) ?: dock.widget()?.findChild(QTreeWidget::class.java)
+            editorArea = editorArea,
+            onStateChanged = { scheduleStatePersist() },
+            onAllProvidersBuilt = {}
+        )
 
-                tree?.itemDoubleClicked?.connect { item, _ ->
-                    val path = item?.data(0, UserRole) as? VPath
-                    if(path != null && !path.isDir()) {
-                        editorArea.openFile(path)
-                    }
-                }
-                tree?.itemExpanded?.connect { scheduleStatePersist() }
-                tree?.itemCollapsed?.connect { scheduleStatePersist() }
-                tree?.currentItemChanged?.connect { _, _ -> scheduleStatePersist() }
-
-                ProjectFilesSidePanelProvider.restoreDockTreeState(
-                    dock,
-                    ProjectFilesSidePanelProvider.TreeState(
-                        expandedPaths = uiState.projectFilesExpandedPaths.toSet(),
-                        selectedPath = uiState.projectFilesSelectedPath
-                    )
-                )
-            }
-        }
-
-        setCentralWidget(editorArea.widget())
+        setCentralWidget(editorArea.widget().apply {
+            setProperty("keymapFocusGroup", "editor")
+        })
         editorArea.onOpenFilesChanged = { scheduleStatePersist() }
+
         notificationOverlay = Toaster(project, this)
-        QTimer.singleShot(0) { updateMenuBottomDivider() }
-        applyState(uiState)
-        installNotificationTestShortcut()
 
         DeferredRegistryBuilder(menuItemsRegistry) {
             runOnGuiThread {
-                menuBarBuilder.rebuildFor(this, project, null)
+                rebuildMenusTimer.start()
             }
         }
 
-        unsubscribeGameProcessListener = GameLauncher.addGameProcessListener {
+        gameEventScope = CoroutineScope(Dispatchers.Main + CoroutineName("GameProcessMngr")).apply {
+            onEvent<TritiumEvent.GameAttached> { handleGameEvent() }
+            onEvent<TritiumEvent.GameDetached> { handleGameEvent() }
+            onEvent<TritiumEvent.GameExited> { handleGameEvent() }
+        }
+        unsubscribeTaskListener = ProjectTaskMngr.taskChanges.onEach {
             runOnGuiThread {
                 if (!isVisible) return@runOnGuiThread
-                rebuildMenus()
+                rebuildMenusTimer.start()
             }
-        }
-        unsubscribeRuntimePreparationListener = GameLauncher.addRuntimePreparationListener {
+        }.launchIn(CoroutineScope(Dispatchers.Main + CoroutineName("ProjectTaskMngr")))
+
+        unsubscribeKeymapListener = KeymapMngr.activeKeymapFlow.onEach {
             runOnGuiThread {
                 if (!isVisible) return@runOnGuiThread
-                rebuildMenus()
+                rebuildMenusTimer.start()
             }
-        }
-        unsubscribeTaskListener = ProjectTaskMngr.addListener {
-            runOnGuiThread {
-                if (!isVisible) return@runOnGuiThread
-                rebuildMenus()
-            }
-        }
+        }.launchIn(CoroutineScope(Dispatchers.Main + CoroutineName("KeymapMngr")))
 
         destroyed.connect {
-            unsubscribeGameProcessListener?.invoke()
-            unsubscribeGameProcessListener = null
-            unsubscribeRuntimePreparationListener?.invoke()
-            unsubscribeRuntimePreparationListener = null
-            unsubscribeTaskListener?.invoke()
+            gameEventScope?.cancel()
+            gameEventScope = null
+            unsubscribeTaskListener?.cancel()
             unsubscribeTaskListener = null
+            unsubscribeKeymapListener?.cancel()
+            unsubscribeKeymapListener = null
         }
     }
 
+    private fun handleGameEvent() {
+        runOnGuiThread {
+            if (!isVisible) return@runOnGuiThread
+            rebuildMenusTimer.start()
+        }
+    }
+
+    /**
+     * Ensures the Tritium files directory exists; creates otherwise
+     */
     private fun ensureTDir() {
         if(!tDir.exists()) tDir.mkdirs()
     }
 
-    private fun applyState(state: ProjectUIState) {
+    /**
+     * Restores previous window state after the window is shown.
+     */
+    private fun restoreUIState() {
+        if (uiStateRestored) return
+        uiStateRestored = true
         try {
             suppressStatePersistence = true
-            var restored = false
-            state.mainWindowGeometry?.let {
-                if(restoreGeometry(QByteArray(state.mainWindowGeometry))) {
-                    restored = true
-                }
-            }
-            state.mainWindowState?.let { restoreState(QByteArray(state.mainWindowState)) }
 
-            if(!restored) {
-                resize(defaultWindowSize.first, defaultWindowSize.second)
+            uiState.mainWindowGeometry?.let {
+                if (!restoreGeometry(QByteArray(it))) {
+                    resize(defaultWindowSize.first, defaultWindowSize.second)
+                }
+            } ?: resize(defaultWindowSize.first, defaultWindowSize.second)
+
+            uiState.mainWindowState?.let {
+                try {
+                    restoreState(QByteArray(it))
+                } catch (t: Throwable) {
+                    logger.warn("Failed to restore window state for '{}'", project.name, t)
+                }
             }
 
             sidePanelMngr.restoreState(
-                state.sidePanels.mapNotNull { panel ->
+                uiState.sidePanels.mapNotNull { panel ->
                     val area = parseDockArea(panel.area) ?: return@mapNotNull null
                     SidePanelMngr.PersistedDockState(
                         id = panel.id,
@@ -189,7 +226,9 @@ class ProjectViewWindow internal constructor(
                 }
             )
 
-            editorArea.restoreOpenFiles(state.openFiles)
+            editorArea.restoreOpenFiles(pendingOpenFiles ?: uiState.openFiles)
+            pendingOpenFiles = null
+            captureDockWidths()
         } catch (t: Throwable) {
             logger.warn("Failed to apply UI state for '{}'", project.name, t)
             resize(defaultWindowSize.first, defaultWindowSize.second)
@@ -198,25 +237,34 @@ class ProjectViewWindow internal constructor(
         }
     }
 
+    /**
+     * Loads previous window state
+     */
     private fun loadState(): ProjectUIState {
         return try {
             ensureTDir()
             if (!stateFile.exists()) return ProjectUIState()
             val txt = stateFile.readTextOrNull() ?: return ProjectUIState()
-            return json.decodeFromString<ProjectUIState>(txt)
+            return ProjectUIState.parseOrNull(txt) ?: ProjectUIState()
         } catch (t: Throwable) {
             logger.warn("Failed to load UI state for {}", project.name, t)
             ProjectUIState()
         }
     }
 
+    /**
+     * Saves window state
+     */
     private fun persistState() {
         if (suppressStatePersistence) return
         try {
             ensureTDir()
+            captureDockWidths()
             val openFiles = editorArea.openFiles()
-            val geom = ByteUtils.toByteArray(saveGeometry().data())
-            val state = ByteUtils.toByteArray(saveState().data())
+            val geomQBA = saveGeometry()
+            val stateQBA = saveState()
+            val geom = ByteUtils.toByteArray(geomQBA.data())
+            val state = ByteUtils.toByteArray(stateQBA.data())
             val sidePanels = sidePanelMngr.captureState().map { dock ->
                 ProjectUIState.SidePanelState(
                     id = dock.id,
@@ -229,8 +277,21 @@ class ProjectViewWindow internal constructor(
             val s = ProjectUIState(
                 openFiles = openFiles,
                 sidePanels = sidePanels,
-                projectFilesExpandedPaths = projectFilesTree.expandedPaths.toList(),
-                projectFilesSelectedPath = projectFilesTree.selectedPath,
+                projectFilesActiveViewId = projectFilesTree.activeViewId,
+                projectFilesViewStates = projectFilesTree.viewStates.map { viewState ->
+                    ProjectUIState.ProjectFilesViewState(
+                        viewId = viewState.viewId,
+                        expandedPaths = viewState.treeState.expandedPaths.toList(),
+                        selectedPath = viewState.treeState.selectedPath
+                    )
+                },
+                projectFilesExpandedPaths = projectFilesTree.viewStates
+                    .firstOrNull { it.viewId == projectFilesTree.activeViewId }
+                    ?.treeState?.expandedPaths?.toList()
+                    ?: emptyList(),
+                projectFilesSelectedPath = projectFilesTree.viewStates
+                    .firstOrNull { it.viewId == projectFilesTree.activeViewId }
+                    ?.treeState?.selectedPath,
                 mainWindowState = state,
                 mainWindowGeometry = geom
             )
@@ -245,22 +306,17 @@ class ProjectViewWindow internal constructor(
         }
     }
 
+    /**
+     * Schedule timer for persisting window state
+     */
     private fun scheduleStatePersist() {
         if (suppressStatePersistence) return
         statePersistTimer.start()
     }
 
-    private fun installNotificationTestShortcut() {
-        val action = QAction(this).apply {
-            setShortcut("Ctrl+Alt+Shift+N") //TODO: Keymap
-            toolTip = "Emit a random notification test payload"
-        }
-        action.triggered.connect {
-            emitRandomTestNotification()
-        }
-        addAction(action)
-    }
-
+    /**
+     * Emits a test notification
+     */
     private fun emitRandomTestNotification() {
         val seed = Random.nextInt(1000, 9999)
         val header = listOf(
@@ -274,7 +330,7 @@ class ProjectViewWindow internal constructor(
             TIcons.QuestionMark.icon,
             TIcons.Build.icon,
             TIcons.Run.icon,
-            TIcons.Tritium.icon
+            if (SeasonalEvents.isPrideMonth()) TIcons.TritiumGrayscale.applyRainbowOverlay().icon else TIcons.Tritium.icon
         ).random()
 
         val links: List<NotificationLink>? = if (Random.nextInt(100) < 70) {
@@ -324,16 +380,47 @@ class ProjectViewWindow internal constructor(
         )
     }
 
+    private fun captureDockWidths() {
+        savedDockWidths.clear()
+        for ((id, dock) in sidePanelMngr.dockWidgets()) {
+            savedDockWidths[id] = dock.width()
+        }
+    }
+
+    private fun lockDockWidths() {
+        for ((id, w) in savedDockWidths) {
+            sidePanelMngr.getDock(id)?.minimumWidth = w
+        }
+    }
+
+    private fun unlockDockWidths() {
+        for ((id, _) in savedDockWidths) {
+            sidePanelMngr.getDock(id)?.minimumWidth = 0
+        }
+    }
+
+    override fun changeEvent(event: @Nullable QEvent?) {
+        super.changeEvent(event)
+        if (event?.type() == QEvent.Type.WindowStateChange) {
+            lockDockWidths()
+            QTimer.singleShot(0) { unlockDockWidths() }
+        }
+    }
+
     override fun showEvent(event: @Nullable QShowEvent?) {
         super.showEvent(event)
-        updateMenuBottomDivider()
-        if(::notificationOverlay.isInitialized) notificationOverlay.reposition()
+            notificationOverlay.reposition()
+        if (!uiStateRestored) {
+            QTimer.singleShot(0) { restoreUIState() }
+        }
     }
 
     override fun resizeEvent(event: @Nullable QResizeEvent?) {
+        lockDockWidths()
         super.resizeEvent(event)
-        updateMenuBottomDivider()
-        if(::notificationOverlay.isInitialized) notificationOverlay.reposition()
+        QTimer.singleShot(50) { unlockDockWidths() }
+        backgroundLayer.setGeometry(0, 0, width(), height())
+        notificationOverlay.reposition()
         scheduleStatePersist()
     }
 
@@ -349,26 +436,35 @@ class ProjectViewWindow internal constructor(
         }
         statePersistTimer.stop()
         persistState()
+        TritiumEventBus.publish(TritiumEvent.ProjectClosing(project))
         super.closeEvent(event)
     }
 
+    /**
+     * Returns the Dock Area name from [DockWidgetArea] value
+     */
     private fun dockAreaName(area: DockWidgetArea): String = when (area) {
-        DockWidgetArea.LeftDockWidgetArea -> "left"
-        DockWidgetArea.RightDockWidgetArea -> "right"
+        DockWidgetArea.LeftDockWidgetArea   -> "left"
+        DockWidgetArea.RightDockWidgetArea  -> "right"
         DockWidgetArea.BottomDockWidgetArea -> "bottom"
         else -> "left"
     }
 
+    /**
+     * Returns the [DockWidgetArea] value from name
+     */
     private fun parseDockArea(area: String): DockWidgetArea? = when (area.trim().lowercase()) {
-        "left" -> DockWidgetArea.LeftDockWidgetArea
-        "right" -> DockWidgetArea.RightDockWidgetArea
+        "left"   -> DockWidgetArea.LeftDockWidgetArea
+        "right"  -> DockWidgetArea.RightDockWidgetArea
         "bottom" -> DockWidgetArea.BottomDockWidgetArea
         else -> null
     }
 
+    /**
+     * Rebuilds the Menu Bar
+     */
     fun rebuildMenus() {
         menuBarBuilder.rebuildFor(this, project, null)
-        QTimer.singleShot(0) { updateMenuBottomDivider() }
     }
 
     /**
@@ -377,6 +473,16 @@ class ProjectViewWindow internal constructor(
      * @return `true` when an editor text widget was updated.
      */
     fun adjustEditorFontSize(delta: Int): Boolean = editorArea.adjustActiveEditorFont(delta)
+
+    /**
+     * Saves the currently active editor if it has unsaved changes.
+     */
+    fun saveActiveEditor() = editorArea.saveActive()
+
+    /**
+     * Saves all editors that have unsaved changes.
+     */
+    fun saveAllEditors() = editorArea.saveAll()
 
     /**
      * Canonical project identifier used by project-window routing logic.
@@ -390,24 +496,11 @@ class ProjectViewWindow internal constructor(
         settingsDialog.open(link)
     }
 
-    private fun updateMenuBottomDivider() {
-        val menu = menuWidget() ?: run {
-            menuBottomDivider.hide()
-            return
-        }
-        val menuRect = menu.geometry
-        if(menuRect.height() <= 0 || width() <= 0) {
-            menuBottomDivider.hide()
-            return
-        }
-        val y = menuRect.y() + menuRect.height() - 1
-        menuBottomDivider.setGeometry(0, y, width(), 1)
-        menuBottomDivider.show()
-        menuBottomDivider.raise()
-    }
-
+    /**
+     * Asks whether the user wants to close the project when exiting Tritium, depending on [CoreSettingValues.closeProjectConfirmationPolicy]
+     */
     private fun confirmCloseProjectIfNeeded(): Boolean {
-        val policy = CoreSettingValues.closeProjectConfirmationPolicy()
+        val policy = CoreSettingValues.closeProjectConfirmationPolicy
         if (policy != CoreSettingValues.CloseProjectConfirmationPolicy.Ask) return true
 
         val box = QMessageBox(this)
@@ -420,23 +513,65 @@ class ProjectViewWindow internal constructor(
         box.exec()
         return box.clickedButton() == closeButton
     }
+}
 
-    companion object {
-        private val logger = logger(ProjectViewWindow::class)
+private class ProjectBackgroundWidget(parent: QWidget) : QWidget(parent) {
+    private var backgroundPixmap: QPixmap? = null
+    private var scaledPixmap: QPixmap? = null
+    private var lastBgImagePath: String? = null
+    private var lastSize: io.qt.core.QSize? = null
 
-        fun dashboardList(
-            list: QListWidget,
-            openWindow: (ProjectBase) -> Unit = { p -> ProjectViewWindow(p).apply { show() } }
-        ) {
-            list.itemDoubleClicked.connect { item ->
-                val name = item?.text() ?: return@connect
-                val proj = ProjectMngr.getProject(name)
-                if(proj != null) {
-                    openWindow(proj)
-                } else {
-                    logger.warn("Dashboard requested open for unknown project '{}'", name)
+    init {
+        setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, true)
+    }
+
+    override fun paintEvent(event: @Nullable QPaintEvent?) {
+        val bgPath = CoreSettingValues.uiBackgroundImage
+        val currentSize = size()
+
+        if (!bgPath.isNullOrBlank()) {
+            val pathChanged = bgPath != lastBgImagePath
+            val sizeChanged = currentSize != lastSize
+
+            if (pathChanged) {
+                backgroundPixmap = QPixmap(bgPath)
+                lastBgImagePath = bgPath
+            }
+
+            if (pathChanged || sizeChanged) {
+                backgroundPixmap?.let { pix ->
+                    if (!pix.isNull) {
+                        scaledPixmap = pix.scaled(
+                            currentSize,
+                            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                            Qt.TransformationMode.SmoothTransformation
+                        )
+                    }
+                }
+                lastSize = currentSize
+            }
+
+            scaledPixmap?.let { scaled ->
+                if (!scaled.isNull) {
+                    val painter = QPainter(this)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    val x = (width() - scaled.width()) / 2
+                    val y = (height() - scaled.height()) / 2
+                    painter.drawPixmap(x, y, scaled)
+                    painter.end()
+                    return
                 }
             }
+        } else {
+            lastBgImagePath = null
+            backgroundPixmap = null
+            scaledPixmap = null
+            lastSize = null
         }
+
+        // Default fallback if no image
+        val painter = QPainter(this)
+        painter.fillRect(rect(), QColor(TColors.Surface0))
+        painter.end()
     }
 }

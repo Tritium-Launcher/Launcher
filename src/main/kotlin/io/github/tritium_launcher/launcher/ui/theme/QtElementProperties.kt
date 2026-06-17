@@ -4,6 +4,9 @@ import io.qt.core.QPoint
 import io.qt.widgets.QToolTip
 import io.qt.widgets.QWidget
 
+/**
+ * Adds a property to this [QWidget] declaring it invalid
+ */
 fun QWidget.setInvalid(state: Boolean, msg: String? = null) {
     this.setProperty("invalid", state)
     this.style()?.polish(this)

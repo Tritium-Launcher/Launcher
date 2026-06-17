@@ -3,10 +3,12 @@ package io.github.tritium_launcher.launcher.ui.project.sidebar
 import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
+import io.github.tritium_launcher.launcher.ui.project.editor.EditorArea
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
@@ -18,6 +20,12 @@ import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.widg
 import io.qt.core.*
 import io.qt.gui.*
 import io.qt.widgets.*
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlin.math.abs
 
 /**
@@ -28,8 +36,9 @@ import kotlin.math.abs
 class SidePanelMngr(
     private val project: ProjectBase,
     private val parent: QMainWindow,
+    private val editorArea: EditorArea,
     private val onStateChanged: () -> Unit = {},
-    private val onDockCreated: (String, DockWidget) -> Unit = { _, _ -> },
+    private val onAllProvidersBuilt: () -> Unit = {},
 ) {
     data class PersistedDockState(
         val id: String,
@@ -44,6 +53,8 @@ class SidePanelMngr(
     private val providersById = LinkedHashMap<String, SidePanelProvider>()
     private val dockStyleDisposers = mutableMapOf<DockWidget, () -> Unit>()
 
+    fun getDock(id: String): DockWidget? = docks[id]
+
     private val leftBar   = createSidebar(Qt.ToolBarArea.LeftToolBarArea)
     private val rightBar  = createSidebar(Qt.ToolBarArea.RightToolBarArea)
     private val bottomBar = createSidebar(Qt.ToolBarArea.BottomToolBarArea)
@@ -53,7 +64,7 @@ class SidePanelMngr(
     private var leftSpacerAction: QAction? = null
     private var rightSpacerAction: QAction? = null
     private var bottomTaskSpacerAction: QAction? = null
-    private var bottomTaskUnsubscribe: (() -> Unit)? = null
+    private var bottomTaskUnsubscribe: Job? = null
     private var bottomTaskWidgetAction: QAction? = null
     private lateinit var bottomTaskWidget: QWidget
     private lateinit var bottomTaskLabel: QLabel
@@ -65,36 +76,27 @@ class SidePanelMngr(
         parent.setProperty("sidebar.separatorColor", TColors.Surface0)
         parent.setThemedStyle {
             val dockSurface = TColors.Surface0
-            val dockBorder = TColors.Surface2
+            val dockBorder = TColors.Surface1
+            val bgImage = CoreSettingValues.uiBackgroundImage
+            val isBgImageSet = !bgImage.isNullOrBlank()
 
-            selector("QToolBar") {
-                backgroundColor(dockSurface)
-                border()
-            }
-            selector("#leftDockBar") {
-                backgroundColor(dockSurface)
-                border()
-                border(1, dockBorder, "right", "solid")
-            }
-            selector("#rightDockBar") {
-                backgroundColor(dockSurface)
-                border()
-                border(1, dockBorder, "left", "solid")
-            }
-            selector("#bottomDockBar") {
-                backgroundColor(dockSurface)
-                border()
-                border(1, dockBorder, "top", "solid")
-            }
             selector("QMainWindow::separator") {
-                backgroundColor(dockSurface)
+                if (isBgImageSet) {
+                    backgroundColor("transparent")
+                } else {
+                    backgroundColor(dockSurface)
+                }
                 any("image", "none")
-                border()
+                any("border", "1px solid $dockBorder")
                 minWidth(1)
                 minHeight(1)
             }
             selector("#dockTitleBar") {
-                backgroundColor(dockSurface)
+                if (isBgImageSet) {
+                    backgroundColor("rgba(0, 0, 0, 40)")
+                } else {
+                    backgroundColor(dockSurface)
+                }
                 border()
             }
             selector("#dockTitleLabel") {
@@ -110,7 +112,7 @@ class SidePanelMngr(
             }
             selector("#bottomTaskProgress") {
                 backgroundColor(TColors.Surface2)
-                border(1, TColors.Surface2)
+                border(1, TColors.Surface1)
                 borderRadius(3)
             }
             selector("#bottomTaskProgress::chunk") {
@@ -119,28 +121,33 @@ class SidePanelMngr(
             }
         }
         installBottomTaskIndicator()
-        bottomTaskUnsubscribe = ProjectTaskMngr.addListener {
+        bottomTaskUnsubscribe = ProjectTaskMngr.taskChanges.onEach {
             runOnGuiThread { refreshBottomTaskIndicator() }
-        }
+        }.launchIn(CoroutineScope(Dispatchers.Main + CoroutineName("ProjectTaskMngr")))
         parent.destroyed.connect {
-            bottomTaskUnsubscribe?.invoke()
+            bottomTaskUnsubscribe?.cancel()
             bottomTaskUnsubscribe = null
         }
 
         DeferredRegistryBuilder(BuiltinRegistries.SidePanel) { providers ->
             runOnGuiThread {
                 buildProviders(providers.sortedBy { it.order })
+                onAllProvidersBuilt()
             }
         }
     }
 
+    /**
+     * Creates a [QToolBar] from [Qt.ToolBarArea]
+     */
     private fun createSidebar(area: Qt.ToolBarArea): QToolBar = QToolBar().apply {
-        objectName = when (area) {
-            Qt.ToolBarArea.LeftToolBarArea -> "leftDockBar"
-            Qt.ToolBarArea.RightToolBarArea -> "rightDockBar"
+        val areaId = when (area) {
+            Qt.ToolBarArea.LeftToolBarArea   -> "leftDockBar"
+            Qt.ToolBarArea.RightToolBarArea  -> "rightDockBar"
             Qt.ToolBarArea.BottomToolBarArea -> "bottomDockBar"
             else -> "leftDockBar"
         }
+        objectName = areaId
         isMovable = false
         isFloatable = false
         val vertical = area != Qt.ToolBarArea.BottomToolBarArea
@@ -154,6 +161,39 @@ class SidePanelMngr(
             iconSize = QSize(16, 16)
         }
         setThemedStyle {
+            val bgImage = CoreSettingValues.uiBackgroundImage
+            val isBgImageSet = !bgImage.isNullOrBlank()
+            val dockSurface = TColors.Surface0
+            val dockBorder = TColors.Surface1
+
+            selector("QToolBar") {
+                if (isBgImageSet) {
+                    backgroundColor("transparent")
+                } else {
+                    backgroundColor(dockSurface)
+                }
+                border()
+                when (areaId) {
+                    "leftDockBar" -> any("border-right", "1px solid $dockBorder")
+                    "rightDockBar" -> any("border-left", "1px solid $dockBorder")
+                    "bottomDockBar" -> any("border-top", "1px solid $dockBorder")
+                }
+            }
+            selector("QToolButton") {
+                backgroundColor("transparent")
+                border()
+                borderRadius(3)
+                margin(1, 2, 1, 2)
+            }
+            selector("QToolButton:hover") {
+                backgroundColor(TColors.Surface1)
+            }
+            selector("QToolButton:checked") {
+                backgroundColor(TColors.Surface2)
+            }
+            selector("QToolButton:pressed") {
+                backgroundColor(TColors.Surface2)
+            }
             selector("QToolBar::handle") {
                 any("image", "none")
                 any("width", "0px")
@@ -179,6 +219,9 @@ class SidePanelMngr(
         }
     }
 
+    /**
+     * Build [QDockWidget]s from registered [SidePanelProvider]'s
+     */
     private fun buildProviders(providers: List<SidePanelProvider>) {
         for(p in providers) {
             try {
@@ -188,14 +231,24 @@ class SidePanelMngr(
                 dock.features = QDockWidget.DockWidgetFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
 
                 val persisted = pendingDockStates[p.id]
-                val initialArea = persisted?.area ?: normalizeDockArea(p.preferredArea)
+                val initialArea = persisted?.area ?: run {
+                    val pref = p.preferredArea
+                    if (p.allowedDockAreas.contains(pref)) pref else p.allowedDockAreas.firstOrNull() ?: normalizeDockArea(pref)
+                }
 
-                val action = QAction(p.icon, "").apply {
+                val action = QAction(p.icon ?: QIcon(), "").apply {
                     toolTip = p.displayName
                     isCheckable = true
                     isChecked = persisted?.visible ?: dock.isVisible
                     triggered.connect { checked ->
                         if(checked) {
+                            val area = parent.dockWidgetArea(dock)
+                            docks.values.forEach { otherDock ->
+                                if (otherDock != dock && parent.dockWidgetArea(otherDock) == area && otherDock.isVisible) {
+                                    val otherProvider = providersById[otherDock.objectName]
+                                    if (otherProvider?.allowSplit == false || !p.allowSplit) otherDock.hide()
+                                }
+                            }
                             dock.show()
                             dock.raise()
                         } else {
@@ -211,17 +264,17 @@ class SidePanelMngr(
 
                 parent.addDockWidget(initialArea, dock)
                 addDockActionToToolbar(initialArea, action, p.id)
-                setDockVisibility(dock, action, persisted?.visible ?: true)
+                setDockVisibility(dock, action, persisted?.visible ?: p.defaultVisible)
 
                 dock.objectName = p.id
                 applyDockAreaChrome(dock)
-                dock.applyIcon(p.icon)
+                p.icon?.let { dock.applyIcon(it) }
 
                 setupTitleBar(dock, p, initialArea)
                 dock.destroyed.connect {
                     dockStyleDisposers.remove(dock)?.invoke()
                 }
-                onDockCreated(p.id, dock)
+                p.onDockCreated(project, editorArea, dock, onStateChanged)
                 onStateChanged()
             } catch (t: Throwable) {
                 logger.warn("Failed to create side panel {}", p.id, t)
@@ -229,6 +282,9 @@ class SidePanelMngr(
         }
     }
 
+    /**
+     * Create title bar for specified [SidePanelProvider]
+     */
     private fun setupTitleBar(dock: DockWidget, provider: SidePanelProvider, currentArea: Qt.DockWidgetArea) {
         val titleBar = widget().apply { objectName = "dockTitleBar" }
         val layout = hBoxLayout(titleBar) {
@@ -236,9 +292,15 @@ class SidePanelMngr(
             widgetSpacing = 5
         }
 
-        layout.addWidget(label { pixmap = provider.icon.pixmap(16,16) ?: QPixmap() })
+        layout.addWidget(label { objectName = "dockTitleBarIcon"; pixmap = provider.icon?.pixmap(16, 16) ?: QPixmap() })
         layout.addWidget(label(provider.displayName) { objectName = "dockTitleLabel" })
         layout.addStretch()
+
+        if (provider is SidePanelTitleBarAccessoryProvider) {
+            provider.createTitleBarAccessory(project, dock, onStateChanged)?.let { accessory ->
+                layout.addWidget(accessory)
+            }
+        }
 
         val toolBtn = toolButton {
             icon = TIcons.SmallMenu.icon
@@ -261,7 +323,7 @@ class SidePanelMngr(
         }
 
         val menu = QMenu(toolBtn)
-        val areas = mapOf(
+        val areas = listOf(
             "Move to Left" to Qt.DockWidgetArea.LeftDockWidgetArea,
             "Move to Right" to Qt.DockWidgetArea.RightDockWidgetArea,
             "Move to Bottom" to Qt.DockWidgetArea.BottomDockWidgetArea,
@@ -269,6 +331,8 @@ class SidePanelMngr(
 
         for((label, area) in areas) {
             if(area == currentArea) continue
+            // Only show moves that the provider allows
+            if (!provider.allowedDockAreas.contains(area)) continue
             menu.addAction(label)?.triggered?.connect { moveDock(dock, provider, area) }
         }
 
@@ -277,8 +341,13 @@ class SidePanelMngr(
         dock.setTitleBarWidget(titleBar)
     }
 
+    /**
+     * Moves a provided [DockWidget] to a different [Qt.DockWidgetArea]
+     */
     private fun moveDock(dock: DockWidget, provider: SidePanelProvider, newArea: Qt.DockWidgetArea) {
         val area = normalizeDockArea(newArea)
+        // Respect provider's allowed dock areas
+        if (!provider.allowedDockAreas.contains(area)) return
         parent.addDockWidget(area, dock)
 
         val action = dockActions[provider.id] ?: return
@@ -294,6 +363,9 @@ class SidePanelMngr(
         onStateChanged()
     }
 
+    /**
+     * Adds an action to [SidePanelProvider] toolbar
+     */
     private fun addDockActionToToolbar(area: Qt.DockWidgetArea, action: QAction, providerId: String) {
         val toolbar = toolbarForDockArea(area)
         if (area == Qt.DockWidgetArea.BottomDockWidgetArea) {
@@ -340,28 +412,55 @@ class SidePanelMngr(
         else -> Qt.DockWidgetArea.LeftDockWidgetArea
     }
 
+    /**
+     * Style a provided [DockWidget]
+     */
     private fun applyDockAreaChrome(dock: DockWidget) {
         dockStyleDisposers.remove(dock)?.invoke()
         dockStyleDisposers[dock] = dock.setThemedStyle {
             val dockSurface = TColors.Surface0
+            val dockBorder = TColors.Surface2
+            val bgImage = CoreSettingValues.uiBackgroundImage
+            val isBgImageSet = !bgImage.isNullOrBlank()
+
             selector("QDockWidget") {
-                backgroundColor(dockSurface)
+                if (isBgImageSet) {
+                    backgroundColor("transparent")
+                } else {
+                    backgroundColor(dockSurface)
+                }
                 border()
             }
             selector("#dockTitleBar") {
-                backgroundColor(dockSurface)
+                if (isBgImageSet) {
+                    backgroundColor("rgba(0, 0, 0, 40)")
+                } else {
+                    backgroundColor(dockSurface)
+                }
                 border()
             }
             selector("#dockTitleLabel") {
                 color(TColors.Text)
             }
             selector("QDockWidget > QWidget") {
-                backgroundColor(dockSurface)
+                if (isBgImageSet) {
+                    backgroundColor("transparent")
+                } else {
+                    backgroundColor(dockSurface)
+                }
                 border()
+            }
+            selector("QDockWidget QTreeView, QDockWidget QTreeWidget, QDockWidget QListView, QDockWidget QListWidget") {
+                if (isBgImageSet) {
+                    backgroundColor("transparent")
+                }
             }
         }
     }
 
+    /**
+     * Bind actions to a [SidePanelProvider] using its ID
+     */
     private fun bindDockActionWidget(toolbar: QToolBar, action: QAction, providerId: String) {
         fun install() {
             val button = toolbar.widgetForAction(action) as? QToolButton ?: return
@@ -374,6 +473,9 @@ class SidePanelMngr(
         QTimer.singleShot(0) { install() }
     }
 
+    /**
+     * Installs a Dragging event filter to enable moving [SidePanelProvider] to another area
+     */
     private fun installDockButtonDrag(button: QToolButton, providerId: String) {
         button.installEventFilter(object : QObject(button) {
             private var pressPos: QPoint? = null
@@ -409,6 +511,9 @@ class SidePanelMngr(
         })
     }
 
+    /**
+     * Drag helper for [installDockButtonDrag]
+     */
     private fun startDockButtonDrag(button: QToolButton, providerId: String) {
         val mime = QMimeData().apply { setData(dockDragMimeType, QByteArray(providerId.toByteArray())) }
         val drag = QDrag(button)
@@ -418,6 +523,9 @@ class SidePanelMngr(
         drag.exec()
     }
 
+    /**
+     * Drag helper for [installDockButtonDrag]
+     */
     private fun installSidebarDropTarget(toolbar: QToolBar, area: Qt.DockWidgetArea) {
         toolbar.acceptDrops = true
         toolbar.installEventFilter(object : QObject(toolbar) {
@@ -452,6 +560,9 @@ class SidePanelMngr(
         })
     }
 
+    /**
+     * Gets a dock ID from [QMimeData]
+     */
     private fun extractDockId(mimeData: QMimeData?): String? {
         val md = mimeData ?: return null
         if(!md.hasFormat(dockDragMimeType)) return null
@@ -463,12 +574,26 @@ class SidePanelMngr(
         return id.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Moves a dock using its ID
+     */
     private fun moveDockById(dockId: String, area: Qt.DockWidgetArea) {
         val dock = docks[dockId] ?: return
         val provider = providersById[dockId] ?: return
         moveDock(dock, provider, area)
     }
 
+    /**
+     * Toggles a dock widget by its provider ID
+     */
+    fun toggleDock(id: String) {
+        val action = dockActions[id] ?: return
+        action.trigger()
+    }
+
+    /**
+     * Shows or hides specified [DockWidget]
+     */
     private fun setDockVisibility(dock: DockWidget, action: QAction, visible: Boolean) {
         if (visible) {
             dock.show()
@@ -479,6 +604,9 @@ class SidePanelMngr(
         action.isChecked = visible
     }
 
+    /**
+     * Installs an Active Task indicator to the bottom toolbar
+     */
     private fun installBottomTaskIndicator() {
         val spacer = QWidget(bottomBar).apply {
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -515,6 +643,9 @@ class SidePanelMngr(
         refreshBottomTaskIndicator()
     }
 
+    /**
+     * Refresh the active task indicator
+     */
     private fun refreshBottomTaskIndicator() {
         if (!::bottomTaskWidget.isInitialized) return
 
@@ -567,8 +698,14 @@ class SidePanelMngr(
         parent.updateGeometry()
     }
 
+    /**
+     * Returns active dock widgets
+     */
     fun dockWidgets(): Map<String, QDockWidget> = HashMap(docks)
 
+    /**
+     * Persist docks' states
+     */
     fun captureState(): List<PersistedDockState> {
         return docks.entries.map { (id, dock) ->
             PersistedDockState(
@@ -579,6 +716,9 @@ class SidePanelMngr(
         }
     }
 
+    /**
+     * Restores dock states
+     */
     fun restoreState(states: List<PersistedDockState>) {
         pendingDockStates.clear()
         states.forEach { state ->

@@ -18,6 +18,8 @@ object StepRegistry {
         register("createFile") { desc -> CreateFileStep.fromDescriptor(desc) }
         register("patchFile") { desc -> PatchFileStep.fromDescriptor(desc) }
         register("runCommand") { desc -> RunCommandStep.fromDescriptor(desc) }
+        register("importMods") { desc -> ImportModsStep.fromDescriptor(desc) }
+        register("importFiles") { desc -> ImportFilesStep.fromDescriptor(desc) }
     }
 
     /**
