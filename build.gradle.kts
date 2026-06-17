@@ -178,7 +178,11 @@ val compileGrammarNative by tasks.registering {
         cmakeBuildDir.mkdirs()
         val javaHome = System.getProperty("java.home")
         val cmakeEnv = mapOf("JAVA_HOME" to javaHome)
-        val configure = ProcessBuilder("cmake", srcDir.path, "-DCMAKE_BUILD_TYPE=Release")
+        val configure = ProcessBuilder(
+            "cmake", srcDir.path,
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${cmakeBuildDir.path}"
+        )
             .directory(cmakeBuildDir)
             .inheritIO()
             .apply { environment().putAll(cmakeEnv) }
@@ -186,12 +190,20 @@ val compileGrammarNative by tasks.registering {
         if (configure.waitFor() != 0) {
             throw GradleException("cmake configuration failed for tree-sitter-javascript grammar")
         }
-        val build = ProcessBuilder("cmake", "--build", ".", "--target", "ktreesitter-javascript", "--parallel")
+        val build = ProcessBuilder("cmake", "--build", ".", "--config", "Release", "--target", "ktreesitter-javascript", "--parallel")
             .directory(cmakeBuildDir)
             .inheritIO()
             .start()
         if (build.waitFor() != 0) {
             throw GradleException("cmake build failed for tree-sitter-javascript grammar")
+        }
+
+        val libFile = cmakeBuildDir.resolve(nativeGrammarLibName)
+        if (!libFile.exists()) {
+            throw GradleException(
+                "Native grammar library was not produced at expected path: ${libFile}. " +
+                "cmake exited successfully but the output file is missing."
+            )
         }
     }
 }
@@ -221,7 +233,10 @@ tasks.processResources {
     doFirst {
         val libFile = nativeLibDir.get().file(nativeGrammarLibName).asFile
         if (!libFile.exists()) {
-            logger.warn("Native grammar library not found at ${libFile}; JS syntax highlighting disabled")
+            throw GradleException(
+                "Native grammar library not found at ${libFile}. " +
+                "The compileGrammarNative task should have produced it."
+            )
         }
     }
 
