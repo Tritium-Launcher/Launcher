@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 /// Prevent Windows Recall from capturing windows belonging to the given PID.
 /// Returns `true` if all windows were successfully protected (or no-op on Linux).
 
@@ -15,11 +13,11 @@ pub fn block_recall(target_pid: u32) -> bool {
     let all_ok = AtomicBool::new(true);
 
     unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let (target, flag) = &*(lparam.0 as *const (u32, AtomicBool));
+        let (target, flag) = unsafe { &*(lparam.0 as *const (u32, AtomicBool)) };
         let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
         if pid == *target {
-            if !SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).as_bool() {
+            if unsafe { !SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).as_bool() } {
                 flag.store(false, Ordering::SeqCst);
             }
         }
