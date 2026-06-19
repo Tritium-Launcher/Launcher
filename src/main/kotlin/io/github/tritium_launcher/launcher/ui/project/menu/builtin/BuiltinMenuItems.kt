@@ -13,10 +13,7 @@ import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.fromTR
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.CompanionBridge
-import io.github.tritium_launcher.launcher.platform.CompanionBridgeResponse
-import io.github.tritium_launcher.launcher.platform.GameLauncher
-import io.github.tritium_launcher.launcher.platform.GameProcessMngr
+import io.github.tritium_launcher.launcher.platform.*
 import io.github.tritium_launcher.launcher.registrydb.RegistryRefreshService
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
 import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
@@ -96,6 +93,9 @@ object BuiltinMenuItems {
                     val response = CompanionBridge.reloadServer()
                     if (response.ok) {
                         postBridgeResponse(project, "Reload", response)
+                        if (CoreSettingValues.focusGameAfterReload) {
+                            focusGameWindow(project)
+                        }
                     } else {
                         logger.warn("Smart rerun reload failed: {}. Falling back to restart.", response.message)
                         launchOrPrepare(project)
@@ -561,6 +561,9 @@ object BuiltinMenuItems {
             scope.launch {
                 val response = CompanionBridge.reloadServer()
                 postBridgeResponse(project, "Reload Server", response)
+                if (response.ok && CoreSettingValues.focusGameAfterReload) {
+                    focusGameWindow(project)
+                }
             }
         }
     )
@@ -952,6 +955,36 @@ object BuiltinMenuItems {
             response.message,
             if (response.ok) TIcons.Run.icon else TIcons.Cross.icon
         )
+    }
+
+    private fun focusGameWindow(project: ProjectBase?) {
+        if (project == null) {
+            logger.debug("focusGameWindow: no project")
+            return
+        }
+        val ctx = GameProcessMngr.snapshot(project) ?: run {
+            logger.debug("focusGameWindow: no game process snapshot for project")
+            return
+        }
+        if (!ctx.isRunning) {
+            logger.debug("focusGameWindow: game process {} is not running", ctx.pid)
+            return
+        }
+
+        val exeName = if (Platform.isWindows) "os-helper.exe" else "os-helper"
+        val helperPath = Platform.resolveOsHelper()
+
+        if (helperPath == null) {
+            logger.info("focusGameWindow: os-helper binary not found, falling back to PATH lookup")
+        } else {
+            logger.info("focusGameWindow: using os-helper at {}", helperPath)
+        }
+
+        val cmd = listOfNotNull(helperPath ?: exeName, "focus", "--pid", ctx.pid.toString())
+        logger.info("focusGameWindow: running: {}", cmd.joinToString(" "))
+        if (!Platform.runProcess(cmd)) {
+            logger.warn("focusGameWindow: os-helper focus failed for PID {}", ctx.pid)
+        }
     }
 
     private fun postActionStatus(project: ProjectBase?, header: String, message: String, icon: QIcon) {

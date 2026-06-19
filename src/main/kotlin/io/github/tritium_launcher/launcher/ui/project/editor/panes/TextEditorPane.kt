@@ -2,6 +2,7 @@ package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
 import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.extension.kubejs.KubeJSIntelligenceService
 import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
@@ -19,12 +20,14 @@ import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
 import io.qt.Nullable
 import io.qt.core.QTimer
+import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.QFrame
 import io.qt.widgets.QHBoxLayout
 import io.qt.widgets.QTextEdit
 import io.qt.widgets.QWidget
 import kotlinx.coroutines.*
+import kotlin.time.Duration.Companion.milliseconds
 
 class TextEditorPane(
     project: ProjectBase,
@@ -46,6 +49,9 @@ class TextEditorPane(
     private var loading: Boolean = false
     private var rainbowTimer: QTimer? = null
     private var gutter: LineNumberGutter? = null
+    private var cachedSlots: List<ItemSlotInfo> = emptyList()
+    private var slotCacheJob: Job? = null
+    private var rainbowSelections: List<QTextEdit.ExtraSelection> = emptyList()
 
     init {
         textEdit.font = font
@@ -84,10 +90,8 @@ class TextEditorPane(
                     interval = 300
                     isSingleShot = true
                     timeout.connect {
-                        val rainbow = RainbowBracketHighlighter.highlight(textEdit)
-                        if (rainbow.isNotEmpty()) {
-                            textEdit.setExtraSelections(rainbow)
-                        }
+                        rainbowSelections = RainbowBracketHighlighter.highlight(textEdit)
+                        textEdit.setExtraSelections(rainbowSelections)
                     }
                 }
                 textEdit.textChanged.connect {
@@ -98,8 +102,18 @@ class TextEditorPane(
 
         textEdit.textChanged.connect {
             if (!loading) {
-                modified = textEdit.toPlainText() != originalText
+                modified = true
+                if (treeSitterAdapter != null) scheduleSlotRefresh()
             }
+        }
+    }
+
+    private fun scheduleSlotRefresh() {
+        slotCacheJob?.cancel()
+        slotCacheJob = scope.launch(Dispatchers.Default) {
+            delay(500.milliseconds)
+            val text = textEdit.toPlainText()
+            cachedSlots = KubeJSIntelligenceService.findAllItemSlots(project, text)
         }
     }
 
@@ -174,7 +188,7 @@ class TextEditorPane(
         override fun dragEnterEvent(event: @Nullable QDragEnterEvent?) {
             val ev = event ?: return
             if (ev.mimeData()?.hasText() == true && treeSitterAdapter != null) {
-                lastDragSlots = KubeJSIntelligenceService.findAllItemSlots(project, toPlainText())
+                lastDragSlots = cachedSlots
                 ev.acceptProposedAction()
                 return
             }
@@ -239,6 +253,159 @@ class TextEditorPane(
             super.dragLeaveEvent(event)
         }
 
+        override fun keyPressEvent(event: @Nullable QKeyEvent?) {
+            val ev = event ?: return super.keyPressEvent(event)
+            val key = ev.key()
+
+            if (CoreSettingValues.editorInsertPairCurlyOnEnter &&
+                (key == Qt.Key.Key_Return.value() || key == Qt.Key.Key_Enter.value())
+            ) {
+                if (handleEnterWithBrace()) return
+            }
+
+            if (CoreSettingValues.editorInsertPairedBrackets &&
+                key == Qt.Key.Key_Backspace.value()
+            ) {
+                if (handleBackspacePair()) return
+            }
+
+            val text = ev.text()
+            if (text.length == 1 && CoreSettingValues.editorInsertPairedBrackets) {
+                val closing = when (text[0]) {
+                    '(' -> ')'; '[' -> ']'; '{' -> '}'; '<' -> '>'
+                    '\'' -> '\''; '"' -> '"'; '`' -> '`'
+                    else -> null
+                }
+                if (closing != null) {
+                    val cursor = textCursor()
+                    if (cursor.hasSelection()) {
+                        cursor.insertText("${text[0]}${cursor.selectedText()}$closing")
+                    } else {
+                        val pos = cursor.position()
+                        val doc = toPlainText()
+                        if (text[0] in "'\"`") {
+                            val before = doc.getOrNull(pos - 1)
+                            val after = doc.getOrNull(pos)
+                            val adjBefore = before != null && before != text[0] && !before.isWhitespace()
+                            val adjAfter = after != null && after != text[0] && !after.isWhitespace()
+                            if (adjBefore || adjAfter) {
+                                cursor.insertText(text)
+                                setTextCursor(cursor)
+                                return
+                            }
+
+                            // Upgrade to triple-quote pair when two same quotes before cursor
+                            if (pos >= 2 && doc.substring(pos - 2, pos) == "${text[0]}${text[0]}" &&
+                                doc.getOrNull(pos) != text[0]
+                            ) {
+                                cursor.beginEditBlock()
+                                cursor.setPosition(pos - 2)
+                                cursor.setPosition(pos, QTextCursor.MoveMode.KeepAnchor)
+                                cursor.removeSelectedText()
+                                val triple = "${text[0]}${text[0]}${text[0]}"
+                                cursor.insertText(triple)
+                                val mid = cursor.position()
+                                cursor.insertText(triple)
+                                cursor.setPosition(mid)
+                                cursor.endEditBlock()
+                                setTextCursor(cursor)
+                                return
+                            }
+                            // Skip past closing quote
+                            if (pos < doc.length && doc[pos] == text[0]) {
+                                cursor.setPosition(pos + 1)
+                                setTextCursor(cursor)
+                                return
+                            }
+                            if (before == text[0]) {
+                                cursor.insertText(text)
+                                setTextCursor(cursor)
+                                return
+                            }
+                        }
+                        cursor.beginEditBlock()
+                        cursor.insertText(text)
+                        val afterOpen = cursor.position()
+                        cursor.insertText(closing.toString())
+                        cursor.setPosition(afterOpen)
+                        cursor.endEditBlock()
+                        setTextCursor(cursor)
+                    }
+                    return
+                }
+            }
+
+            super.keyPressEvent(ev)
+        }
+
+        private fun handleEnterWithBrace(): Boolean {
+            val cursor = textCursor()
+            val pos = cursor.position()
+            val text = toPlainText()
+
+            var scan = pos
+            while (scan < text.length && text[scan].isWhitespace() && text[scan] != '\n') scan++
+            if (scan < text.length && text[scan] == '}') {
+                val currentIndent = cursor.block().text().takeWhile { it.isWhitespace() }.length
+                val childIndent = currentIndent + 2
+                cursor.beginEditBlock()
+                val midPos = pos + 1 + childIndent
+                cursor.insertText("\n" + " ".repeat(childIndent))
+                cursor.insertText("\n" + " ".repeat(currentIndent))
+                cursor.setPosition(midPos)
+                cursor.endEditBlock()
+                setTextCursor(cursor)
+                return true
+            }
+
+            var depth = 0
+            for (i in pos - 1 downTo 0) {
+                when (text[i]) {
+                    '}' -> depth++
+                    '{' -> if (depth == 0) {
+                        val curIndent = cursor.block().text().takeWhile { it.isWhitespace() }
+                        cursor.beginEditBlock()
+                        cursor.insertText("\n$curIndent")
+                        cursor.endEditBlock()
+                        setTextCursor(cursor)
+                        return true
+                    } else depth--
+                }
+            }
+
+            return false
+        }
+
+        private fun handleBackspacePair(): Boolean {
+            val cursor = textCursor()
+            if (cursor.hasSelection()) return false
+            val pos = cursor.position()
+            val text = toPlainText()
+            if (pos <= 0 || pos >= text.length) return false
+
+            val before = text[pos - 1]
+            val after = text[pos]
+            val isPaired = when (before) {
+                '(' -> after == ')'
+                '[' -> after == ']'
+                '{' -> after == '}'
+                '<' -> after == '>'
+                '\'' -> after == '\''
+                '"' -> after == '"'
+                '`' -> after == '`'
+                else -> false
+            }
+            if (!isPaired) return false
+
+            cursor.beginEditBlock()
+            cursor.setPosition(pos - 1)
+            cursor.setPosition(pos + 1, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.endEditBlock()
+            setTextCursor(cursor)
+            return true
+        }
+
         private fun makeSlotHighlight(slot: ItemSlotInfo, alpha: Int): ExtraSelection {
             return ExtraSelection().apply {
                 cursor = QTextCursor(document()).apply {
@@ -261,7 +428,7 @@ private class LineNumberGutter(private val editor: QTextEdit) : QWidget() {
     init {
         font = gutterFont
         setFixedWidth(gutterWidth)
-        setAttribute(io.qt.core.Qt.WidgetAttribute.WA_TransparentForMouseEvents, true)
+        setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, true)
 
         editor.verticalScrollBar()?.valueChanged?.connect { repaint() }
         editor.textChanged.connect { repaint() }
@@ -276,26 +443,26 @@ private class LineNumberGutter(private val editor: QTextEdit) : QWidget() {
         painter.drawLine(width() - 1, 0, width() - 1, height())
 
         val doc = editor.document() ?: run { painter.end(); return }
-        val scrollPos = editor.verticalScrollBar()?.value() ?: 0
-        val vpHeight = editor.viewport()?.height() ?: 0
+        val scrollBar = editor.verticalScrollBar() ?: run { painter.end(); return }
+        val scrollPos = scrollBar.value()
+        val vpHeight = editor.viewport()?.height() ?: run { painter.end(); return }
 
         painter.setPen(QColor(TColors.Subtext))
-
-        var block = doc.begin()
-        var lineNum = 1
         val layout = doc.documentLayout()!!
 
+        val lineHeight = fm.lineSpacing().toFloat().coerceAtLeast(1f)
+        val firstVisibleLine = (scrollPos / lineHeight).toInt().coerceAtLeast(0)
+        var block = doc.findBlockByNumber(firstVisibleLine)
+        if (!block.isValid) { painter.end(); return }
+        var lineNum = firstVisibleLine + 1
+
+        val maxY = scrollPos + vpHeight
         while (block.isValid) {
             val rect = layout.blockBoundingRect(block)
             val blockTop = rect.y().toInt()
-            val blockHeight = rect.height().toInt()
-
-            if (blockTop + blockHeight >= scrollPos && blockTop <= scrollPos + vpHeight) {
-                val y = blockTop - scrollPos + fm.ascent()
-                val text = lineNum.toString()
-                painter.drawText(6, y, text)
-            }
-
+            if (blockTop > maxY) break
+            val y = blockTop - scrollPos + fm.ascent()
+            painter.drawText(6, y, lineNum.toString())
             lineNum++
             block = block.next()
         }

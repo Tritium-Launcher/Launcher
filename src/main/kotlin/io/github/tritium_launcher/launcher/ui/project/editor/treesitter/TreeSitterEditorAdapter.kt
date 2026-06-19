@@ -9,6 +9,7 @@ import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.project.editor.RainbowBracketHighlighter
 import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.CompletionItem
+import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.CompletionItemKind
 import io.github.tritium_launcher.launcher.ui.project.editor.lsp.CompletionPopup
 import io.github.tritium_launcher.launcher.ui.project.editor.lsp.HoverOverlay
 import io.github.tritium_launcher.launcher.ui.theme.TColors
@@ -45,7 +46,22 @@ class TreeSitterEditorAdapter(
 
     private val hoverHideTimer = QTimer()
 
+    private var bracketSelections: List<QTextEdit.ExtraSelection> = emptyList()
+
+    private val syntaxColorCache = mapOf(
+        "Comment" to TColors.Syntax.Comment.hexToQColor(),
+        "String" to TColors.Syntax.String.hexToQColor(),
+        "Number" to TColors.Syntax.Number.hexToQColor(),
+        "Function" to TColors.Syntax.Function.hexToQColor(),
+        "Property" to TColors.Syntax.Property.hexToQColor(),
+        "Keyword" to TColors.Syntax.Keyword.hexToQColor(),
+        "Operator" to TColors.Syntax.Operator.hexToQColor(),
+        "Variable" to TColors.Syntax.Variable.hexToQColor(),
+        "Module" to TColors.Syntax.Namespace.hexToQColor()
+    )
+
     init {
+        bracketSelections = RainbowBracketHighlighter.highlight(textEdit)
         hoverHideTimer.interval = 100
         hoverHideTimer.timeout.connect { checkHoverShouldHide() }
         textEdit.tabChangesFocus = false
@@ -55,10 +71,15 @@ class TreeSitterEditorAdapter(
 
         textEdit.textChanged.connect {
             textChangedSinceCursorMoved = true
-            scheduleParse()
+            val cursor = textEdit.textCursor()
+            val text = textEdit.toPlainText()
+            val doc = textEdit.document ?: return@connect
+            scheduleParse(text, doc)
             flushSelections()
-            scheduleCompletionRefresh()
-            scheduleSignatureHelp()
+            scheduleCompletionRefresh(cursor, text)
+            if (hasUnclosedParenBeforeCursor(cursor)) {
+                scheduleSignatureHelp(cursor, text)
+            }
         }
 
         textEdit.cursorPositionChanged.connect {
@@ -91,12 +112,11 @@ class TreeSitterEditorAdapter(
                             completionJob?.cancel()
                             signatureJob?.cancel()
                             completionPopup.hide()
-                            scheduleSignatureHelp()
+                            val sigCursor = textEdit.textCursor()
+                            scheduleSignatureHelp(sigCursor, textEdit.toPlainText())
                         } else if (keyEvent.text() == "." || (ctrl && (keyEvent.key() == Qt.Key.Key_Space.value() || keyEvent.key() == Qt.Key.Key_Return.value() || keyEvent.key() == Qt.Key.Key_Enter.value()))) {
                             completionJob?.cancel()
-                            if (keyEvent.text() == ".") {
-                                requestCompletions()
-                            } else {
+                            if (keyEvent.text() != ".") {
                                 requestCompletions(force = true)
                                 return true
                             }
@@ -140,6 +160,7 @@ class TreeSitterEditorAdapter(
                     }
                     QEvent.Type.FocusOut -> {
                         hideOverlay()
+                        completionPopup.hide()
                         QToolTip.hideText()
                     }
                     else -> {}
@@ -160,11 +181,8 @@ class TreeSitterEditorAdapter(
         hoverOverlay.cleanup()
     }
 
-    private fun scheduleParse() {
+    private fun scheduleParse(text: String, doc: QTextDocument) {
         parseJob?.cancel()
-        // Read Qt widget state ON MAIN THREAD only
-        val text = textEdit.toPlainText()
-        val doc = textEdit.document ?: return
 
         parseJob = scope.launch(bgDispatcher) {
             delay(300.milliseconds)
@@ -173,7 +191,9 @@ class TreeSitterEditorAdapter(
                 walkForHighlight(parseResult.rootNode, doc, selections)
                 val errorSelections = mutableListOf<QTextEdit.ExtraSelection>()
                 walkForErrors(parseResult.rootNode, doc, errorSelections)
+                val bracketSelections = RainbowBracketHighlighter.highlight(textEdit)
                 withContext(Dispatchers.Main) {
+                    this@TreeSitterEditorAdapter.bracketSelections = bracketSelections
                     semanticSelections = selections
                     diagnosticSelections = errorSelections
                     flushSelections()
@@ -192,13 +212,16 @@ class TreeSitterEditorAdapter(
             selections += makeSelection(doc, start, end, color)
             return
         }
-        if (node.type == "identifier" && contextToken(node) != null) {
-            val color = tokenColorFromName(contextToken(node)!!)
-            val start = node.startByte.toInt()
-            val end = node.endByte.toInt()
-            if (start >= end) return
-            selections += makeSelection(doc, start, end, color)
-            return
+        if (node.type == "identifier") {
+            val token = contextToken(node)
+            if (token != null) {
+                val color = tokenColorFromName(token)
+                val start = node.startByte.toInt()
+                val end = node.endByte.toInt()
+                if (start >= end) return
+                selections += makeSelection(doc, start, end, color)
+                return
+            }
         }
         val childCount = node.childCount.toInt()
         if (childCount == 0) {
@@ -229,20 +252,8 @@ class TreeSitterEditorAdapter(
         }
     }
 
-    private fun tokenColorFromName(name: String): QColor {
-        return when (name) {
-            "Comment" -> TColors.Syntax.Comment.hexToQColor()
-            "String" -> TColors.Syntax.String.hexToQColor()
-            "Number" -> TColors.Syntax.Number.hexToQColor()
-            "Function" -> TColors.Syntax.Function.hexToQColor()
-            "Property" -> TColors.Syntax.Property.hexToQColor()
-            "Keyword" -> TColors.Syntax.Keyword.hexToQColor()
-            "Operator" -> TColors.Syntax.Operator.hexToQColor()
-            "Variable" -> TColors.Syntax.Variable.hexToQColor()
-            "Module" -> TColors.Syntax.Namespace.hexToQColor()
-            else -> TColors.Syntax.Default.hexToQColor()
-        }
-    }
+    private fun tokenColorFromName(name: String): QColor =
+        syntaxColorCache[name] ?: TColors.Syntax.Default.hexToQColor()
 
     private fun walkForErrors(node: Node, doc: QTextDocument, selections: MutableList<QTextEdit.ExtraSelection>) {
         if (node.isError || node.isMissing) {
@@ -259,23 +270,11 @@ class TreeSitterEditorAdapter(
 
     private fun tokenColor(type: String): QColor? {
         val tokenName = JavaScriptNodeTypes.tokenName(type)
-        return when (tokenName) {
-            "Comment" -> TColors.Syntax.Comment.hexToQColor()
-            "String" -> TColors.Syntax.String.hexToQColor()
-            "Number" -> TColors.Syntax.Number.hexToQColor()
-            "Function" -> TColors.Syntax.Function.hexToQColor()
-            "Property" -> TColors.Syntax.Property.hexToQColor()
-            "Keyword" -> TColors.Syntax.Keyword.hexToQColor()
-            "Operator" -> TColors.Syntax.Operator.hexToQColor()
-            "Variable" -> TColors.Syntax.Variable.hexToQColor()
-            "Module" -> TColors.Syntax.Namespace.hexToQColor()
-            else -> {
-                when (type) {
-                    in JavaScriptNodeTypes.keywordTypes -> TColors.Syntax.Keyword.hexToQColor()
-                    in JavaScriptNodeTypes.operatorTypes -> TColors.Syntax.Operator.hexToQColor()
-                    else -> TColors.Syntax.Default.hexToQColor()
-                }
-            }
+        if (tokenName != null) return tokenColorFromName(tokenName)
+        return when {
+            type in JavaScriptNodeTypes.keywordTypes -> TColors.Syntax.Keyword.hexToQColor()
+            type in JavaScriptNodeTypes.operatorTypes -> TColors.Syntax.Operator.hexToQColor()
+            else -> TColors.Syntax.Default.hexToQColor()
         }
     }
 
@@ -302,19 +301,17 @@ class TreeSitterEditorAdapter(
         }
     }
 
-    private fun scheduleCompletionRefresh() {
+    private fun scheduleCompletionRefresh(cursor: QTextCursor, text: String) {
         completionJob?.cancel()
-        // Read Qt state on Main thread
-        val cursor = textEdit.textCursor()
         val prefix = extractPrefix(cursor)
         val hasDot = hasDotBeforeCursor(cursor)
         val lineText = cursor.block().text()
         val column = cursor.position() - cursor.block().position()
         val cursorPosition = cursor.position()
-        val fullText = if (hasDot) textEdit.toPlainText() else ""
+        val fullText = if (hasDot) text else ""
 
         completionJob = scope.launch(bgDispatcher) {
-            delay(200.milliseconds)
+            if (!hasDot) delay(200.milliseconds)
             try {
                 requestCompletionsInternal(prefix, hasDot, lineText, column, cursorPosition, fullText)
             } catch (t: Throwable) {
@@ -338,15 +335,67 @@ class TreeSitterEditorAdapter(
         }
     }
 
+    /**
+     * Walks the Tree-sitter AST of [fullText] for [let], [const], and [var] declarations,
+     * returning those whose block/script scope contains [cursorPos].
+     */
+    private fun extractLocalVariables(fullText: String, cursorPos: Int): List<CompletionItem> {
+        val parseResult = TreeSitterService.parse(fullText) ?: return emptyList()
+        val root = parseResult.rootNode
+        val items = mutableListOf<CompletionItem>()
+
+        fun findScope(node: Node): Node? {
+            var current = node.parent
+            while (current != null) {
+                if (current.type == "program" || current.type == "statement_block") return current
+                current = current.parent
+            }
+            return null
+        }
+
+        fun walk(node: Node) {
+            if (node.type == "variable_declarator") {
+                val idNode = node.children.firstOrNull { it.type == "identifier" }
+                if (idNode != null) {
+                    val scope = findScope(node)
+                    if (scope != null) {
+                        val s = scope.startByte.toInt()
+                        val e = scope.endByte.toInt()
+                        if (cursorPos in s until e) {
+                            idNode.text()?.let { name ->
+                                items.add(CompletionItem(
+                                    label = name.toString(),
+                                    kind = CompletionItemKind.Variable,
+                                    detail = "local variable"
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            for (child in node.children) {
+                walk(child)
+            }
+        }
+
+        walk(root)
+        return items
+    }
+
     private fun requestCompletionsInternal(prefix: String, hasDot: Boolean, lineText: String, column: Int, cursorPosition: Int, fullText: String) {
-        if (prefix.isEmpty() && !hasDot) return
+        if (prefix.isEmpty() && !hasDot) {
+            scope.launch(Dispatchers.Main) { completionPopup.hide() }
+            return
+        }
         try {
             val items = if (hasDot) {
                 log.info("requestCompletions: contextual path hasDot=true line='{}' col={} fullTextLen={}", lineText, column, fullText.length)
                 KubeJSIntelligenceService.getContextualCompletions(project, fullText, cursorPosition)
             } else {
                 log.info("requestCompletions: line-only path line='{}' col={} prefix='{}'", lineText, column, prefix)
-                KubeJSIntelligenceService.getCompletions(project, lineText, column)
+                val globalItems = KubeJSIntelligenceService.getCompletions(project, lineText, column)
+                val localVars = extractLocalVariables(fullText, cursorPosition)
+                globalItems + localVars
             }
             if (items.isEmpty()) log.info("requestCompletions: 0 items (line='{}', col={})", lineText, column)
             else log.info("requestCompletions: {} items (line='{}', col={})", items.size, lineText, column)
@@ -362,8 +411,12 @@ class TreeSitterEditorAdapter(
             scope.launch(Dispatchers.Main) {
                 log.info("requestCompletions GUI: filtered={}, popupVisible={}", filtered.size, completionPopup.isVisible)
                 if (filtered.isEmpty()) {
-                    log.info("requestCompletions GUI: hiding popup")
-                    completionPopup.hide()
+                    if (!hasDot) {
+                        log.info("requestCompletions GUI: hiding popup (no dot)")
+                        completionPopup.hide()
+                    } else {
+                        log.info("requestCompletions GUI: keeping popup (hasDot)")
+                    }
                 } else {
                     log.info("requestCompletions GUI: showing popup with {} items", filtered.size)
                     completionPopup.setCompletions(filtered)
@@ -382,17 +435,15 @@ class TreeSitterEditorAdapter(
         }
     }
 
-    private fun scheduleSignatureHelp() {
+    private fun scheduleSignatureHelp(cursor: QTextCursor, text: String) {
         signatureJob?.cancel()
-        // Read Qt state on Main thread
-        val cursorPos = textEdit.textCursor().position()
-        val fullText = textEdit.toPlainText()
-        log.info("scheduleSignatureHelp: cursorPos={} fullTextLen={}", cursorPos, fullText.length)
+        val cursorPos = cursor.position()
+        log.info("scheduleSignatureHelp: cursorPos={} fullTextLen={}", cursorPos, text.length)
 
         signatureJob = scope.launch(bgDispatcher) {
             delay(200.milliseconds)
             try {
-                val signature = KubeJSIntelligenceService.getSignatureHelp(project, fullText, cursorPos)
+                val signature = KubeJSIntelligenceService.getSignatureHelp(project, text, cursorPos)
                 log.info("scheduleSignatureHelp: getSignatureHelp returned '{}'", signature)
                 if (signature == null) return@launch
                 launch(Dispatchers.Main) {
@@ -463,6 +514,20 @@ class TreeSitterEditorAdapter(
         return i > 0 && text[i - 1] == '.'
     }
 
+    private fun hasUnclosedParenBeforeCursor(cursor: QTextCursor): Boolean {
+        val block = cursor.block()
+        val text = block.text()
+        val pos = cursor.position() - block.position()
+        var depth = 0
+        for (i in 0 until pos.coerceAtMost(text.length)) {
+            when (text[i]) {
+                '(' -> depth++
+                ')' -> depth--
+            }
+        }
+        return depth > 0
+    }
+
     private fun extractSymbolAt(cursor: QTextCursor): String? {
         val block = cursor.block()
         val text = block.text()
@@ -503,7 +568,7 @@ class TreeSitterEditorAdapter(
     }
 
     fun flushSelections() {
-        textEdit.setExtraSelections(temporarySelections + semanticSelections + diagnosticSelections + RainbowBracketHighlighter.highlight(textEdit))
+        textEdit.setExtraSelections(temporarySelections + semanticSelections + diagnosticSelections + bracketSelections)
     }
 
     fun getHighlightSelections(): List<QTextEdit.ExtraSelection> =

@@ -46,6 +46,7 @@ local.properties
 src/main/resources/icons
 AppDir
 tools/registry-builder/target/
+/tools/os-helper/target/
 CMakeCache.txt
 CMakeFiles/
 Makefile

@@ -10,6 +10,7 @@ import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.Comple
 import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.CompletionItemKind
 import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.HoverContent
 import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.ItemSlotInfo
+import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.TreeSitterParseResult
 import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.TreeSitterService
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -20,6 +21,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.sqlite.SQLiteConfig
 import java.nio.ByteBuffer
 import java.sql.Connection
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Provides KubeJS-aware editor intelligence from the per-project registry export.
@@ -160,10 +162,14 @@ object KubeJSIntelligenceService {
         val events: List<EventInfo>,
         val recipes: List<RecipeSchemaInfo>,
         val bindingByName: Map<String, BindingInfo>,
-        val classBySimpleName: Map<String, ClassInfo>,
+        val classBySimpleName: Map<String, List<ClassInfo>>,
         val classByFullName: Map<String, ClassInfo>,
-        val eventsByGroup: Map<String, List<EventInfo>>
-    )
+        val eventsByGroup: Map<String, List<EventInfo>>,
+        val recipesBySchemaId: Map<String, List<RecipeSchemaInfo>>
+    ) {
+        fun lookupClass(name: String): ClassInfo? =
+            classByFullName[name] ?: classBySimpleName[name]?.firstOrNull()
+    }
 
     /**
      * Holds the read-only SQLite connection for one project's fallback typings
@@ -196,6 +202,7 @@ object KubeJSIntelligenceService {
      * and parse successfully; otherwise returns `null` so callers can fall back to
      * SQLite or suppress KubeJS-specific intelligence.
      */
+    @Synchronized
     private fun getData(project: ProjectBase): FlatCache? {
         val projectDir = project.projectDir.toString()
         val current = flatCache
@@ -244,10 +251,14 @@ object KubeJSIntelligenceService {
             events = events,
             recipes = recipes,
             bindingByName = bindings.associateBy { it.name },
-            classBySimpleName = classes.associateBy { it.simpleName },
+            classBySimpleName = classes.groupBy { it.simpleName },
             classByFullName = classes.associateBy { it.fullName },
-            eventsByGroup = events.groupBy { it.groupName }
+            eventsByGroup = events.groupBy { it.groupName },
+            recipesBySchemaId = recipes.groupBy { it.schemaId }
         )
+        membersCache.clear()
+        paramTypeCache.clear()
+        memberTypeCache.clear()
         flatCache = cache
         return cache
     }
@@ -403,11 +414,14 @@ object KubeJSIntelligenceService {
         }
     }
 
+
+    private val membersCache = mutableMapOf<String, List<CompletionItem>>()
     /**
      * Builds completion items for all visible members of [className], walking
      * superclasses and interfaces while de-duplicating inherited overloads.
      */
     private fun membersOfClass(cache: FlatCache, className: String): List<CompletionItem> {
+        membersCache[className]?.let { return it }
         val seen = mutableSetOf<String>()
         val seenMembers = mutableSetOf<String>()
         val items = mutableListOf<CompletionItem>()
@@ -417,7 +431,7 @@ object KubeJSIntelligenceService {
             val currentName = queue.removeFirst()
             if (currentName in seen) continue
             seen.add(currentName)
-            val cls = cache.classByFullName[currentName] ?: cache.classBySimpleName[currentName] ?: continue
+            val cls = cache.lookupClass(currentName) ?: continue
             for (m in cls.methods) {
                 val key = "${m.name}|${m.parameters.size}|${m.parameters.joinToString { it.second }}"
                 if (seenMembers.add(key)) {
@@ -447,6 +461,7 @@ object KubeJSIntelligenceService {
                 queue.add(iface)
             }
         }
+        membersCache[className] = items
         return items
     }
 
@@ -525,25 +540,32 @@ object KubeJSIntelligenceService {
             logger.info("getContextualCompletionsFlat: varName is null")
         }
         logger.info("getContextualCompletionsFlat: dotPos={} varName='{}'", dotPos, varName)
-        val typeName = resolveCallbackParameterTypeFlat(cache, fullText, cursorPos, varName)
-        logger.info("getContextualCompletionsFlat: resolved typeName='{}'", typeName)
-        if (typeName == null) return existing
-        val members = membersOfClass(cache, typeName)
-        logger.info("getContextualCompletionsFlat: membersOfClass({}) = {} items", typeName, members.size)
-        return members
+        val sharedParse = if (TreeSitterService.isAvailable()) TreeSitterService.parse(fullText) else null
+        val typeName = resolveCallbackParameterTypeFlat(cache, fullText, cursorPos, varName, sharedParse)
+        logger.info("getContextualCompletionsFlat: callback param resolved typeName='{}'", typeName)
+        if (typeName != null) {
+            val members = membersOfClass(cache, typeName)
+            logger.info("getContextualCompletionsFlat: membersOfClass({}) = {} items", typeName, members.size)
+            return members
+        }
+        val localType = resolveLocalVariableType(cache, fullText, cursorPos, varName, sharedParse)
+        logger.info("getContextualCompletionsFlat: local var resolved typeName='{}'", localType)
+        if (localType != null) {
+            val members = membersOfClass(cache, localType)
+            logger.info("getContextualCompletionsFlat: membersOfClass({}) = {} items", localType, members.size)
+            return members
+        }
+        return existing
     }
 
     /**
      * Resolves the class of a callback parameter by walking from the cursor to the
      * enclosing function and matching that callback to its event registration call.
      */
-    private fun resolveCallbackParameterTypeFlat(cache: FlatCache, fullText: String, cursorPos: Int, varName: String): String? {
-        if (!TreeSitterService.isAvailable()) {
-            logger.info("resolveCallbackParameterTypeFlat: TreeSitter not available")
-            return null
-        }
-        val result = TreeSitterService.parse(fullText) ?: return null.also {
-            logger.info("resolveCallbackParameterTypeFlat: parse returned null")
+    private fun resolveCallbackParameterTypeFlat(cache: FlatCache, fullText: String, cursorPos: Int, varName: String, preParsed: TreeSitterParseResult? = null): String? {
+        val result = preParsed ?: run {
+            if (!TreeSitterService.isAvailable()) return null
+            TreeSitterService.parse(fullText) ?: return null
         }
         val node = result.findNodeAt(cursorPos) ?: return null.also {
             logger.info("resolveCallbackParameterTypeFlat: findNodeAt({}) returned null", cursorPos)
@@ -584,14 +606,178 @@ object KubeJSIntelligenceService {
         return null
     }
 
+    private fun resolveLocalVariableType(cache: FlatCache, fullText: String, cursorPos: Int, varName: String, preParsed: TreeSitterParseResult? = null): String? {
+        val result = preParsed ?: run {
+            if (!TreeSitterService.isAvailable()) return null
+            TreeSitterService.parse(fullText) ?: return null
+        }
+
+        val searchPos = if (cursorPos > 0) cursorPos - 1 else 0
+        val node = result.findNodeAt(searchPos) ?: return null
+
+        var block: Node? = node
+        while (block != null && block.type != "statement_block" && block.type != "program") {
+            block = block.parent
+        }
+        if (block == null) return null
+
+        fun collectDeclarators(parent: Node, name: String, beforePos: Int): Node? {
+            var best: Node? = null
+            for (child in parent.children) {
+                if (child.startByte.toInt() >= beforePos) break
+                when (child.type) {
+                    "variable_declaration", "lexical_declaration" -> {
+                        for (decl in child.children) {
+                            if (decl.type != "variable_declarator") continue
+                            val nameMatch = decl.children.any { it.type == "identifier" && it.text().toString() == name }
+                            if (nameMatch && decl.endByte.toInt() <= beforePos) {
+                                if (best == null || decl.startByte > best.startByte) best = decl
+                            }
+                        }
+                    }
+                    "statement_block" -> {
+                        val inner = collectDeclarators(child, name, beforePos)
+                        if (inner != null && (best == null || inner.startByte > best.startByte)) best = inner
+                    }
+                }
+            }
+            return best
+        }
+
+        val declarator = collectDeclarators(block, varName, cursorPos) ?: return null
+
+        val valueNode = declarator.children.firstOrNull {
+            it.isNamed && it.type != "identifier"
+        } ?: return null
+        return resolveExpressionType(cache, fullText, valueNode, varName)
+    }
+
+    private fun resolveExpressionType(cache: FlatCache, fullText: String, node: Node, contextVarName: String? = null): String? {
+        val text = node.text().toString()
+        return when (node.type) {
+            "identifier" -> resolveIdentifierType(cache, fullText, text, node)
+            "member_expression" -> resolveMemberExpressionType(cache, fullText, node)
+            "call_expression" -> resolveCallExpressionType(cache, fullText, node)
+            "new_expression" -> resolveNewExpressionType(cache, node)
+            "number" -> "number"
+            "string" -> "string"
+            "true", "false" -> "boolean"
+            "null" -> "null"
+            "binary_expression" -> {
+                if (text.contains('+')) "string" else "number"
+            }
+            "unary_expression" -> {
+                val op = node.children.firstOrNull { !it.isNamed }?.text().toString()
+                if (op == "!") "boolean" else "number"
+            }
+            "template_string" -> "string"
+            "array" -> "any[]"
+            "object" -> "object"
+            "parenthesized_expression" -> {
+                val inner = node.children.firstOrNull { it.isNamed }
+                if (inner != null) resolveExpressionType(cache, fullText, inner, contextVarName) else null
+            }
+            else -> null
+        }
+    }
+
+    private fun resolveIdentifierType(cache: FlatCache, fullText: String, name: String, node: Node? = null): String? {
+        val binding = cache.bindingByName[name]
+        if (binding != null) return binding.type
+        val cls = cache.lookupClass(name)
+        if (cls != null) return cls.fullName
+        if (node != null) {
+            val nodePos = node.startByte.toInt()
+            return resolveCallbackParameterTypeFlat(cache, fullText, nodePos, name)
+        }
+        return null
+    }
+
+    private fun resolveMemberExpressionType(cache: FlatCache, fullText: String, node: Node): String? {
+        val objectNode = node.children.firstOrNull { it.type == "identifier" || it.type == "member_expression" || it.type == "call_expression" }
+        val propNode = node.children.firstOrNull { it.type == "property_identifier" }
+        if (objectNode == null || propNode == null) return null
+        val propName = propNode.text().toString()
+        val objectType = resolveExpressionType(cache, fullText, objectNode) ?: return null
+        val cls = cache.lookupClass(objectType) ?: return null
+        val method = cls.methods.find { it.name == propName && it.isMethod }
+        if (method != null) return method.type
+        val field = cls.fields.find { it.name == propName }
+        if (field != null) return field.type
+        if (cls.superClass.isNotEmpty()) {
+            return resolveMemberTypeInHierarchy(cache, cls.superClass, propName)
+        }
+        return null
+    }
+
+    private val memberTypeCache = ConcurrentHashMap<Pair<String, String>, Any>()
+    private val memberTypeNullSentinel = Any()
+
+    private fun resolveMemberTypeInHierarchy(cache: FlatCache, className: String, memberName: String): String? {
+        val key = Pair(className, memberName)
+        memberTypeCache[key]?.let {
+            return if (it === memberTypeNullSentinel) null else it as String
+        }
+        val seen = mutableSetOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(className)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (current in seen) continue
+            seen.add(current)
+            val cls = cache.lookupClass(current) ?: continue
+            val method = cls.methods.find { it.name == memberName && it.isMethod }
+            if (method != null) {
+                memberTypeCache[key] = method.type
+                return method.type
+            }
+            val field = cls.fields.find { it.name == memberName }
+            if (field != null) {
+                memberTypeCache[key] = field.type
+                return field.type
+            }
+            if (cls.superClass.isNotEmpty()) queue.add(cls.superClass)
+            for (iface in cls.interfaces) queue.add(iface)
+        }
+        memberTypeCache[key] = memberTypeNullSentinel
+        return null
+    }
+
+    private fun resolveCallExpressionType(cache: FlatCache, fullText: String, node: Node): String? {
+        val funcNode = node.children.firstOrNull { it.isNamed }
+        if (funcNode == null) return null
+        if (funcNode.type == "member_expression") {
+            return resolveMethodCallType(cache, fullText, funcNode)
+        }
+        if (funcNode.type == "identifier") {
+            return null
+        }
+        return resolveExpressionType(cache, fullText, funcNode)
+    }
+
+    private fun resolveMethodCallType(cache: FlatCache, fullText: String, memberNode: Node): String? {
+        val objectNode = memberNode.children.firstOrNull { it.type == "identifier" || it.type == "member_expression" || it.type == "call_expression" }
+        val propNode = memberNode.children.firstOrNull { it.type == "property_identifier" }
+        if (objectNode == null || propNode == null) return null
+        val methodName = propNode.text().toString()
+        val objectType = resolveExpressionType(cache, fullText, objectNode) ?: return null
+        return resolveMemberTypeInHierarchy(cache, objectType, methodName)
+    }
+
+    private fun resolveNewExpressionType(cache: FlatCache, node: Node): String? {
+        val typeNode = node.children.firstOrNull { it.type == "identifier" || it.type == "member_expression" }
+        if (typeNode == null) return null
+        val typeName = typeNode.text().toString()
+        val cls = cache.lookupClass(typeName)
+        return cls?.fullName
+    }
+
     /**
      * Checks whether [varName] is declared as a parameter of a Tree-sitter
      * JavaScript function or arrow-function node.
      */
     private fun isParamOf(fnNode: Node, varName: String): Boolean {
-        val namedChildren = fnNode.children.toList()
-        if (namedChildren.isEmpty()) return false
-        val first = namedChildren[0]
+        val first = fnNode.children.firstOrNull() ?: return false
         return when (first.type) {
             "identifier" -> first.text().toString() == varName
             "formal_parameters" -> {
@@ -606,7 +792,7 @@ object KubeJSIntelligenceService {
      * user is typing an incomplete call expression.
      */
     private fun resolveIncompleteCallFromError(errorNode: Node): String? {
-        for (child in errorNode.children.toList()) {
+        for (child in errorNode.children) {
             val found = findCallTargetRecursive(child)
             if (found != null) return found
         }
@@ -630,7 +816,7 @@ object KubeJSIntelligenceService {
                 if (target != null) return target
             }
         }
-        for (child in node.children.toList()) {
+        for (child in node.children) {
             val found = findCallTargetRecursive(child)
             if (found != null) return found
         }
@@ -673,7 +859,7 @@ object KubeJSIntelligenceService {
             "identifier" -> parts.add(node.text().toString())
             "property_identifier" -> parts.add(node.text().toString())
             "member_expression" -> {
-                for (child in node.children.toList()) {
+                for (child in node.children) {
                     collectMemberParts(child, parts)
                 }
             }
@@ -698,7 +884,7 @@ object KubeJSIntelligenceService {
                 if (binding != null) {
                     members.addAll(membersOfClass(cache, binding.type))
                 }
-                val cls = cache.classBySimpleName[objectName] ?: cache.classByFullName[objectName]
+                val cls = cache.lookupClass(objectName)
                 if (cls != null) {
                     members.addAll(membersOfClass(cache, cls.fullName))
                 }
@@ -994,7 +1180,7 @@ object KubeJSIntelligenceService {
             }
         }
 
-        val cls = cache.classByFullName[target] ?: cache.classBySimpleName[target]
+        val cls = cache.lookupClass(target)
         if (cls != null && cls.constructors.isNotEmpty()) {
             return "${cls.simpleName}${cls.constructors.first()}"
         }
@@ -1090,7 +1276,7 @@ object KubeJSIntelligenceService {
             val current = queue.removeFirst()
             if (current in seen) continue
             seen.add(current)
-            val cls = cache.classByFullName[current] ?: cache.classBySimpleName[current] ?: continue
+            val cls = cache.lookupClass(current) ?: continue
             val method = cls.methods.find { it.name == methodName }
             if (method != null) {
                 val params = method.parameters.mapIndexed { idx, p ->
@@ -1122,7 +1308,7 @@ object KubeJSIntelligenceService {
             val current = queue.removeFirst()
             if (current in seen) continue
             seen.add(current)
-            val cls = cache.classByFullName[current] ?: cache.classBySimpleName[current] ?: continue
+            val cls = cache.lookupClass(current) ?: continue
             field = cls.fields.find { it.name == fieldName }
             if (field == null) {
                 val superClass = cls.superClass.takeIf { it.isNotEmpty() }
@@ -1135,8 +1321,8 @@ object KubeJSIntelligenceService {
         if (field == null) return null
         val candidates = recipeSchemaCandidates(fieldName)
         for (schemaId in candidates) {
-            val schemas = cache.recipes.filter { it.schemaId == schemaId }
-            if (schemas.isNotEmpty()) {
+            val schemas = cache.recipesBySchemaId[schemaId]
+            if (!schemas.isNullOrEmpty()) {
                 val schema = schemas.find { it.namespace == "minecraft" } ?: schemas.first()
                 val params = schema.keys.mapIndexed { idx, k ->
                     val text = "${escapeHtml(k.name)}: ${escapeHtml(formatDisplayType(k.type))}"
@@ -1434,7 +1620,7 @@ object KubeJSIntelligenceService {
                 val sideInfo = if (binding.side.isNotEmpty()) " (${binding.side})" else ""
                 return HoverContent("**Binding: ${binding.name}**${sideInfo} (${binding.type})\n\n$doc")
             }
-            val cls = fb.classBySimpleName[symbol]
+            val cls = fb.lookupClass(symbol)
             if (cls != null) {
                 val doc = cls.documentation.ifEmpty { "No documentation available." }
                 val kindName = when (cls.kind) {
@@ -1503,7 +1689,7 @@ object KubeJSIntelligenceService {
             val current = queue.removeFirst()
             if (current in seen) continue
             seen.add(current)
-            val cls = cache.classByFullName[current] ?: cache.classBySimpleName[current] ?: continue
+            val cls = cache.lookupClass(current) ?: continue
             for (m in cls.methods) {
                 if (seenMembers.add(m.name)) {
 
@@ -1687,26 +1873,29 @@ object KubeJSIntelligenceService {
      * Builds SQLite-backed hover content for a binding or class symbol.
      */
     private fun getHoverSqlite(conn: Connection, symbol: String): HoverContent? {
-        conn.prepareStatement("SELECT type, documentation FROM js_bindings WHERE name = ?").use { stmt ->
-            stmt.setString(1, symbol)
-            stmt.executeQuery().use { rs ->
-                if (rs.next()) {
-                    val type = rs.getString("type")
-                    val doc = rs.getString("documentation") ?: "No documentation available."
-                    return HoverContent("**Binding: $symbol** ($type)\n\n$doc")
+        try {
+            conn.prepareStatement("SELECT type, documentation FROM js_bindings WHERE name = ?").use { stmt ->
+                stmt.setString(1, symbol)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        val type = rs.getString("type")
+                        val doc = rs.getString("documentation") ?: "No documentation available."
+                        return HoverContent("**Binding: $symbol** ($type)\n\n$doc")
+                    }
                 }
             }
-        }
 
-        conn.prepareStatement("SELECT full_name, documentation FROM js_classes WHERE simple_name = ?").use { stmt ->
-            stmt.setString(1, symbol)
-            stmt.executeQuery().use { rs ->
-                if (rs.next()) {
-                    val fullName = rs.getString("full_name")
-                    val doc = rs.getString("documentation") ?: "No documentation available."
-                    return HoverContent("**Class: $fullName**\n\n$doc")
+            conn.prepareStatement("SELECT full_name, documentation FROM js_classes WHERE simple_name = ?").use { stmt ->
+                stmt.setString(1, symbol)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        val fullName = rs.getString("full_name")
+                        val doc = rs.getString("documentation") ?: "No documentation available."
+                        return HoverContent("**Class: $fullName**\n\n$doc")
+                    }
                 }
             }
+        } catch (_: Exception) {
         }
 
         return null
@@ -1793,13 +1982,24 @@ object KubeJSIntelligenceService {
         return null
     }
 
+
+    private val paramTypeCache = ConcurrentHashMap<Triple<String, String, Int>, Any>()
+    private val paramTypeNullSentinel = Any()
     /**
      * Looks up the parameter type at [argIndex] for [methodName] on [typeName].
      * Checks both regular methods and recipe-schema field patterns.
      * Returns the type string (e.g. "ItemStack", "Ingredient") or null.
      */
     private fun lookupParamType(cache: FlatCache, typeName: String, methodName: String, argIndex: Int): String? {
-        lookupRecipeSchemaParamType(cache, methodName, argIndex)?.let { return it }
+        val key = Triple(typeName, methodName, argIndex)
+        paramTypeCache[key]?.let {
+            return if (it === paramTypeNullSentinel) null else it as String
+        }
+
+        lookupRecipeSchemaParamType(cache, methodName, argIndex)?.let {
+            paramTypeCache[key] = it
+            return it
+        }
 
         val seen = mutableSetOf<String>()
         val queue = ArrayDeque<String>()
@@ -1808,10 +2008,19 @@ object KubeJSIntelligenceService {
             val current = queue.removeFirst()
             if (current in seen) continue
             seen.add(current)
-            val cls = cache.classByFullName[current] ?: cache.classBySimpleName[current] ?: continue
+            val cls = cache.lookupClass(current) ?: continue
             val method = cls.methods.find { it.name == methodName }
             if (method != null) {
-                return method.parameters.getOrNull(argIndex)?.second
+                val result = method.parameters.getOrNull(argIndex)?.second
+                paramTypeCache[key] = result ?: paramTypeNullSentinel
+                return result
+            }
+            val field = cls.fields.find { it.name == methodName }
+            if (field != null) {
+                lookupRecipeSchemaParamType(cache, methodName, argIndex)?.let {
+                    paramTypeCache[key] = it
+                    return it
+                }
             }
             val superClass = cls.superClass.takeIf { it.isNotEmpty() }
             if (superClass != null) queue.add(superClass)
@@ -1819,25 +2028,7 @@ object KubeJSIntelligenceService {
                 queue.add(iface)
             }
         }
-
-        val seen2 = mutableSetOf<String>()
-        val queue2 = ArrayDeque<String>()
-        queue2.add(typeName)
-        while (queue2.isNotEmpty()) {
-            val current = queue2.removeFirst()
-            if (current in seen2) continue
-            seen2.add(current)
-            val cls = cache.classByFullName[current] ?: cache.classBySimpleName[current] ?: continue
-            val field = cls.fields.find { it.name == methodName }
-            if (field != null) {
-                lookupRecipeSchemaParamType(cache, methodName, argIndex)?.let { return it }
-            }
-            val superClass = cls.superClass.takeIf { it.isNotEmpty() }
-            if (superClass != null) queue2.add(superClass)
-            for (iface in cls.interfaces) {
-                queue2.add(iface)
-            }
-        }
+        paramTypeCache[key] = paramTypeNullSentinel
         return null
     }
 
@@ -1846,8 +2037,8 @@ object KubeJSIntelligenceService {
      */
     private fun lookupRecipeSchemaParamType(cache: FlatCache, methodName: String, argIndex: Int): String? {
         for (schemaId in recipeSchemaCandidates(methodName)) {
-            val schemas = cache.recipes.filter { it.schemaId == schemaId }
-            if (schemas.isNotEmpty()) {
+            val schemas = cache.recipesBySchemaId[schemaId]
+            if (!schemas.isNullOrEmpty()) {
                 val schema = schemas.find { it.namespace == "minecraft" } ?: schemas.first()
                 return schema.keys.getOrNull(argIndex)?.type
             }

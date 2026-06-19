@@ -146,6 +146,30 @@ enum class Platform {
             return false
         }
 
+        /**
+         * Resolve the path to the os-helper binary bundled with Tritium.
+         * Returns null if not found.
+         */
+        fun resolveOsHelper(): String? {
+            val exeName = if (isWindows) "os-helper.exe" else "os-helper"
+            return listOfNotNull(
+                File("tools/os-helper/target/release/$exeName").takeIf { it.isFile() }?.absolutePath,
+                File("tools/os-helper/target/debug/$exeName").takeIf { it.isFile() }?.absolutePath,
+                try {
+                    val app = System.getProperty("jpackage.app-path")
+                    if (app != null) File(app).parentFile?.let { File(it, exeName).absolutePath } else null
+                } catch (_: Exception) { null },
+                exeName
+            ).firstOrNull()
+        }
+
+        /**
+         * Run an external process and return whether it exited successfully.
+         */
+        fun runProcess(cmd: List<String>): Boolean {
+            return runAndLogProcess(cmd)
+        }
+
         private fun runAndLogProcess(cmd: List<String>): Boolean {
             try {
                 val commandName = cmd.firstOrNull().orEmpty()

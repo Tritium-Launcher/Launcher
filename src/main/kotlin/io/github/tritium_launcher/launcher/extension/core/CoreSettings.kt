@@ -6,6 +6,7 @@ import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.font.FontMngr
 import io.github.tritium_launcher.launcher.keymap.*
 import io.github.tritium_launcher.launcher.onClicked
+import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.settings.RefreshableSettingWidget
 import io.github.tritium_launcher.launcher.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.settings.settingsDefinition
@@ -727,6 +728,20 @@ internal object CoreSettings {
             allowForeignSettings = true
         }
 
+        toggle(companionBridge.path, "companion.focus_after_reload") {
+            title = "Focus Game After Reload"
+            description = "Automatically bring the Minecraft window to front when a server reload completes."
+            defaultValue = false
+        }
+
+        if (Platform.isWindows) {
+            toggle(companionBridge.path, "companion.block_recall_on_start") {
+                title = "Block Windows Recall"
+                description = "Prevent Windows Recall from capturing Tritium's windows on startup."
+                defaultValue = false
+            }
+        }
+
         val javaRuntime = category("java_runtime") {
             title = "Java Runtime"
             parent = projects
@@ -776,12 +791,52 @@ internal object CoreSettings {
             defaultValue = false
         }
 
+        toggle(editor.path, "editor.insert_paired_brackets") {
+            title = "Insert Paired Brackets"
+            description = "When typing an opening bracket ( [ { <, automatically insert the matching closing bracket."
+            defaultValue = true
+        }
+
+        toggle(editor.path, "editor.insert_pair_curly_on_enter") {
+            title = "Insert Pair '}' on Enter"
+            description = "When pressing Enter with the cursor between { }, automatically insert the closing brace on a new line."
+            defaultValue = true
+        }
+
+        widget(editor.path, "editor.completion_display_mode") {
+            title = "Completion Display Mode"
+            description = "How completion items are displayed in the popup."
+            defaultValue = "advanced"
+            serializer = String.serializer()
+            comments = listOf(
+                "Basic shows only the name and type kind. Advanced shows parameters and return type."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("basic", "Basic"),
+                        ChoiceSettingOption("advanced", "Advanced")
+                    )
+                )
+            }
+        }
+
         toggle(projects.path, "projects.close_dashboard_on_open") {
             title = "Close Dashboard When Opening Project"
             description = "Automatically close the dashboard after opening a project window."
             defaultValue = true
             comments = listOf(
                 "When true, opening a project window closes the dashboard window."
+            )
+        }
+
+        toggle(projects.path, "projects.reopen_on_launch") {
+            title = "Reopen Last Project on Launch"
+            description = "Automatically reopen the last opened project when Tritium starts."
+            defaultValue = false
+            comments = listOf(
+                "When enabled, the last opened project reopens instead of showing the dashboard."
             )
         }
 

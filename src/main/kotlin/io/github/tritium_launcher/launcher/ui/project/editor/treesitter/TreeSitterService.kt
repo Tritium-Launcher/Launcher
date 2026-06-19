@@ -9,6 +9,9 @@ import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.grammar.
 object TreeSitterService {
     private val log = logger()
     private var jsLanguage: io.github.treesitter.ktreesitter.Language? = null
+    private var jsParser: Parser? = null
+    private var cachedText: String? = null
+    private var cachedResult: TreeSitterParseResult? = null
 
     fun isAvailable(): Boolean = jsLanguage != null
 
@@ -22,12 +25,17 @@ object TreeSitterService {
     }
 
     fun parse(source: String): TreeSitterParseResult? {
+        if (source == cachedText) return cachedResult
         val lang = jsLanguage ?: return null
+        val parser = jsParser ?: Parser(lang).also { jsParser = it }
         return try {
-            val parser = Parser(lang)
             val tree = parser.parse(source)
-            TreeSitterParseResult(parser, tree)
+            TreeSitterParseResult(tree).also {
+                cachedText = source
+                cachedResult = it
+            }
         } catch (e: Throwable) {
+            jsParser = null
             log.warn("Tree-sitter parse failed", e)
             null
         }
@@ -44,7 +52,6 @@ object TreeSitterService {
 }
 
 class TreeSitterParseResult(
-    private val parser: Parser,
     val tree: Tree
 ) {
     val rootNode: Node get() = tree.rootNode

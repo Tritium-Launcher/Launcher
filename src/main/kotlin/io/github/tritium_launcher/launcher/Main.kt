@@ -5,6 +5,7 @@ import io.github.tritium_launcher.launcher.bootstrap.runLowPriorityTasks
 import io.github.tritium_launcher.launcher.bootstrap.startHost
 import io.github.tritium_launcher.launcher.bootstrap.startKeymap
 import io.github.tritium_launcher.launcher.bootstrap.startSettings
+import io.github.tritium_launcher.launcher.core.project.ProjectMngr
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.font.FontMngr
 import io.github.tritium_launcher.launcher.git.Git
@@ -115,10 +116,20 @@ class Main {
                 TApp.aboutToQuit.connect { handleRunningGamesOnExit() }
                 TApp.installEventFilter(TooltipInterceptor(), CoreSettingValues.uiGameTooltipStyle)
 
-                Dashboard.createAndShow()
+                val reopened = CoreSettingValues.reopenLastProjectOnLaunch && ProjectMngr.loadActiveProject()
+                if (!reopened) {
+                    Dashboard.createAndShow()
+                }
 
                 runBlocking {
                     runLowPriorityTasks()
+                }
+
+                if (Platform.isWindows && CoreSettingValues.blockRecallOnStart) {
+                    val helper = Platform.resolveOsHelper()
+                    val cmd = listOfNotNull(helper ?: "os-helper", "block-recall", "--pid", ProcessHandle.current().pid().toString())
+                    mainLogger.info("Starting Windows Recall blocker: {}", cmd.joinToString(" "))
+                    Platform.runProcess(cmd)
                 }
 
                 QApplication.exec()

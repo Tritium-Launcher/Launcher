@@ -33,6 +33,9 @@ internal object CoreSettingKeys {
     val EditorAutoSaveInterval: NamespacedId = NamespacedId("tritium", "editor.auto_save_interval")
     val EditorUnsavedIndicatorIntensity: NamespacedId = NamespacedId("tritium", "editor.unsaved_indicator_intensity")
     val EditorRainbowBrackets: NamespacedId = NamespacedId("tritium", "editor.rainbow_brackets")
+    val EditorInsertPairedBrackets: NamespacedId = NamespacedId("tritium", "editor.insert_paired_brackets")
+    val EditorInsertPairCurlyOnEnter: NamespacedId = NamespacedId("tritium", "editor.insert_pair_curly_on_enter")
+    val EditorCompletionDisplayMode: NamespacedId = NamespacedId("tritium", "editor.completion_display_mode")
     val ProjectFilesConfigSort: NamespacedId = NamespacedId("tritium", "projects.files.config_sort")
     val UiGameTooltipStyle: NamespacedId = NamespacedId("tritium", "ui.tooltip_style")
     val UiAnimateScrolling: NamespacedId = NamespacedId("tritium", "ui.animate_scrolling")
@@ -44,6 +47,9 @@ internal object CoreSettingKeys {
     val GlobalFont: NamespacedId = NamespacedId("tritium", "ui.global_font")
     val EditorFont: NamespacedId = NamespacedId("tritium", "ui.editor_font")
     val SmartRerun: NamespacedId = NamespacedId("tritium", "game.smart_rerun")
+    val FocusGameAfterReload: NamespacedId = NamespacedId("tritium", "companion.focus_after_reload")
+    val BlockRecallOnStart: NamespacedId = NamespacedId("tritium", "companion.block_recall_on_start")
+    val ReopenLastProjectOnLaunch: NamespacedId = NamespacedId("tritium", "projects.reopen_on_launch")
 }
 
 /**
@@ -83,6 +89,11 @@ internal object CoreSettingValues {
         FileType
     }
 
+    enum class CompletionDisplayMode {
+        Basic,
+        Advanced
+    }
+
     /**
      * Optional background image path applied globally to main windows.
      */
@@ -118,6 +129,18 @@ internal object CoreSettingValues {
      * Whether rainbow brackets are enabled in code editors.
      */
     val editorRainbowBrackets by setting(CoreSettingKeys.EditorRainbowBrackets, false)
+
+    val editorInsertPairedBrackets by setting(CoreSettingKeys.EditorInsertPairedBrackets, true)
+    val editorInsertPairCurlyOnEnter by setting(CoreSettingKeys.EditorInsertPairCurlyOnEnter, true)
+
+    val editorCompletionDisplayMode by enumSetting(
+        key = CoreSettingKeys.EditorCompletionDisplayMode,
+        fallback = CompletionDisplayMode.Advanced,
+        mapping = mapOf(
+            "basic" to CompletionDisplayMode.Basic,
+            "advanced" to CompletionDisplayMode.Advanced
+        )
+    )
 
     /**
      * Sort mode used for the project's /config directory in the files tree.
@@ -155,6 +178,11 @@ internal object CoreSettingValues {
      * Whether dashboard should close when opening a project window.
      */
     val closeDashboardOnProjectOpen by setting(CoreSettingKeys.CloseDashboardOnProjectOpen, true)
+
+    /**
+     * Whether the last opened project should reopen automatically on launch.
+     */
+    val reopenLastProjectOnLaunch by setting(CoreSettingKeys.ReopenLastProjectOnLaunch, false)
 
     /**
      * Controls whether running game processes are closed when Tritium exits.
@@ -292,6 +320,16 @@ internal object CoreSettingValues {
     val companionWsHost by setting(CoreSettingKeys.CompanionWsHost, "127.0.0.1") {
         (it as? String)?.trim()?.takeIf { s -> s.isNotBlank() }
     }
+
+    /**
+     * Whether to automatically focus the Minecraft window after a server reload completes.
+     */
+    val focusGameAfterReload by setting(CoreSettingKeys.FocusGameAfterReload, false)
+
+    /**
+     * Whether to block Windows Recall from capturing Tritium's windows on startup.
+     */
+    val blockRecallOnStart by setting(CoreSettingKeys.BlockRecallOnStart, false)
 
     /**
      * Port used by Tritium and the Companion websocket bridge.

@@ -504,6 +504,7 @@ object ProjectMngr {
         }
 
         notifyProjectOpened(project)
+        saveActiveProject()
     }
 
     /**
@@ -531,8 +532,10 @@ object ProjectMngr {
 
     /**
      * Load the previously active project if it still exists on disk.
+     *
+     * @return `true` if a project was successfully opened, `false` otherwise.
      */
-    fun loadActiveProject() {
+    fun loadActiveProject(): Boolean {
         val prefs = Preferences.userRoot().node(PREFS_NODE)
         val activeProjectPath = prefs.get(PREF_ACTIVE_PROJECT, "")
 
@@ -540,10 +543,14 @@ object ProjectMngr {
             val projectDir = VPath.get(activeProjectPath)
             if(projectDir.exists() && projectDir.isDir()) {
                 val project = loadProjectFromDir(projectDir)
-                if(project != null) openProject(project)
+                if(project != null) {
+                    openProject(project)
+                    return true
+                }
                 else logger.error("Active project definition exists but failed to load: $activeProjectPath")
             } else logger.warn("Saved active project directory no longer exists: $activeProjectPath")
         }
+        return false
     }
 
     /**
