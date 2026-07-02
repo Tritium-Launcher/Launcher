@@ -42,3 +42,7 @@ Alternatively, you can install builds from specific [commits](https://github.com
 * **6+ core CPU**
 * At least **16 GB RAM**. Tritium itself will use ~**4 GB** itself, but to also run Modded Minecraft requires more.
 * At least **30 GB** available storage.
+
+---
+
+Copyright (c) 2025 FooterMan and contributors. Licensed under the [GNU Affero General Public License v3.0](LICENSE).
