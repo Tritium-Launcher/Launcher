@@ -1,16 +1,20 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.companion
 
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.ModVersionOption
+import io.github.tritium_launcher.api.redactUserPath
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.core.mod.InstalledMod
 import io.github.tritium_launcher.launcher.core.mod.ModDatabase
 import io.github.tritium_launcher.launcher.core.mod.ModSide
-import io.github.tritium_launcher.launcher.core.source.ModVersionOption
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.redactUserPath
-import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import kotlinx.serialization.Serializable
@@ -58,7 +62,7 @@ object CompanionModProvider {
     private const val DEFAULT_MANIFEST_URL = "https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/gh-pages/companion-versions.json"
     private val json = Json { ignoreUnknownKeys = true }
     private val logger = logger()
-    private val sharedClient = HttpClient(CIO)
+    private val sharedClient = HttpClientProvider.client()
     private val CACHE_DIR: VPath = fromTR("cache", "companion-mods")
 
     const val COMPANION_MOD_ID = "tritium-companion"

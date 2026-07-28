@@ -1,21 +1,25 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.lsp
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.file.LSPServerDefinition
+import io.github.tritium_launcher.api.file.SyntaxLanguage
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.ui.notifications.NotificationMngr
-import io.github.tritium_launcher.launcher.ui.project.editor.syntax.LSPServerDefinition
-import io.github.tritium_launcher.launcher.ui.project.editor.syntax.SyntaxLanguage
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.pushButton
-import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -30,7 +34,7 @@ import java.util.zip.ZipInputStream
 object LSPInstaller {
     private val logger = logger()
     private val downloading = ConcurrentHashMap.newKeySet<String>()
-    private val httpClient = HttpClient(CIO)
+    private val httpClient = HttpClientProvider.client()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun isInstalled(lang: SyntaxLanguage, server: LSPServerDefinition): Boolean {

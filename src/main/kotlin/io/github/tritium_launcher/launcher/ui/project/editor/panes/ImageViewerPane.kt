@@ -1,29 +1,31 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.editor.EditorPane
+import io.github.tritium_launcher.api.editor.EditorPaneProvider
+import io.github.tritium_launcher.api.io.VPath
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.matches
-import io.github.tritium_launcher.launcher.ui.project.editor.EditorPane
-import io.github.tritium_launcher.launcher.ui.project.editor.EditorPaneProvider
-import io.github.tritium_launcher.launcher.ui.project.editor.syntax.UniversalHighlighter
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.*
 import io.qt.Nullable
 import io.qt.core.Qt
-import io.qt.gui.QFont
 import io.qt.gui.QMovie
 import io.qt.gui.QPixmap
 import io.qt.gui.QResizeEvent
-import io.qt.widgets.*
+import io.qt.widgets.QLabel
+import io.qt.widgets.QScrollArea
+import io.qt.widgets.QSizePolicy
+import io.qt.widgets.QWidget
 
 /**
  * An Editor Pane specifically tailored to viewing Image files.
@@ -104,25 +106,11 @@ class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, fi
         setAlignment(Qt.AlignmentFlag.AlignCenter)
     }
 
-    private val svgTextEdit = QTextEdit().apply {
-        font = QFont("JetBrains Mono", 10)
-        lineWrapMode = QTextEdit.LineWrapMode.NoWrap
-        isVisible = false
-        isReadOnly = true
-    }
-
-    private val content = qWidget {
-        hBoxLayout(this) {
-            addWidget(scroll, 1)
-            addWidget(svgTextEdit, 1)
-        }
-    }
-
     private val infoLabel = label {
         isVisible = false
     }
 
-    private val playPauseButton = QToolButton().apply {
+    private val playPauseButton = toolButton {
         icon = TIcons.SmallPause.icon
         toolTip = "Pause"
         isVisible = false
@@ -144,13 +132,12 @@ class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, fi
             contentsMargins = 0.m
             widgetSpacing = 4
             addWidget(infoRow)
-            addWidget(content)
+            addWidget(scroll)
         }
     }
 
     init {
         AnimatedScrollController.attach(scroll)
-        AnimatedScrollController.attach(svgTextEdit)
     }
 
     private fun toggleMoviePlayback() {
@@ -192,20 +179,6 @@ class ImageViewerPane(project: ProjectBase, file: VPath): EditorPane(project, fi
 
         updateMovieControls()
         imageLabel.updatePixmap()
-
-        val isSvg = paneFile.extension().matches("svg", "svgz")
-        if(isSvg) {
-            svgTextEdit.plainText = paneFile.readTextOr("")
-            svgTextEdit.isVisible = true
-
-            val syntaxRegistry = BuiltinRegistries.SyntaxLanguage
-            val lang = syntaxRegistry.all().find { it.matches(paneFile) }
-            if(lang != null) {
-                UniversalHighlighter(svgTextEdit.document!!, lang)
-            }
-        } else {
-            svgTextEdit.isVisible = false
-        }
 
         val infoFromMovie = movie != null
         val pix = if(infoFromMovie) movie!!.currentPixmap() else originalPixmap
@@ -256,7 +229,8 @@ class ImageViewerProvider : EditorPaneProvider {
     override fun canOpen(
         file: VPath,
         project: ProjectBase
-    ): Boolean = file.extension().matches(TConstants.Lists.ImageExtensions)
+    ): Boolean = file.extension().matches(TConstants.Lists.ImageExtensions) &&
+            !file.extension().matches("svg", "svgz")
 
     override fun create(
         project: ProjectBase,

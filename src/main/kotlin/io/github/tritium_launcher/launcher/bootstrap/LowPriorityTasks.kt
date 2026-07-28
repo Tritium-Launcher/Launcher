@@ -1,9 +1,14 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.bootstrap
 
+import io.github.tritium_launcher.api.platform.ClientIdentity
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
 import io.github.tritium_launcher.launcher.ktor.BackgroundTaskQueue
 import io.github.tritium_launcher.launcher.mainLogger
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
 import kotlin.time.Duration.Companion.milliseconds
 
 internal suspend fun runLowPriorityTasks() {

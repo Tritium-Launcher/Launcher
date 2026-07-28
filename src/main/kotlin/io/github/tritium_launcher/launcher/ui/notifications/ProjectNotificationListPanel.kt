@@ -1,10 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.notifications
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.notification.NotificationEntry
+import io.github.tritium_launcher.api.notification.NotificationLink
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.runOnGuiThread
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController

@@ -1,8 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.currentDpr
-import io.github.tritium_launcher.launcher.qs
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.currentDpr
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
@@ -186,7 +191,7 @@ open class TComboBox(parent: QWidget? = null) : QComboBox(parent) {
 
         init {
             scope.launch {
-                ThemeMngr.currentThemeId.collect {
+                ThemeMngr.currentColorThemeId.collect {
                     val prev = skin
                     skin = buildSkin()
                     prev.clearCache(disposePixmaps = true)
@@ -388,13 +393,13 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
 
         val contentRect = rect().adjusted(0, 0, -1, -1)
 
-        val borderColor = QColor(TColors.Button0)
+        val borderColor = TColors.Button0.toQC()
         borderColor.setAlpha(if (popupVisible) 220 else 160)
         painter.setPen(borderColor)
         painter.drawLine(contentRect.left(), 0, contentRect.right(), 0)
 
         val labelText = currentText().ifBlank { "All categories" }.uppercase()
-        val labelColor = QColor(if (popupVisible) TColors.Text else TColors.Subtext)
+        val labelColor = (if (popupVisible) TColors.Text else TColors.Subtext).toQC()
         if (!isEnabled) {
             labelColor.setAlpha(120)
         } else if (!popupVisible) {
@@ -409,7 +414,7 @@ class TMultiStateCategoryComboBox(parent: QWidget? = null) : TComboBox(parent) {
         val lineLeft = metrics.horizontalAdvance(labelText) + 10
         val lineRight = contentRect.right() - 16
         if (lineRight > lineLeft) {
-            val dividerColor = QColor(TColors.Button0)
+            val dividerColor = TColors.Button0.toQC()
             dividerColor.setAlpha(if (popupVisible) 220 else 150)
             painter.setPen(dividerColor)
             val y = contentRect.center().y()

@@ -1,8 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.Platform
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.qt.gui.QIcon
@@ -66,7 +71,7 @@ data class KnownLauncher(
 
         private fun flatpakDir(appId: String, vararg subdirs: String): VPath? {
             if (Platform.current != Platform.Linux) return null
-            val p = VPath.get("${Platform.userHome}/.var/app/$appId/data")
+            val p = VPath.get("${Platform.userHome}/.var/app/$appId/state")
                 .resolve(subdirs.joinToString("/"))
             return p.takeIf { it.exists() }
         }
@@ -158,7 +163,7 @@ data class KnownLauncher(
                         else -> listOf(
                             xdgData("gdlauncher", "instances"),
                             xdgData("gdlauncher_carbon", "instances"),
-                            VPath.get("${Platform.userHome}/.local/share/gdlauncher_carbon/data/instances")
+                            VPath.get("${Platform.userHome}/.local/share/gdlauncher_carbon/state/instances")
                         )
                     })
                 },

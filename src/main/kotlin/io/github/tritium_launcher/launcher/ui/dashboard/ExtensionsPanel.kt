@@ -1,31 +1,37 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
-import io.github.tritium_launcher.launcher.extension.Extension
+import io.github.tritium_launcher.api.extension.Extension
+import io.github.tritium_launcher.api.extension.ExtensionStateMngr
+import io.github.tritium_launcher.api.loadScaledPixmap
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.extension.ExtensionLoader
-import io.github.tritium_launcher.launcher.extension.ExtensionStateManager
-import io.github.tritium_launcher.launcher.loadScaledPixmap
 import io.github.tritium_launcher.launcher.m
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.ui.theme.TColors
-import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
+import io.github.tritium_launcher.launcher.ui.theme.TIcons
+import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.TToggleSwitch
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
-import io.qt.gui.QGuiApplication
 import io.qt.gui.QPixmap
 import io.qt.widgets.QFrame
 import io.qt.widgets.QScrollArea
 import io.qt.widgets.QSizePolicy
 import io.qt.widgets.QWidget
 
-private fun Extension.scaledIconPixmap(size: Int, dprWidget: QWidget? = null): QPixmap {
+private fun loadExtensionIconPixmap(ext: Extension, size: Int, dprWidget: QWidget? = null): QPixmap {
     val s = qs(size, size)
-    val src = icon?.pixmap(qs(256, 256))?.takeIf { !it.isNull }
-    if (src != null) return loadScaledPixmap(src.toImage(), s, dprWidget)
-    val dpr = QGuiApplication.primaryScreen()?.devicePixelRatio() ?: 1.0
-    return ThemeMngr.getPixmap("ui/question", size, size, dpr) ?: QPixmap()
+
+    val icon = ExtensionLoader.loadExtensionIcon(ext) ?: TIcons.Plugin.icon
+    val src = icon.pixmap(qs(256,256)).takeIf { !it.isNull } ?: return QPixmap()
+
+    return loadScaledPixmap(src.toImage(), s, dprWidget)
 }
 
 class ExtensionsPanel internal constructor() : QWidget() {
@@ -66,7 +72,7 @@ class ExtensionsPanel internal constructor() : QWidget() {
  * Reusable extension list widget used in both Dashboard and Settings.
  */
 class ExtensionsManageList internal constructor() : QScrollArea() {
-    private val state = ExtensionStateManager.load().toMutableMap()
+    private val state = ExtensionStateMngr.load().toMutableMap()
 
     init {
         objectName = "extensionsScroll"
@@ -136,7 +142,7 @@ class ExtensionsManageList internal constructor() : QScrollArea() {
             }
 
             val iconLabel = label {
-                pixmap = ext.scaledIconPixmap(48, this@ExtensionRow)
+                pixmap = loadExtensionIconPixmap(ext, 48, this@ExtensionRow)
                 minimumSize = qs(48, 48)
                 maximumSize = qs(48, 48)
                 sizePolicy = QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -174,7 +180,7 @@ class ExtensionsManageList internal constructor() : QScrollArea() {
                 toggle.setChecked(currentState)
                 toggle.toggled.connect({ checked: Boolean ->
                     state[ext.namespace] = checked
-                    ExtensionStateManager.setEnabled(ext.namespace, checked)
+                    ExtensionStateMngr.setEnabled(ext.namespace, checked)
                 })
                 layout.addWidget(toggle, 0)
             } else {

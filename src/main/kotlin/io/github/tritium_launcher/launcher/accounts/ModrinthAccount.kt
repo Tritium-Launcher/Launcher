@@ -1,9 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.accounts
 
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.accounts.*
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.m
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.toUrl
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
@@ -13,8 +20,6 @@ import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.fram
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -83,7 +88,7 @@ class ModrinthAccount : AccountProvider {
 
         val scopes = listOf(
             ScopeInfo("Read user email", true),
-            ScopeInfo("Read user data", true),
+            ScopeInfo("Read user state", true),
             ScopeInfo("Create projects", true),
             ScopeInfo("Read projects", true),
             ScopeInfo("Write projects", true),
@@ -142,7 +147,7 @@ class ModrinthAccount : AccountProvider {
     }
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val httpClient = HttpClient(CIO) {
+    private val httpClient = HttpClientProvider.client() {
         install(ContentNegotiation) { json(json) }
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000
@@ -155,7 +160,7 @@ class ModrinthAccount : AccountProvider {
         }
     }
 
-    private val oauthClient = HttpClient(CIO) {
+    private val oauthClient = HttpClientProvider.client() {
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000
             connectTimeoutMillis = 10_000

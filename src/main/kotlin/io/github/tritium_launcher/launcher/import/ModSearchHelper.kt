@@ -1,10 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
-import io.github.tritium_launcher.launcher.core.source.ModBrowserContext
-import io.github.tritium_launcher.launcher.core.source.ModSearchQuery
-import io.github.tritium_launcher.launcher.core.source.ModSource
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.ModBrowserContext
+import io.github.tritium_launcher.api.modpack.ModSearchQuery
+import io.github.tritium_launcher.api.modpack.ModSource
 import kotlinx.coroutines.CancellationException
 
 object ModSearchHelper

@@ -1,34 +1,35 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import.ui
 
-import io.github.tritium_launcher.launcher.accounts.AccountDescriptor
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.accounts.AccountDescriptor
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.modpack.ModBrowserContext
+import io.github.tritium_launcher.api.modpack.ModSource
+import io.github.tritium_launcher.api.platform.Platform
 import io.github.tritium_launcher.launcher.accounts.ModrinthAccount
 import io.github.tritium_launcher.launcher.accounts.ModrinthProject
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.core.mod.ModSide
 import io.github.tritium_launcher.launcher.core.mod.readModJarIcon
 import io.github.tritium_launcher.launcher.core.mod.readModJarInfo
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
 import io.github.tritium_launcher.launcher.core.source.CurseForge
-import io.github.tritium_launcher.launcher.core.source.ModBrowserContext
-import io.github.tritium_launcher.launcher.core.source.ModSource
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.import.*
 import io.github.tritium_launcher.launcher.import.ui.ImportProjectDialog.Companion.iconCache
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
+import io.github.tritium_launcher.launcher.ui.theme.qt.setStyle
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.*
-import io.github.tritium_launcher.launcher.userHome
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -42,7 +43,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.ExperimentalTime
 import kotlinx.coroutines.sync.Semaphore as CoroutineSemaphore
@@ -95,7 +95,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private val modListStack = QStackedWidget()
     private val modListPlaceholder = QLabel("Scanning mods...")
     private val importableMods = mutableListOf<ImportableMod>()
-    private val modListGuard = Any()
+
 
     // Tabbed content (review page)
     private val importTabWidget = QTabWidget()
@@ -138,6 +138,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private var currentScanJob: Job? = null
     private var currentFileTreeJob: Job? = null
     private var currentIconJob: Job? = null
+    private var currentModRowIconParent: Job? = null
     private var currentModrinthFetchJob: Job? = null
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -148,10 +149,10 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     companion object {
         private val expandedState = mutableMapOf<String, Set<String>>()
         private val dummyProject = ProjectBase("dummy", VPath.get("/tmp"), "dummy", "", JsonObject(emptyMap()))
-        private val iconSemaphore = Semaphore(4)
+        private val iconSemaphore = CoroutineSemaphore(4)
         private val depSemaphore = CoroutineSemaphore(2)
         private val iconCache = ConcurrentHashMap<String, QIcon>()
-        private val httpClient = HttpClient(CIO) {
+        private val httpClient = HttpClientProvider.client() {
             install(HttpTimeout) {
                 requestTimeoutMillis = 30_000
                 connectTimeoutMillis = 10_000
@@ -453,7 +454,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                         setSpacing(8)
                         addStretch()
                         addWidget(label("From File:") {
-                            styleSheet = "color: ${TColors.Text}; font-size: 12px;"
+                            setStyle { color(TColors.Text); fontSize(12) }
                         })
                     val browseBtn = TPushButton {
                         text = "Browse"
@@ -533,7 +534,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                         hBoxLayout(row) {
                             setContentsMargins(0, 0, 0, 0)
                             setSpacing(8)
-                            addWidget(label("$key:") { styleSheet = "color: ${TColors.Subtext}; font-weight: bold;"; setFixedWidth(80) })
+                            addWidget(label("$key:") { setStyle { color(TColors.Subtext); fontWeight(700) }; setFixedWidth(80) })
                             addWidget(label.apply { objectName = "instanceMeta"; wordWrap = true }, 1)
                         }
                         return row
@@ -555,7 +556,11 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                     // Mod source + search bar (with bottom border)
                     val sourceSearchBar = widget {
                         objectName = "modSourceSearchBar"
-                        styleSheet = "border-bottom: 1px solid ${TColors.Surface2};"
+                    }
+                    sourceSearchBar.setThemedStyle {
+                        selector("#modSourceSearchBar") {
+                            any("border-bottom", "1px solid ${TColors.Surface2}")
+                        }
                     }
                     hBoxLayout(sourceSearchBar) {
                         setContentsMargins(12, 8, 12, 8)
@@ -681,18 +686,25 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                 addWidget(modrinthIconLabel, 0, Qt.AlignmentFlag.AlignCenter)
 
                 modrinthTitleLabel.apply {
-                    styleSheet = "font-size: 18px; font-weight: 700; color: ${TColors.Text};"
                     wordWrap = true
                     setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    setStyle {
+                        fontSize(18)
+                        fontWeight(700)
+                        color(TColors.Text)
+                    }
                 }
                 addWidget(modrinthTitleLabel, 0, Qt.AlignmentFlag.AlignCenter)
 
                 modrinthDescLabel.apply {
-                    styleSheet = "font-size: 12px; color: ${TColors.Subtext};"
                     wordWrap = true
                     setAlignment(Qt.AlignmentFlag.AlignCenter)
                     maximumWidth = 600
                     minimumHeight = 48
+                    setStyle {
+                        fontSize(12)
+                        color(TColors.Subtext)
+                    }
                 }
                 addWidget(modrinthDescLabel, 0, Qt.AlignmentFlag.AlignCenter)
 
@@ -713,12 +725,19 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                     setSpacing(4)
                     setAlignment(Qt.AlignmentFlag.AlignCenter)
                     addWidget(label("Pack Version") {
-                        styleSheet = "font-size: 10px; font-weight: 700; color: ${TColors.Subtext}; text-transform: uppercase; letter-spacing: 1px;"
                         setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        setStyle {
+                            fontSize(10)
+                            fontWeight(700)
+                            color(TColors.Subtext)
+                        }
                     })
                     modrinthPackVerLabel.apply {
-                        styleSheet = "font-size: 13px; color: ${TColors.Text};"
                         setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        setStyle {
+                            fontSize(13)
+                            color(TColors.Text)
+                        }
                     }
                     addWidget(modrinthPackVerLabel)
                 }
@@ -804,6 +823,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             currentScanJob?.cancel()
             currentValidationJob?.cancel()
             currentIconJob?.cancel()
+            currentModRowIconParent?.cancel()
             currentModrinthFetchJob?.cancel()
             currentInstance?.let { saveExpandedState(fileTree, it, expandedState) }
             stacked.currentIndex = 0
@@ -1010,7 +1030,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                 for (acc in accounts) {
                     if (acc.avatarUrl != null) {
                         try {
-                            val bytes = httpClient.get(acc.avatarUrl).bodyAsBytes()
+                            val bytes = httpClient.get(acc.avatarUrl!!).bodyAsBytes()
                             val pix = QPixmap()
                             if (pix.loadFromData(bytes)) {
                                 val mode = if (pix.width() <= 64 || pix.height() <= 64)
@@ -1215,6 +1235,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         currentScanJob?.cancel()
         currentValidationJob?.cancel()
         currentIconJob?.cancel()
+        currentModRowIconParent?.cancel()
         currentInstance?.let { saveExpandedState(fileTree, it, expandedState) }
         currentInstance = instance
         instanceNameLabel.text = instance.name
@@ -1248,18 +1269,16 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         val prebuilt = cursePackPrebuiltMods
         if (prebuilt != null) {
             cursePackPrebuiltMods = null
-            synchronized(modListGuard) {
-                importableMods.clear()
-                importableMods.addAll(prebuilt)
-                importableMods.sortBy { it.displayName }
-            }
+            importableMods.clear()
+            importableMods.addAll(prebuilt)
+            importableMods.sortBy { it.displayName }
             modListPlaceholder.text = "No mods found in this instance."
             populateModList()
             // Trigger icon fetches for mods with sourceIconUrl
             for (i in 0 until modListWidget.count()) {
                 val item = modListWidget.item(i)
                 val dataIdx = item?.data(Qt.ItemDataRole.UserRole) as? Int ?: continue
-                val mod = synchronized(modListGuard) { importableMods.getOrNull(dataIdx) } ?: continue
+                val mod = importableMods.getOrNull(dataIdx) ?: continue
                 if (!mod.sourceIconUrl.isNullOrBlank()) {
                     val row = modListWidget.itemWidget(item) as? ImportableModRow
                     row?.updateAvailability(mod.sourceAvailable, mod.sourceProjectId, mod.sourceIconUrl, mod.sourceStatus)
@@ -1283,9 +1302,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
         currentScanJob?.cancel()
         currentScanJob = ioScope.launch {
-            val jars = withContext(Dispatchers.IO) {
-                modsDir.listFiles { f -> f.fileName().endsWith(".jar", ignoreCase = true) }
-            }
+            val jars = modsDir.listFiles { f -> f.fileName().endsWith(".jar", ignoreCase = true) }
 
             val source = modSourceCombo.currentData as? ModSource
             val defaultAvailable = source != null
@@ -1293,7 +1310,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
 
             val scanned = jars.mapNotNull { jarPath ->
                 try {
-                    val bytes = withContext(Dispatchers.IO) { jarPath.toJFile().readBytes() }
+                    val bytes = jarPath.toJFile().readBytes()
                     val sha1Hash = computeSha1(bytes)
                     val fileFingerprint = source?.computeFileFingerprint(bytes)
                     val info = readModJarInfo(jarPath)
@@ -1340,16 +1357,14 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             } else null
 
             withContext(Dispatchers.Main) {
-                synchronized(modListGuard) {
-                    importableMods.clear()
-                    if (cachedFromCache != null) {
-                        log.warn("Using cached validation for {} mods (source: {})", cachedFromCache.size, source!!.id)
-                        importableMods.addAll(cachedFromCache)
-                    } else {
-                        importableMods.addAll(scanned)
-                    }
-                importableMods.sortBy { it.displayName }
+                importableMods.clear()
+                if (cachedFromCache != null) {
+                    log.warn("Using cached validation for {} mods (source: {})", cachedFromCache.size, source!!.id)
+                    importableMods.addAll(cachedFromCache)
+                } else {
+                    importableMods.addAll(scanned)
                 }
+                importableMods.sortBy { it.displayName }
                 populateModList()
 
                 if (source != null && scanned.isNotEmpty() && cachedFromCache == null) {
@@ -1371,10 +1386,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
      * provided, only those mods are shown (used for search filtering).
      */
     private fun populateModList(filteredSubset: List<ImportableMod>? = null) {
-        val allMods: List<ImportableMod>
-        synchronized(modListGuard) {
-            allMods = filteredSubset ?: importableMods.toList()
-        }
+        val allMods = filteredSubset ?: importableMods.toList()
 
         modListWidget.clear()
 
@@ -1393,22 +1405,20 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             val item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, index)
             val row = ImportableModRow(mod, index, { idx, checked ->
-                synchronized(modListGuard) {
-                    if (idx in importableMods.indices) {
-                        importableMods[idx] = importableMods[idx].copy(checked = checked)
-                        // If checked and source is active, fetch dependencies
-                        if (checked) {
-                            val src = modSourceCombo.currentData as? ModSource
-                            val instance = currentInstance
-                            if (src != null && instance != null) {
-                                resolveDependenciesForMod(importableMods[idx], src, instance)
-                            }
+                if (idx in importableMods.indices) {
+                    importableMods[idx] = importableMods[idx].copy(checked = checked)
+                    // If checked and source is active, fetch dependencies
+                    if (checked) {
+                        val src = modSourceCombo.currentData as? ModSource
+                        val instance = currentInstance
+                        if (src != null && instance != null) {
+                            resolveDependenciesForMod(importableMods[idx], src, instance)
                         }
                     }
                 }
                 // Update count
-                val total = synchronized(modListGuard) { importableMods.size }
-                val checkedCount = synchronized(modListGuard) { importableMods.count { it.checked } }
+                val total = importableMods.size
+                val checkedCount = importableMods.count { it.checked }
                 updateModsTabLabel(total, checkedCount)
             }, ::fetchOnlineIcon)
             item.setSizeHint(row.sizeHint())
@@ -1421,10 +1431,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
      * Filters the mod list by display name, mod ID, or filename matching the given text.
      */
     private fun filterModsBySearch(text: String) {
-        val allMods: List<ImportableMod>
-        synchronized(modListGuard) {
-            allMods = importableMods.toList()
-        }
+        val allMods = importableMods.toList()
 
         if (text.isBlank()) {
             populateModList(allMods)
@@ -1450,10 +1457,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
     private fun validateModsAgainstSource(source: ModSource) {
         currentValidationJob?.cancel()
         val instance = currentInstance ?: return
-        val allMods: List<ImportableMod>
-        synchronized(modListGuard) {
-            allMods = importableMods.toList()
-        }
+        val allMods = importableMods.toList()
         if (allMods.isEmpty()) return
 
         val context = ModBrowserContext(
@@ -1478,27 +1482,30 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             // Compute source-specific fingerprints if they weren't set during the initial scan
             if (totalMods > 0 && allMods.none { it.fileFingerprint != null }) {
                 log.warn("validateModsAgainstSource: computing fingerprints for {} mods", totalMods)
-                withContext(Dispatchers.IO) {
-                    allMods.forEachIndexed { index, mod ->
+                val fpPairs = withContext(Dispatchers.IO) {
+                    allMods.mapIndexedNotNull { index, mod ->
                         try {
                             ensureActive()
                             val bytes = mod.jarPath.toJFile().readBytes()
                             val fp = source.computeFileFingerprint(bytes)
-                            synchronized(modListGuard) {
-                                if (index in importableMods.indices) {
-                                    importableMods[index] = importableMods[index].copy(fileFingerprint = fp)
-                                }
-                            }
+                            index to fp
                         } catch (t: Throwable) {
                             log.warn("Failed to compute fingerprint for {}: {}", mod.fileName, t.message)
+                            null
+                        }
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    for ((index, fp) in fpPairs) {
+                        if (index in importableMods.indices) {
+                            importableMods[index] = importableMods[index].copy(fileFingerprint = fp)
                         }
                     }
                 }
             }
 
-            val modsForBatch: List<ImportableMod>
-            synchronized(modListGuard) {
-                modsForBatch = importableMods.toList()
+            val modsForBatch = withContext(Dispatchers.Main) {
+                importableMods.toList()
             }
 
             val fingerprintMatched = mutableSetOf<Int>()
@@ -1521,16 +1528,14 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                     val info = fpResults[fp]!!
                                     fingerprintMatched.add(index)
                                     val iconUrl = iconUrls[info.projectId.toLongOrNull()]
-                                    synchronized(modListGuard) {
-                                        if (index in importableMods.indices) {
-                                            importableMods[index] = importableMods[index].copy(
-                                                sourceProjectId = info.projectId,
-                                                sourceVersionId = info.versionId,
-                                                sourceIconUrl = iconUrl,
-                                                sourceAvailable = true,
-                                                sourceStatus = "Available"
-                                            )
-                                        }
+                                    if (index in importableMods.indices) {
+                                        importableMods[index] = importableMods[index].copy(
+                                            sourceProjectId = info.projectId,
+                                            sourceVersionId = info.versionId,
+                                            sourceIconUrl = iconUrl,
+                                            sourceAvailable = true,
+                                            sourceStatus = "Available"
+                                        )
                                     }
                                     for (i in 0 until modListWidget.count()) {
                                         val item = modListWidget.item(i)
@@ -1564,16 +1569,14 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                 withContext(Dispatchers.Main) {
                                     if (!isActive) return@withContext
                                     val status = result?.status ?: "Not Available"
-                                    synchronized(modListGuard) {
-                                        if (originalIndex in importableMods.indices) {
-                                            importableMods[originalIndex] = importableMods[originalIndex].copy(
-                                                sourceProjectId = result?.projectId,
-                                                sourceVersionId = result?.versionId,
-                                                sourceIconUrl = result?.iconUrl,
-                                                sourceAvailable = result != null,
-                                                sourceStatus = status
-                                            )
-                                        }
+                                    if (originalIndex in importableMods.indices) {
+                                        importableMods[originalIndex] = importableMods[originalIndex].copy(
+                                            sourceProjectId = result?.projectId,
+                                            sourceVersionId = result?.versionId,
+                                            sourceIconUrl = result?.iconUrl,
+                                            sourceAvailable = result != null,
+                                            sourceStatus = status
+                                        )
                                     }
                                     // Update the row widget
                                     for (i in 0 until modListWidget.count()) {
@@ -1586,7 +1589,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                         }
                                     }
                                     // If mod is checked and matching version was found, resolve dependencies
-                                    val currentMod = synchronized(modListGuard) { importableMods.getOrNull(originalIndex) }
+                                    val currentMod = importableMods.getOrNull(originalIndex)
                                 }
                                 val done = completedCount.incrementAndGet()
                                 if (done % progressInterval == 0) {
@@ -1603,7 +1606,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                     }
                 }.awaitAll()
             }
-            val modsCopy = synchronized(modListGuard) { importableMods.toList() }
+            val modsCopy = withContext(Dispatchers.Main) { importableMods.toList() }
             saveImportCache(instance, source.id, modsCopy)
             log.warn("validateModsAgainstSource: completed {}/{} mods for {}", completedCount.get(), totalMods, source.id)
         }
@@ -1648,11 +1651,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                         .map { it.projectId }
 
                     withContext(Dispatchers.Main) {
-                        synchronized(modListGuard) {
-                            val idx = importableMods.indexOfFirst { it.jarPath == mod.jarPath }
-                            if (idx >= 0) {
-                                importableMods[idx] = importableMods[idx].copy(dependencyIds = depIds)
-                            }
+                        val idx = importableMods.indexOfFirst { it.jarPath == mod.jarPath }
+                        if (idx >= 0) {
+                            importableMods[idx] = importableMods[idx].copy(dependencyIds = depIds)
                         }
                     }
                 } catch (t: Throwable) {
@@ -1669,8 +1670,8 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
      * cached in [iconCache] for reuse.
      */
     private fun fetchOnlineIcon(index: Int, url: String) {
-        if (currentIconJob?.isActive != true) currentIconJob = Job()
-        ioScope.launch(currentIconJob!!) {
+        if (currentModRowIconParent?.isActive != true) currentModRowIconParent = Job()
+        ioScope.launch(currentModRowIconParent!!) {
             iconSemaphore.acquire()
             try {
                 val cached = iconCache[url]
@@ -1791,7 +1792,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
         currentFileTreeJob = ioScope.launch {
             try {
                 val instancePath = instance.minecraftDir.toAbsolute().toString()
-                val entries = withContext(Dispatchers.IO) {
+                val entries = withContext(Dispatchers.Main) {
                     collectFileTreeEntries(instance.minecraftDir)
                 }
 
@@ -1882,9 +1883,8 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
             var cleanedUp = false
             try {
                 // Collect checked state before any mutation
-                val allModsBefore: List<ImportableMod>
-                synchronized(modListGuard) {
-                    allModsBefore = importableMods.toList()
+                val allModsBefore = withContext(Dispatchers.Main) {
+                    importableMods.toList()
                 }
 
                 // If this is a CurseForge pack, download mods before importing
@@ -1903,7 +1903,9 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                         fName in checkedFileNames
                     }
                     downloadCursePackMods(cursePackTempDir!!, httpClient, filesToDownload)
-                    importableMods.clear()
+                    withContext(Dispatchers.Main) {
+                        importableMods.clear()
+                    }
                     val modsDir = instance.minecraftDir.resolve("mods")
                     if (modsDir.exists() && modsDir.isDir()) {
                         val scanned = withContext(Dispatchers.IO) {
@@ -1927,7 +1929,7 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                         ImportableMod(
                                             jarPath = jarPath,
                                             modId = info.modId,
-                                            displayName = info.displayName,
+                                            displayName = info.displayName ?: info.modId,
                                             fileName = jarPath.fileName(),
                                             side = info.side,
                                             iconBytes = readModJarIcon(jarPath),
@@ -1941,18 +1943,19 @@ class ImportProjectDialog(parent: QWidget? = null) : QDialog(parent) {
                                 }
                             }
                         }
-                        importableMods.addAll(scanned)
+                        withContext(Dispatchers.Main) {
+                            importableMods.addAll(scanned)
+                        }
                     }
                 }
 
                 // Collect selected mods and files
-                val allMods: List<ImportableMod>
-                synchronized(modListGuard) {
-                    allMods = importableMods.toList()
+                val allMods = withContext(Dispatchers.Main) {
+                    importableMods.toList()
                 }
                 val selectedMods = allMods.filter { it.checked }
                 val selectedFiles = collectCheckedFiles(fileTree)
-                val source = modSourceCombo.currentData as? ModSource
+                val source = withContext(Dispatchers.Main) { modSourceCombo.currentData as? ModSource }
                 val sourceId = source?.id ?: "unknown"
                 val iconPath = LauncherDetector.resolveInstanceIcon(instance)
 

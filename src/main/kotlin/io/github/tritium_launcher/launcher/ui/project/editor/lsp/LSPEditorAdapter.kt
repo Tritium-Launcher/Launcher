@@ -1,11 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.lsp
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.hexToQColor
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.runOnGuiThread
 import io.github.tritium_launcher.launcher.lsp.LSPConnection
 import io.github.tritium_launcher.launcher.lsp.LSPEventBus
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.launcher.lsp.LSPMngr
 import io.github.tritium_launcher.launcher.ui.project.editor.RainbowBracketHighlighter
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.qt.gui.QColor
@@ -29,6 +34,7 @@ class LSPEditorAdapter(
 
     var semanticSelections: List<QTextEdit.ExtraSelection> = emptyList()
     private var diagnosticSelections: List<QTextEdit.ExtraSelection> = emptyList()
+    private var rainbowSelections: List<QTextEdit.ExtraSelection> = emptyList()
 
     init {
         connection.ready.thenRun {
@@ -41,7 +47,9 @@ class LSPEditorAdapter(
 
         textEdit.textChanged.connect {
             if (!isReady) return@connect
-            sendDidChange(textEdit.toPlainText())
+            val text = textEdit.toPlainText()
+            sendDidChange(text)
+            rainbowSelections = RainbowBracketHighlighter.highlight(textEdit)
             flushSelections()
         }
 
@@ -73,8 +81,7 @@ class LSPEditorAdapter(
                 DidCloseTextDocumentParams(TextDocumentIdentifier(uri))
             )
         }
-        flushSelections()
-        io.github.tritium_launcher.launcher.lsp.LSPMngr.release(connection.project, connection.langId)
+        LSPMngr.release(connection.project, connection.langId)
     }
 
     private fun sendDidOpen(text: String) {
@@ -97,9 +104,9 @@ class LSPEditorAdapter(
                 val start = getOffset(doc, diag.range.start)
                 val end = getOffset(doc, diag.range.end)
                 val color = when (diag.severity) {
-                    DiagnosticSeverity.Error -> TColors.Syntax.Error.hexToQColor()
-                    DiagnosticSeverity.Warning -> TColors.Syntax.Warning.hexToQColor()
-                    DiagnosticSeverity.Information -> TColors.Syntax.Information.hexToQColor()
+                    DiagnosticSeverity.Error -> TColors.Syntax.Error.toQC()
+                    DiagnosticSeverity.Warning -> TColors.Syntax.Warning.toQC()
+                    DiagnosticSeverity.Information -> TColors.Syntax.Information.toQC()
                     else -> QColor("gray")
                 }
 
@@ -120,7 +127,7 @@ class LSPEditorAdapter(
     }
 
     private fun flushSelections() {
-        textEdit.setExtraSelections(semanticSelections + diagnosticSelections + RainbowBracketHighlighter.highlight(textEdit))
+        textEdit.setExtraSelections(semanticSelections + diagnosticSelections + rainbowSelections)
     }
 
     private fun getOffset(doc: QTextDocument, pos: Position): Int {

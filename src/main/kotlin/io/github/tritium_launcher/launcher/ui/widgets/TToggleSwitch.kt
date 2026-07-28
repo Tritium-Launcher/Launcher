@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets
 
-import io.github.tritium_launcher.launcher.qs
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.github.tritium_launcher.launcher.ui.widgets.pixel.PixelDrawScope
@@ -145,7 +150,7 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
 
         init {
             scope.launch {
-                ThemeMngr.currentThemeId.collect {
+                ThemeMngr.currentColorThemeId.collect {
                     val prev = skin
                     skin = buildSkin()
                     prev.clearCache(disposePixmaps = true)
@@ -169,15 +174,15 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
                 color("border", TColors.Button0)
                 color("surfaceLight", TColors.Button3)
                 color("surfaceMid", TColors.Button2)
-                color("surfaceLift", QColor(TColors.Button2).lighter(112))
+                color("surfaceLift", TColors.Button2.brightness(0.12f))
                 color("surfaceShadow", TColors.Button1)
-                color("surfaceShadowDark", QColor(TColors.Button1).darker(140))
+                color("surfaceShadowDark", TColors.Button1.brightness(-0.40f))
                 color("shine", TColors.SelectedText)
 
                 color("disabledBorder", TColors.ButtonDisabled1)
                 color("disabledLight", TColors.ButtonDisabled1)
                 color("disabledMid", TColors.ButtonDisabled0)
-                color("disabledShadow", QColor(TColors.ButtonDisabled0).darker(130))
+                color("disabledShadow", TColors.ButtonDisabled0.brightness(-0.30f))
 
                 color("green", green)
                 color("greenLight", greenLight)

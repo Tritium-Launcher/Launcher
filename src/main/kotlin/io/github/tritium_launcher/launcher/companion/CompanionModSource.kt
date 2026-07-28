@@ -1,9 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.companion
 
-import io.github.tritium_launcher.launcher.core.source.*
+import io.github.tritium_launcher.api.modpack.*
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.qt.gui.QPixmap
@@ -16,7 +20,7 @@ class CompanionModSource : ModSource() {
     override val order = 100
     override val descriptionFormat = DescriptionFormat.MARKDOWN
 
-    private val httpClient = HttpClient(CIO)
+    private val httpClient = HttpClientProvider.client()
 
     override suspend fun search(context: ModBrowserContext, query: ModSearchQuery): ModSearchPage =
         ModSearchPage(emptyList(), 0)
@@ -38,7 +42,8 @@ class CompanionModSource : ModSource() {
             summary = meta?.summary ?: "Provides helpful utilities for ModPack Developers",
             description = description,
             author = meta?.author,
-            iconUrl = meta?.iconUrl ?: "https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/gh-pages/icon.png",
+            iconUrl = meta?.iconUrl
+                ?: "https://raw.githubusercontent.com/Tritium-Launcher/Tritium-Companion/gh-pages/icon.png",
             website = meta?.website ?: webpage,
         )
     }
@@ -53,7 +58,9 @@ class CompanionModSource : ModSource() {
                 fileHash = entry.jars[loaderId]?.sha256,
                 releaseType = try {
                     entry.releaseType?.let { ReleaseType.valueOf(it.uppercase()) }
-                } catch (_: IllegalArgumentException) { null },
+                } catch (_: IllegalArgumentException) {
+                    null
+                },
             )
         }
     }

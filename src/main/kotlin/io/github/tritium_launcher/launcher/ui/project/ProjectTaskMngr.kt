@@ -1,8 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import kotlinx.coroutines.flow.*
 import java.nio.file.Files
 import java.util.*

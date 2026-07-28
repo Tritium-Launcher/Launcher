@@ -1,18 +1,24 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.modloader
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.IODispatchers
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.io.linkOrCopyFromCache
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.IODispatchers
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.io.linkOrCopyFromCache
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.LaunchContext
+import io.github.tritium_launcher.api.modpack.ModLoader
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.registry.Registrable
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.platform.Java
-import io.github.tritium_launcher.launcher.registry.Registrable
 import io.github.tritium_launcher.launcher.toURI
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -63,7 +69,7 @@ class NeoForge : ModLoader(), Registrable {
     val dir: VPath = fromTR(INSTALL_DIR, id)
     private val json = Json { ignoreUnknownKeys = true }
 
-     val client = HttpClient(CIO) {
+     val client = HttpClientProvider.client() {
         install(ContentNegotiation) { json(json) }
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000
@@ -754,21 +760,21 @@ class NeoForge : ModLoader(), Registrable {
 
     /**
      * Execute installer processors (installertools) defined in install_profile.json.
-     * Processors patch the base Minecraft jar and download auxiliary data like mappings.
+     * Processors patch the base Minecraft jar and download auxiliary state like mappings.
      */
     private suspend fun runInstallProcessors(profileJson: String, installer: VPath, targetDir: VPath, mcVersion: String, loaderVersion: String): Boolean {
         val root = json.parseToJsonElement(profileJson).jsonObject
         val processors = root["processors"]?.jsonArray ?: JsonArray(emptyList())
         if (processors.isEmpty()) return true
 
-        val data = root["data"]?.jsonObject ?: JsonObject(emptyMap())
+        val data = root["state"]?.jsonObject ?: JsonObject(emptyMap())
         val baseJar = targetDir.resolve(".tr").resolve("versions").resolve(mcVersion).resolve("$mcVersion.jar")
         if(!baseJar.exists()) {
             logger.warn("Base minecraft jar missing for processors: {}", baseJar.toAbsolute())
             return false
         }
 
-        val binPatch = extractInstallerData(installer, "data/client.lzma", targetDir)
+        val binPatch = extractInstallerData(installer, "state/client.lzma", targetDir)
 
         for (procEl in processors) {
             val proc = procEl as? JsonObject ?: continue
@@ -859,7 +865,7 @@ class NeoForge : ModLoader(), Registrable {
     }
 
     /**
-     * Resolve a keyed value from the install_profile `data` block, honoring side overrides
+     * Resolve a keyed value from the install_profile `state` block, honoring side overrides
      * and downloading bracketed maven artifacts when needed.
      */
     private suspend fun resolveDataValue(data: JsonObject, key: String, side: String, targetDir: VPath): String? = withContext(Dispatchers.IO) {
@@ -879,11 +885,11 @@ class NeoForge : ModLoader(), Registrable {
     }
 
     /**
-     * Extract a data entry from the installer jar into the instance loader data directory.
+     * Extract a state entry from the installer jar into the instance loader state directory.
      */
     private fun extractInstallerData(installer: VPath, entryName: String, targetDir: VPath): VPath? {
         return try {
-            val outDir = targetDir.resolve(".tr").resolve("loader").resolve(id).resolve("data")
+            val outDir = targetDir.resolve(".tr").resolve("loader").resolve(id).resolve("state")
             outDir.mkdirs()
             val out = outDir.resolve(entryName.substringAfterLast('/'))
             ZipFile(installer.toJFile()).use { zip ->
@@ -902,7 +908,7 @@ class NeoForge : ModLoader(), Registrable {
     /**
      * Expand processor argument tokens:
      * - Builtin placeholders ({ROOT}, {MINECRAFT_JAR}, etc.)
-     * - Data-driven keys from the install_profile `data` map
+     * - Data-driven keys from the install_profile `state` map
      * - Leaves unknown tokens untouched for downstream tools
      */
     private suspend fun expandProcessorTokens(

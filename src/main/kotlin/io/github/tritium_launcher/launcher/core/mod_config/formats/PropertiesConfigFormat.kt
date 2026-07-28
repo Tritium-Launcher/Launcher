@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.mod_config.formats
 
-import io.github.tritium_launcher.launcher.core.mod_config.*
+import io.github.tritium_launcher.api.modpack.*
 
 class PropertiesConfigFormat : ConfigFormat {
     override val id: String = "properties"
@@ -49,7 +54,7 @@ class PropertiesConfigFormat : ConfigFormat {
     private fun serializeScalar(node: ConfigNode): String = when (node) {
         is ConfigString -> node.value
         is ConfigInt    -> node.value.toString()
-        is ConfigDouble  -> node.value.toString()
+        is ConfigDouble -> node.value.toString()
         is ConfigBool   -> node.value.toString()
         else            -> ""
     }

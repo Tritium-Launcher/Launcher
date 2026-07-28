@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.api.io.VPath
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*

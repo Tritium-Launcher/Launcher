@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 /**
  * Provides methods to make Qt Widgets without having to use .apply everywhere. It looks much cleaner this way!
  */

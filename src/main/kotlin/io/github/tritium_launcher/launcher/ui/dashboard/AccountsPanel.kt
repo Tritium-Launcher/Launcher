@@ -1,13 +1,18 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
-import io.github.tritium_launcher.launcher.*
-import io.github.tritium_launcher.launcher.accounts.AccountDescriptor
-import io.github.tritium_launcher.launcher.accounts.AccountProvider
-import io.github.tritium_launcher.launcher.accounts.AuthMethod
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.accounts.AccountDescriptor
+import io.github.tritium_launcher.api.accounts.AccountProvider
+import io.github.tritium_launcher.api.accounts.AuthMethod
+import io.github.tritium_launcher.api.platform.Platform
 import io.github.tritium_launcher.launcher.accounts.ProfileMngr
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setStyle

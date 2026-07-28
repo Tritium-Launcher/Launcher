@@ -1,7 +1,12 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.settings
 
-import io.github.tritium_launcher.launcher.settings.NamespacedId
-import io.github.tritium_launcher.launcher.settings.SettingNode
+import io.github.tritium_launcher.api.settings.NamespacedId
+import io.github.tritium_launcher.api.settings.SettingNode
 
 /**
  * Deep link reference to a specific setting.

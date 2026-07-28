@@ -1,13 +1,19 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.git.github
 
+import io.github.tritium_launcher.api.UIDispatcher
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.platform.Platform.Companion.openBrowser
+import io.github.tritium_launcher.api.runOnGuiThread
 import io.github.tritium_launcher.launcher.asAlignment
-import io.github.tritium_launcher.launcher.coroutines.UIDispatcher
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.git.github.GHDeviceFlowAuth.Companion.showDeviceCodeUi
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.platform.Platform.Companion.openBrowser
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.widgets.BrowseLabel
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
@@ -15,7 +21,6 @@ import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.labe
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
 import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -53,7 +58,7 @@ object GitHubAuth {
     private var cachedProfile: GitHubProfile? = null
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val client: HttpClient = HttpClient(CIO) {
+    private val client: HttpClient = HttpClientProvider.client() {
         install(ContentNegotiation) { json(json) }
         defaultRequest {
             header("User-Agent", ClientIdentity.userAgent)
@@ -203,7 +208,7 @@ internal class GHDeviceFlowAuth(
     private val scopes: List<String> = OAUTH_SCOPE
 ) {
 
-    private val client: HttpClient = HttpClient(CIO) {
+    private val client: HttpClient = HttpClientProvider.client() {
         install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
     }
 

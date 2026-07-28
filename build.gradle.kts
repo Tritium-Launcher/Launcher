@@ -24,7 +24,7 @@ grammar {
 }
 
 group = "io.github.tritium_launcher.launcher"
-version = "0.1.6"
+version = "0.1.7d"
 val tritiumVersion = project.version.toString()
 
 val os: OperatingSystem = OperatingSystem.current()
@@ -40,6 +40,7 @@ val qtOs = when {
 dependencyLocking { lockAllConfigurations() }
 
 repositories {
+    mavenLocal()
     mavenCentral()
 }
 
@@ -57,6 +58,9 @@ configurations.configureEach {
 }
 
 dependencies {
+    // Extension API
+    implementation(project(":api"))
+
     // Serialization
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.hocon)
@@ -128,6 +132,11 @@ dependencies {
 
     // KTreeSitter
     implementation(libs.ktreesitter)
+
+    // Tritium Mod API
+    implementation("io.github.tritium_launcher:tritium-mod-api:0.1.3-SNAPSHOT") {
+        isChanging = true
+    }
 
     /* Test */
 

@@ -1,13 +1,20 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
-import io.github.tritium_launcher.launcher.*
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.dashboard.*
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
 import io.github.tritium_launcher.launcher.core.project.ProjectMngrEvent
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.import.ui.ImportProjectDialog
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
+import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard.Companion.bgDashboardLogger
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
@@ -191,7 +198,7 @@ class ProjectsPanel internal constructor(): QWidget() {
     // ProjectMngrListener methods removed - now using projectEvents flow
 
     /**
-     * Prompts for a `trproj.json` file and imports the owning project.
+     * Prompts for a `.trproj` file and imports the owning project.
      */
     private fun showImportProjectDialog() {
         val startDir = try {
@@ -204,27 +211,27 @@ class ProjectsPanel internal constructor(): QWidget() {
             this,
             "Import Project",
             startDir,
-            "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
+            "Tritium Project (.trproj);;JSON Files (*.json);;All Files (*)"
         )
-        val selectedPath = chosen.result?.trim().orEmpty()
+        val selectedPath = chosen.result.trim()
         if (selectedPath.isBlank()) return
 
         importProjectFromSelection(VPath.get(selectedPath))
     }
 
     /**
-     * Imports a project from a selected file path, expecting `trproj.json`.
+     * Imports a project from a selected file path, expecting `.trproj`.
      *
-     * If the selected file's directory does not contain `trproj.json`, import is skipped.
+     * If the selected file's directory does not contain `.trproj`, import is skipped.
      */
     private fun importProjectFromSelection(selectedFile: VPath) {
         val file = selectedFile.expandHome().toAbsolute().normalize()
         val projectDir = file.parent()
-        val projectFile = if (file.fileName() == "trproj.json") file else projectDir.resolve("trproj.json")
+        val projectFile = if (file.fileName() == ".trproj" || file.fileName() == "trproj.json") file else projectDir.resolve(".trproj")
 
         if (!projectFile.exists()) {
             Dashboard.logger.warn(
-                "Import skipped for '{}' because trproj.json was not found in '{}'",
+                "Import skipped for '{}' because project definition file was not found in '{}'",
                 selectedFile,
                 projectDir
             )

@@ -1,14 +1,26 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.extension.core
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.onEvent
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.onEvent
+import io.github.tritium_launcher.api.keymap.KeyBinding
+import io.github.tritium_launcher.api.keymap.Keystroke
+import io.github.tritium_launcher.api.keymap.MouseStroke
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.settings.RefreshableSettingWidget
+import io.github.tritium_launcher.api.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.font.FontMngr
-import io.github.tritium_launcher.launcher.keymap.*
+import io.github.tritium_launcher.launcher.keymap.ActionRegistry
+import io.github.tritium_launcher.launcher.keymap.KeymapMngr
+import io.github.tritium_launcher.launcher.keymap.ShortcutKind
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.settings.RefreshableSettingWidget
-import io.github.tritium_launcher.launcher.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.settings.settingsDefinition
+import io.github.tritium_launcher.launcher.ui.project.editor.inspection.InspectionSettingsWidget
 import io.github.tritium_launcher.launcher.ui.widgets.InfoLineEditWidget
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
@@ -698,6 +710,26 @@ internal object CoreSettings {
             }
         }
 
+        //TODO: NOT IMPLEMENTED
+        widget(ui.path, "ui.dock_button_style") {
+            title = "Dock Button Style"
+            description = "Controls how side panel dock buttons are displayed."
+            defaultValue = "default"
+            serializer = String.serializer()
+            comments = listOf(
+                "Default: compact icon-only buttons. IntelliJ Classic: full-size buttons with rotated titles and no hover effects."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("default", "Default"),
+                        ChoiceSettingOption("intellij_classic", "IntelliJ Classic")
+                    )
+                )
+            }
+        }
+
         val projects = category("projects") {
             title = "Projects"
             allowForeignSettings = true
@@ -725,6 +757,20 @@ internal object CoreSettings {
             title = "Companion Bridge"
             parent = projects
             allowForeignSettings = true
+        }
+
+        toggle(companionBridge.path, "companion.focus_after_reload") {
+            title = "Focus Game After Reload"
+            description = "Automatically bring the Minecraft window to front when a server reload completes."
+            defaultValue = false
+        }
+
+        if (Platform.isWindows) {
+            toggle(companionBridge.path, "companion.block_recall_on_start") {
+                title = "Block Windows Recall"
+                description = "Prevent Windows Recall from capturing Tritium's windows on startup."
+                defaultValue = false
+            }
         }
 
         val javaRuntime = category("java_runtime") {
@@ -776,12 +822,69 @@ internal object CoreSettings {
             defaultValue = false
         }
 
+        toggle(editor.path, "editor.insert_paired_brackets") {
+            title = "Insert Paired Brackets"
+            description = "When typing an opening bracket ( [ { <, automatically insert the matching closing bracket."
+            defaultValue = true
+        }
+
+        toggle(editor.path, "editor.insert_pair_curly_on_enter") {
+            title = "Insert Pair '}' on Enter"
+            description = "When pressing Enter with the cursor between { }, automatically insert the closing brace on a new line."
+            defaultValue = true
+        }
+
+        widget(editor.path, "editor.completion_display_mode") {
+            title = "Completion Display Mode"
+            description = "How completion items are displayed in the popup."
+            defaultValue = "advanced"
+            serializer = String.serializer()
+            comments = listOf(
+                "Basic shows only the name and type kind. Advanced shows parameters and return type."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("basic", "Basic"),
+                        ChoiceSettingOption("advanced", "Advanced")
+                    )
+                )
+            }
+        }
+
+        val inspections = category("inspections") {
+            title = "Inspections"
+            description = "Configure code inspection severity and enabled state."
+            parent = editor
+            allowForeignSettings = true
+        }
+
+        widget(inspections.path, "inspections_config") {
+            title = "Inspections"
+            description = "Browse and configure all registered code inspections."
+            defaultValue = "{}"
+            serializer = String.serializer()
+            fullWidth = true
+            fullHeight = true
+            widgetFactory = { ctx -> InspectionSettingsWidget(ctx) }
+        }
+
         toggle(projects.path, "projects.close_dashboard_on_open") {
             title = "Close Dashboard When Opening Project"
             description = "Automatically close the dashboard after opening a project window."
             defaultValue = true
             comments = listOf(
                 "When true, opening a project window closes the dashboard window."
+            )
+        }
+
+        toggle(projects.path, "projects.reopen_on_launch") {
+            title = "Reopen Last Project on Launch"
+            description = "Automatically reopen the last opened project when Tritium starts."
+            defaultValue = false
+            comments = listOf(
+                "When enabled, the last opened project reopens instead of showing the dashboard."
             )
         }
 

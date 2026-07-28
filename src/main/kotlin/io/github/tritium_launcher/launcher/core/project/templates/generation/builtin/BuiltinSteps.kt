@@ -1,17 +1,21 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.project.templates.generation.builtin
 
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorContext
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStep
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
-import io.github.tritium_launcher.launcher.core.project.templates.generation.StepExecutionResult
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.io.atomicWrite
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.redactUserPath
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.io.atomicWrite
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.project.template.GeneratorContext
+import io.github.tritium_launcher.api.project.template.GeneratorStep
+import io.github.tritium_launcher.api.project.template.GeneratorStepDescriptor
+import io.github.tritium_launcher.api.project.template.StepExecutionResult
+import io.github.tritium_launcher.api.redactUserPath
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.toURI
-import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.request.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,7 +45,7 @@ class FetchStep(
     private val dest: String
 ) : GeneratorStep {
     companion object {
-        private val sharedClient = HttpClient(CIO)
+        private val sharedClient = HttpClientProvider.client()
 
         /**
          * Create a step from a descriptor.

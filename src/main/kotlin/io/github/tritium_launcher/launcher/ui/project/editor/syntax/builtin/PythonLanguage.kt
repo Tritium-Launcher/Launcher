@@ -1,9 +1,14 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.syntax.builtin
 
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.api.file.*
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.platform.Platform
 import io.github.tritium_launcher.launcher.matches
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.ui.project.editor.syntax.*
 
 /**
  * Basic Python syntax definition with multiple LSP command options.

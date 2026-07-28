@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 /**
  * Host bootstrap helpers for starting and stopping the core service container.
  *
@@ -6,22 +11,32 @@
  */
 package io.github.tritium_launcher.launcher.bootstrap
 
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.onEvent
+import io.github.tritium_launcher.api.extension.Extension
+import io.github.tritium_launcher.api.extension.ExtensionStateMngr
+import io.github.tritium_launcher.api.keymap.KeyBinding
+import io.github.tritium_launcher.api.keymap.Keystroke
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.registry.RegistryMngr
 import io.github.tritium_launcher.launcher.appInstance
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.onEvent
 import io.github.tritium_launcher.launcher.extension.ExtensionDirectoryLoader
 import io.github.tritium_launcher.launcher.extension.ExtensionLoader
-import io.github.tritium_launcher.launcher.extension.ExtensionStateManager
 import io.github.tritium_launcher.launcher.extension.core.CoreExtension
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
-import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.keymap.*
-import io.github.tritium_launcher.launcher.registry.RegistryMngr
 import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.logging.LogDialogMngr
+import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.TreeSitterService
+import io.github.tritium_launcher.launcher.ui.search.SearchEverywhereDialog
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
 import io.ktor.utils.io.core.*
+import io.qt.core.QMetaObject
+import io.qt.core.QTimer
 import io.qt.core.Qt
+import io.qt.gui.QCursor
 import io.qt.gui.QTextCursor
 import io.qt.widgets.QApplication
 import io.qt.widgets.QTextEdit
@@ -38,6 +53,9 @@ import org.koin.core.context.stopKoin
 import org.koin.dsl.module
 import org.koin.logger.slf4jLogger
 
+private object Bootstrap
+private val logger = logger(Bootstrap::class)
+
 private val registryCoreModule = module {
     single { RegistryMngr }
     single { SettingsMngr }
@@ -49,19 +67,28 @@ private val registryCoreModule = module {
  * @param loadExtDir Directory containing extension jars to load via [ExtensionDirectoryLoader].
  * @return Closeables for extension class loaders; pass to [stopHost] to release resources.
  */
-internal fun startHost(loadExtDir: VPath): List<Closeable> {
+internal fun startHost(): List<Closeable> {
     val core = listOf(registryCoreModule)
     val loaders = mutableListOf<Closeable>()
 
     val discovered = ExtensionLoader.discover()
-    val dirResult = ExtensionDirectoryLoader.loadFrom(loadExtDir)
+    val dirResult = ExtensionDirectoryLoader.loadFrom(TConstants.EXT_DIR)
     loaders += dirResult.loaders
 
-    val allExtensions = discovered + dirResult.extensions + CoreExtension
+    val allExtensions = (discovered + dirResult.extensions + CoreExtension)
+        .distinctBy { it.namespace }
     ExtensionLoader.allExtensions = allExtensions
 
-    val extState = ExtensionStateManager.load()
+    val extState = ExtensionStateMngr.load()
     val enabledExtensions = allExtensions.filter { it.isBuiltin || extState.getOrDefault(it.namespace, true) }
+
+    enabledExtensions.forEach { ext ->
+        runCatching {
+            ext.onRegister()
+            logger(Extension::class).info("Loaded Extension '{}'", ext.namespace)
+        }.onFailure { logger.error("Extension '{}' failed during bootstrap", ext.namespace, it) }
+    }
+
     val extModules = enabledExtensions.flatMap { it.modules }
 
     startKoin {
@@ -72,6 +99,13 @@ internal fun startHost(loadExtDir: VPath): List<Closeable> {
     val registryMngr = GlobalContext.get().get<RegistryMngr>()
     registryMngr.freezeAll()
 
+    TreeSitterService.init()
+
+    enabledExtensions.forEach { ext ->
+        runCatching { ext.onEnable() }
+            .onFailure { logger.error("Extension '{}' failed during enable", ext.namespace, it) }
+    }
+
     return loaders
 }
 
@@ -79,6 +113,10 @@ internal fun startHost(loadExtDir: VPath): List<Closeable> {
  * Stops the host container and closes any extension class loaders.
  */
 internal fun stopHost(loaders: List<Closeable> = emptyList()) {
+    ExtensionLoader.allExtensions.reversed().forEach { ext ->
+        runCatching { ext.onDisable() }
+            .onFailure { logger.error("Extension '{}' failed during disable", ext.namespace, it) }
+    }
     loaders.forEach { it.close() }
     stopKoin()
 }
@@ -124,6 +162,73 @@ internal fun startKeymap() {
     KeymapMngr.declareDefault(
         "logs.open_dialog",
         KeyBinding.Single(Keystroke.ctrlShift(Qt.Key.Key_I.value()))
+    )
+    ActionRegistry.register(
+        id = "search.open_everywhere",
+        label = "Search Everywhere",
+    ) {
+        SearchEverywhereDialog.open()
+    }
+    KeymapMngr.declareDefault(
+        "search.open_everywhere",
+        KeyBinding.Single(Keystroke.ctrl(Qt.Key.Key_Space.value()))
+    )
+    var highlightWidget: QWidget? = null
+    var highlightOverlay: QWidget = qWidget().apply {
+        setStyleSheet("background: rgba(0, 170, 255, 40); border: 2px solid #00aaff;")
+        setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, true)
+        hide()
+    }
+    var highlightTimer: QTimer? = null
+    ActionRegistry.registerHandler(
+        id = "screenshot.hovered_widget",
+        allowKeyboardShortcuts = true,
+        focusGroups = setOf(KeymapFocusMngr.GLOBAL),
+        executesOnRelease = true,
+        pressHandler = {
+            val timer = QTimer().apply { interval = 50 }
+            timer.timeout.connect(QMetaObject.Slot0 {
+                val current = QApplication.widgetAt(QCursor.pos())
+                val prev = highlightWidget
+                if (current !== prev) {
+                    if (current != null) {
+                        highlightOverlay.setParent(current)
+                        highlightOverlay.setGeometry(current.rect())
+                        highlightOverlay.raise()
+                    }
+                    highlightWidget = current
+                }
+                if (highlightWidget != null) {
+                    highlightOverlay.show()
+                }
+            })
+            timer.start()
+            highlightTimer = timer
+            val widget = QApplication.widgetAt(QCursor.pos())
+            if (widget != null) {
+                highlightOverlay.setParent(widget)
+                highlightOverlay.setGeometry(widget.rect())
+                highlightOverlay.raise()
+                highlightOverlay.show()
+            }
+            highlightWidget = widget
+        },
+        handler = {
+            highlightTimer?.stop()
+            highlightTimer = null
+            highlightOverlay.hide()
+            highlightWidget = null
+            val widget = QApplication.widgetAt(QCursor.pos())
+            if (widget != null) {
+                val pixmap = widget.grab()
+                QApplication.clipboard()?.setImage(pixmap.toImage())
+                logger.info(widget.objectName)
+            }
+        }
+    )
+    KeymapMngr.declareDefault(
+        "screenshot.hovered_widget",
+        KeyBinding.Single(Keystroke.plain(Qt.Key.Key_F8.value()))
     )
     ActionRegistry.registerHandler(
         id = "editor.start_new_line",

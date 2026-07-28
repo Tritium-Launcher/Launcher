@@ -1,9 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.platform
 
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.logger
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.client.request.*
 import io.ktor.http.*
@@ -21,14 +25,15 @@ import kotlin.time.Duration.Companion.milliseconds
  *
  * @property ok Indicates whether the action succeeded.
  * @property message Human-readable status or error message.
- * @property data Optional action-specific data payload.
+ * @property data Optional action-specific state payload.
  * @property id Request/response correlation id when provided by the bridge.
  */
 data class CompanionBridgeResponse(
     val ok: Boolean,
     val message: String,
     val data: JsonObject = buildJsonObject { },
-    val id: String? = null
+    val id: String? = null,
+    val action: String? = null
 )
 
 /**
@@ -42,7 +47,7 @@ data class CompanionBridgeResponse(
 object CompanionBridge {
     private val logger = logger()
     private val json = Json { ignoreUnknownKeys = true }
-    private val httpClient = HttpClient(CIO) {
+    private val httpClient = HttpClientProvider.client() {
         install(WebSockets)
     }
 
@@ -51,6 +56,8 @@ object CompanionBridge {
 
     @Volatile
     private var activeSession: DefaultClientWebSocketSession? = null
+
+    val isConnected: Boolean get() = activeSession != null
 
     private val _events = MutableSharedFlow<CompanionBridgeResponse>(extraBufferCapacity = 64)
 
@@ -77,9 +84,9 @@ object CompanionBridge {
     fun endpoint(): String = "ws://${CoreSettingValues.companionWsHost}:${CoreSettingValues.companionWsPort()}/tritium"
 
     /**
-     * Ensures the persistent connection is active.
+     * Starts the persistent connection retry loop. Only runs when the game is active.
      */
-    fun ensureConnected() {
+    fun connect() {
         if (connectionJob?.isActive == true) return
         connectionJob = scope.launch {
             while (isActive) {
@@ -120,6 +127,25 @@ object CompanionBridge {
         }
     }
 
+    /**
+     * Stops the persistent connection and any retry loop.
+     */
+    fun disconnect() {
+        connectionJob?.cancel()
+        connectionJob = null
+        activeSession = null
+    }
+
+    /**
+     * Ensures the persistent connection is active, but only if the game is running
+     * (i.e., a session token has been set).
+     */
+    fun ensureConnected() {
+        if (connectionJob?.isActive == true) return
+        if (sessionToken == null) return
+        connect()
+    }
+
     private fun handleIncoming(text: String) {
         val response = parseResponse(text, "")
         val id = response.id
@@ -131,17 +157,19 @@ object CompanionBridge {
     }
 
     /**
-     * Sets the per-session auth token used for websocket handshakes.
+     * Sets the per-session auth token and connects to the Companion websocket.
      */
     fun setSessionToken(token: String?) {
         sessionToken = token?.trim()?.takeIf { it.isNotEmpty() }
+        if (sessionToken != null) connect()
     }
 
     /**
-     * Clears the active per-session auth token.
+     * Clears the active per-session auth token and disconnects.
      */
     fun clearSessionToken() {
         sessionToken = null
+        disconnect()
     }
 
     /** Sends a `ping` request. */
@@ -283,13 +311,15 @@ object CompanionBridge {
         val message = root["message"]?.jsonPrimitive?.contentOrNull
             ?.takeIf { it.isNotBlank() }
             ?: if (ok) "ok" else "Request failed."
-        val data = root["data"] as? JsonObject ?: buildJsonObject { }
+        val data = root["state"] as? JsonObject ?: buildJsonObject { }
+        val action = root["action"]?.jsonPrimitive?.contentOrNull
 
         return CompanionBridgeResponse(
             ok = ok,
             message = message,
             data = data,
-            id = responseId
+            id = responseId,
+            action = action
         )
     }
 

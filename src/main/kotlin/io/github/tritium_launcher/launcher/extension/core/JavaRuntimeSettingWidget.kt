@@ -1,12 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.extension.core
 
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.qs
+import io.github.tritium_launcher.api.settings.RefreshableSettingWidget
+import io.github.tritium_launcher.api.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.platform.Java
-import io.github.tritium_launcher.launcher.qs
-import io.github.tritium_launcher.launcher.settings.RefreshableSettingWidget
-import io.github.tritium_launcher.launcher.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.ui.widgets.InfoLineEditWidget
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout

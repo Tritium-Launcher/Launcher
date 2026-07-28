@@ -1,12 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.logging
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.qs
+import io.github.tritium_launcher.api.redactUserPath
+import io.github.tritium_launcher.api.runOnGuiThread
 import io.github.tritium_launcher.launcher.logging.Logs
 import io.github.tritium_launcher.launcher.m
-import io.github.tritium_launcher.launcher.qs
-import io.github.tritium_launcher.launcher.redactUserPath
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
@@ -14,6 +19,7 @@ import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.QMimeData
+import io.qt.core.QUrl
 import io.qt.gui.QTextCursor
 import io.qt.widgets.*
 import kotlinx.coroutines.CoroutineScope
@@ -149,7 +155,7 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         val clipboard = QApplication.clipboard() ?: return
         val localPath = tempLog.toString()
         val mime = QMimeData()
-        mime.setUrls(listOf(tempLog.toQUrl()))
+        mime.setUrls(listOf(QUrl(tempLog.toFileUriEncoded().toString())))
         mime.setText(localPath.redactUserPath())
         clipboard.setMimeData(mime)
     }

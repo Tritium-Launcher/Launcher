@@ -1,16 +1,27 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.treesitter
 
 import io.github.treesitter.ktreesitter.Node
 import io.github.treesitter.ktreesitter.Parser
 import io.github.treesitter.ktreesitter.Tree
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.logger
 import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.grammar.TreeSitterJavascript
 
 object TreeSitterService {
     private val log = logger()
     private var jsLanguage: io.github.treesitter.ktreesitter.Language? = null
+    private var jsParser: Parser? = null
+    private var cachedText: String? = null
+    private var cachedResult: TreeSitterParseResult? = null
+    private val grammarLanguages = mutableMapOf<String, io.github.treesitter.ktreesitter.Language>()
 
     fun isAvailable(): Boolean = jsLanguage != null
+
+    fun grammarFor(name: String): io.github.treesitter.ktreesitter.Language? = grammarLanguages[name]
 
     fun init() {
         loadJsLanguage()
@@ -22,29 +33,38 @@ object TreeSitterService {
     }
 
     fun parse(source: String): TreeSitterParseResult? {
+        if (source == cachedText) return cachedResult
         val lang = jsLanguage ?: return null
+        val parser = jsParser ?: Parser(lang).also { jsParser = it }
         return try {
-            val parser = Parser(lang)
             val tree = parser.parse(source)
-            TreeSitterParseResult(parser, tree)
+            TreeSitterParseResult(tree).also {
+                cachedText = source
+                cachedResult = it
+            }
         } catch (e: Throwable) {
+            jsParser = null
             log.warn("Tree-sitter parse failed", e)
             null
         }
     }
 
     private fun loadJsLanguage() {
-        jsLanguage = try {
+        val lang = try {
             TreeSitterJavascript.language()
         } catch (e: Throwable) {
             log.warn("Failed to load JS grammar", e)
             null
         }
+        jsLanguage = lang
+        if (lang != null) {
+            grammarLanguages["javascript"] = lang
+            grammarLanguages["kubescript"] = lang
+        }
     }
 }
 
 class TreeSitterParseResult(
-    private val parser: Parser,
     val tree: Tree
 ) {
     val rootNode: Node get() = tree.rootNode

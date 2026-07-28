@@ -1,18 +1,26 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.registrydb
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import org.sqlite.SQLiteConfig
 import java.sql.Connection
 import java.sql.ResultSet
 
-private const val REGISTRY_DB_SCHEMA_VERSION = 1L
+private const val REGISTRY_DB_SCHEMA_VERSION = 2L
 
-object RegistryDatabase {
+object  RegistryDatabase {
     private val logger = logger()
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -162,70 +170,132 @@ object RegistryDatabase {
     fun searchItems(project: ProjectBase, query: String, limit: Int = 100): List<RegistryItemSummary> =
         searchItems(project, query, offset = 0, limit = limit)
 
-    fun countItems(project: ProjectBase, query: String): Int =
+    /**
+     * Parses a search query string and inventory filter into a SQL WHERE clause and parameter list.
+     *
+     * Supported syntax:
+     *   `@modname`   — filter by namespace (LIKE)
+     *   `#text`      — filter by display_name (LIKE)
+     *   `$tagname`   — filter by tag_values (LIKE)
+     *   `-term`      — negate any of the above
+     *   `|`          — OR between groups
+     *   space        — AND within a group
+     *   bare text    — searches both id and display_name
+     */
+    private fun buildSearchWhere(query: String, inventoryIds: Set<String>?): Pair<String, List<String>> {
+        val trimmed = query.trim()
+        val clauses = mutableListOf<String>()
+        val params = mutableListOf<String>()
+
+        if (trimmed.isNotBlank()) {
+            val orGroups = trimmed.split('|').filter { it.isNotBlank() }
+            val orClauses = orGroups.mapNotNull { group ->
+                val terms = group.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+                if (terms.isEmpty()) return@mapNotNull null
+
+                val andClauses = mutableListOf<String>()
+                val groupParams = mutableListOf<String>()
+
+                for (term in terms) {
+                    val negated = term.startsWith('-')
+                    val body = if (negated) term.substring(1) else term
+                    val prefix = when {
+                        body.startsWith('@') -> '@'
+                        body.startsWith('#') -> '#'
+                        body.startsWith('$') -> '$'
+                        else -> null
+                    }
+                    val searchValue = if (prefix != null) body.substring(1) else body
+                    val pattern = "%${searchValue.lowercase()}%"
+
+                    when (prefix) {
+                        '@' -> {
+                            andClauses.add(if (negated) "namespace NOT LIKE ?" else "namespace LIKE ?")
+                            groupParams.add(pattern)
+                        }
+                        '#' -> {
+                            andClauses.add(if (negated) "lower(COALESCE(display_name, '')) NOT LIKE ?" else "lower(COALESCE(display_name, '')) LIKE ?")
+                            groupParams.add(pattern)
+                        }
+                        '$' -> {
+                            andClauses.add(if (negated) "tag_values NOT LIKE ?" else "tag_values LIKE ?")
+                            groupParams.add(pattern)
+                        }
+                        null -> {
+                            if (negated) {
+                                andClauses.add("(id NOT LIKE ? AND lower(COALESCE(display_name, '')) NOT LIKE ?)")
+                            } else {
+                                andClauses.add("(id LIKE ? OR lower(COALESCE(display_name, '')) LIKE ?)")
+                            }
+                            groupParams.add(pattern)
+                            groupParams.add(pattern)
+                        }
+                    }
+                }
+
+                params.addAll(groupParams)
+                andClauses.joinToString(" AND ", "(", ")")
+            }
+
+            if (orClauses.isNotEmpty()) {
+                clauses.add(orClauses.joinToString(" OR "))
+            }
+        }
+
+        if (inventoryIds != null && inventoryIds.isNotEmpty()) {
+            val placeholders = inventoryIds.joinToString(", ") { "?" }
+            clauses.add("id IN ($placeholders)")
+            params.addAll(inventoryIds)
+        }
+
+        return if (clauses.isEmpty()) "" to emptyList()
+               else clauses.joinToString(" AND ") to params
+    }
+
+    fun countItems(project: ProjectBase, query: String, inventoryIds: Set<String>? = null): Int =
         withReadyDatabase(project) { conn ->
-            val trimmed = query.trim().lowercase()
-            val sql = if(trimmed.isBlank()) {
-                //language=sql
-                "SELECT COUNT(*) AS count FROM items"
-            } else {
-                //language=sql
-                """
-                SELECT COUNT(*) AS count
-                FROM items
-                WHERE id LIKE ? OR lower(COALESCE(display_name, '')) LIKE ?
-                """.trimIndent()
+            val (whereClause, whereParams) = buildSearchWhere(query, inventoryIds)
+
+            val sql = buildString {
+                append("SELECT COUNT(*) AS count FROM v_item_browser")
+                if (whereClause.isNotBlank()) {
+                    append(" WHERE $whereClause")
+                }
             }
 
             conn.prepareStatement(sql).use { stmt ->
-                if(trimmed.isNotBlank()) {
-                    val pattern = "%$trimmed%"
-                    stmt.setString(1, pattern)
-                    stmt.setString(2, pattern)
+                whereParams.forEachIndexed { i, param ->
+                    stmt.setString(i + 1, param)
                 }
                 stmt.executeQuery().use { rs ->
-                    if(rs.next()) rs.getInt("count") else 0
+                    if (rs.next()) rs.getInt("count") else 0
                 }
             }
         }
 
-    fun searchItems(project: ProjectBase, query: String, offset: Int, limit: Int): List<RegistryItemSummary> =
+    fun searchItems(project: ProjectBase, query: String, offset: Int, limit: Int, inventoryIds: Set<String>? = null): List<RegistryItemSummary> =
         withReadyDatabase(project) { conn ->
-            val trimmed = query.trim().lowercase()
-            val sql = if(trimmed.isBlank()) {
-                //language=sql
-                """
-                SELECT namespace, id, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, tag_values
-                FROM v_item_browser
-                ORDER BY namespace ASC, COALESCE(display_name, id) ASC
-                LIMIT ? OFFSET ?
-                """.trimIndent()
-            } else {
-                //language=sql
-                """
-                SELECT namespace, id, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, tag_values
-                FROM v_item_browser
-                WHERE id LIKE ? OR lower(COALESCE(display_name, '')) LIKE ?
-                ORDER BY namespace ASC, COALESCE(display_name, id) ASC
-                LIMIT ? OFFSET ?
-                """.trimIndent()
+            val (whereClause, whereParams) = buildSearchWhere(query, inventoryIds)
+
+            val sql = buildString {
+                append("SELECT namespace, id, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, animation_json, tag_values FROM v_item_browser")
+                if (whereClause.isNotBlank()) {
+                    append(" WHERE $whereClause")
+                }
+                append(" ORDER BY CASE WHEN namespace = 'minecraft' THEN 0 ELSE 1 END, namespace ASC, COALESCE(display_name, id) ASC LIMIT ? OFFSET ?")
             }
 
             conn.prepareStatement(sql).use { stmt ->
-                if(trimmed.isBlank()) {
-                    stmt.setInt(1, limit)
-                    stmt.setInt(2, offset)
-                } else {
-                    val pattern = "%$trimmed%"
-                    stmt.setString(1, pattern)
-                    stmt.setString(2, pattern)
-                    stmt.setInt(3, limit)
-                    stmt.setInt(4, offset)
+                var idx = 1
+                for (param in whereParams) {
+                    stmt.setString(idx++, param)
                 }
+                stmt.setInt(idx++, limit)
+                stmt.setInt(idx, offset)
 
                 stmt.executeQuery().use { rs ->
                     buildList {
-                        while(rs.next()) {
+                        while (rs.next()) {
                             add(rs.toItemSummary())
                         }
                     }
@@ -238,7 +308,7 @@ object RegistryDatabase {
             conn.prepareStatement(
                 //language=sql
                 """
-                SELECT id, namespace, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, raw_json
+                SELECT id, namespace, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, animation_json, raw_json
                 FROM items
                 WHERE id = ?
                 """.trimIndent()
@@ -259,6 +329,7 @@ object RegistryDatabase {
                         rarity = rs.getString("rarity"),
                         enchantability = rs.getNullableInt("enchantability"),
                         texturePath = rs.getString("texture_path"),
+                        animationJson = rs.getString("animation_json"),
                         rawJson = rs.getString("raw_json"),
                         tags = loadTagsForValue(conn, registryType = "item", value = id)
                     )
@@ -272,12 +343,54 @@ object RegistryDatabase {
         val recipeDetails: List<RegistryRecipeDetail>
     )
 
+    fun suggestNamespaces(project: ProjectBase, filter: String): List<String> =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT DISTINCT namespace
+                FROM v_item_browser
+                WHERE namespace LIKE ?
+                ORDER BY CASE WHEN namespace = 'minecraft' THEN 0 ELSE 1 END, namespace
+                LIMIT 20
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, "%${filter.lowercase()}%")
+                stmt.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) add(rs.getString("namespace"))
+                    }
+                }
+            }
+        }
+
+    fun suggestTags(project: ProjectBase, filter: String): List<String> =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT DISTINCT id
+                FROM tags
+                WHERE registry_type = 'item' AND id LIKE ?
+                ORDER BY CASE WHEN namespace = 'minecraft' THEN 0 ELSE 1 END, id
+                LIMIT 20
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, "%${filter.lowercase()}%")
+                stmt.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) add(rs.getString("id"))
+                    }
+                }
+            }
+        }
+
     fun itemDetailWithRecipes(project: ProjectBase, id: String): ItemDetailWithRecipes =
         withReadyDatabase(project) { conn ->
             val detail = conn.prepareStatement(
                 //language=sql
                 """
-                SELECT id, namespace, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, raw_json
+                SELECT id, namespace, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, animation_json, raw_json
                 FROM items
                 WHERE id = ?
                 """.trimIndent()
@@ -297,6 +410,7 @@ object RegistryDatabase {
                             rarity = rs.getString("rarity"),
                             enchantability = rs.getNullableInt("enchantability"),
                             texturePath = rs.getString("texture_path"),
+                            animationJson = rs.getString("animation_json"),
                             rawJson = rs.getString("raw_json"),
                             tags = loadTagsForValue(conn, registryType = "item", value = id)
                         ) to emptyList<String>()
@@ -327,7 +441,7 @@ object RegistryDatabase {
             conn.prepareStatement(
                 //language=sql
                 """
-                SELECT r.id, r.namespace, r.path, r.recipe_type, r.group_name, r.raw_json,
+                SELECT r.id, r.namespace, r.path, r.recipe_type, r.group_name, r.raw_json, r.source_path,
                        rt.input_slots, rt.output_slots, rt.fuel_slots, rt.raw_json AS recipe_type_raw_json
                 FROM recipes r
                 LEFT JOIN recipe_types rt ON rt.id = r.recipe_type
@@ -341,18 +455,19 @@ object RegistryDatabase {
                     buildList {
                         while (rs.next()) {
                             add(
-                                RegistryRecipeDetail(
-                                    id = rs.getString("id"),
-                                    namespace = rs.getString("namespace"),
-                                    path = rs.getString("path"),
-                                    recipeType = rs.getString("recipe_type"),
-                                    groupName = rs.getString("group_name"),
-                                    inputSlots = rs.getNullableInt("input_slots"),
-                                    outputSlots = rs.getNullableInt("output_slots"),
-                                    fuelSlots = rs.getNullableInt("fuel_slots"),
-                                    rawJson = rs.getString("raw_json"),
-                                    recipeTypeRawJson = rs.getString("recipe_type_raw_json")
-                                )
+                            RegistryRecipeDetail(
+                                id = rs.getString("id"),
+                                namespace = rs.getString("namespace"),
+                                path = rs.getString("path"),
+                                recipeType = rs.getString("recipe_type"),
+                                groupName = rs.getString("group_name"),
+                                inputSlots = rs.getNullableInt("input_slots"),
+                                outputSlots = rs.getNullableInt("output_slots"),
+                                fuelSlots = rs.getNullableInt("fuel_slots"),
+                                rawJson = rs.getString("raw_json"),
+                                recipeTypeRawJson = rs.getString("recipe_type_raw_json"),
+                                sourcePath = rs.getString("source_path")
+                            )
                             )
                         }
                     }
@@ -377,41 +492,139 @@ object RegistryDatabase {
             }
         }
 
+    fun itemDisplayName(project: ProjectBase, id: String): String? =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                """
+                SELECT display_name
+                FROM items
+                WHERE id = ?
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, id)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getString("display_name") else null
+                }
+            }
+        }
+
+    fun itemAnimationJson(project: ProjectBase, id: String): String? =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT animation_json
+                FROM items
+                WHERE id = ?
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, id)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getString("animation_json") else null
+                }
+            }
+        }
+
+    fun customValueTintColor(project: ProjectBase, id: String): Long? =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT raw_json
+                FROM custom_values
+                WHERE id = ?
+                LIMIT 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, id)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        val rawJson = rs.getString("raw_json")
+                        rawJson?.let {
+                            runCatching {
+                                val obj = json.parseToJsonElement(it).jsonObject
+                                obj["tintColor"]?.jsonPrimitive?.longOrNull
+                                    ?: obj["rawData"]?.jsonObject?.get("tintColor")?.jsonPrimitive?.longOrNull
+                            }.getOrNull()
+                        }
+                    } else null
+                }
+            }
+        }
+
+    fun customValueTypeId(project: ProjectBase, id: String): String? =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT type_id
+                FROM custom_values
+                WHERE id = ?
+                LIMIT 1
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, id)
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getString("type_id") else null
+                }
+            }
+        }
+
+    fun resolveRegistryType(project: ProjectBase, id: String): String? {
+        val inItems = withReadyDatabase(project) { conn ->
+            conn.prepareStatement("SELECT 1 FROM items WHERE id = ? LIMIT 1").use { stmt ->
+                stmt.setString(1, id)
+                stmt.executeQuery().use { rs -> if (rs.next()) "item" else null }
+            }
+        }
+        if (inItems != null) return "item"
+        return customValueTypeId(project, id)
+    }
+
     fun itemIdsForTag(project: ProjectBase, tagId: String): List<String> =
         withReadyDatabase(project) { conn ->
             resolveTagValues(conn, registryType = "item", tagId = tagId, visitedTags = linkedSetOf())
         }
 
+    fun tagsForItem(project: ProjectBase, itemId: String): List<String> =
+        withReadyDatabase(project) { conn ->
+            val ns = if (itemId.contains(":")) itemId.substringBefore(":") else "minecraft"
+            val path = if (itemId.contains(":")) itemId.substringAfter(":") else itemId
+            loadTagsForValue(conn, registryType = "item", value = "$ns:$path")
+        }
+
     fun itemPreviewsForTag(project: ProjectBase, tagId: String): List<RegistryItemPreview> =
         withReadyDatabase(project) { conn ->
             val itemIds = resolveTagValues(conn, registryType = "item", tagId = tagId, visitedTags = linkedSetOf())
+            if (itemIds.isEmpty()) return@withReadyDatabase emptyList()
+            val placeholders = itemIds.joinToString(",") { "?" }
             conn.prepareStatement(
                 //language=sql
                 """
                 SELECT id, texture_path
                 FROM items
-                WHERE id = ?
+                WHERE id IN ($placeholders)
                 """.trimIndent()
             ).use { stmt ->
-                buildList {
-                    itemIds.forEach { itemId ->
-                        stmt.setString(1, itemId)
-                        stmt.executeQuery().use { rs ->
-                            if (rs.next()) {
-                                add(
-                                    RegistryItemPreview(
-                                        id = rs.getString("id"),
-                                        texturePath = rs.getString("texture_path")
-                                    )
+                itemIds.forEachIndexed { index, id ->
+                    stmt.setString(index + 1, id)
+                }
+                stmt.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                RegistryItemPreview(
+                                    id = rs.getString("id"),
+                                    texturePath = rs.getString("texture_path")
                                 )
-                            }
+                            )
                         }
                     }
                 }
             }
         }
 
-    fun browseRecipes(project: ProjectBase, query: String, limit: Int = 100): List<RegistryRecipeSummary> =
+    fun browseRecipes(project: ProjectBase, query: String, limit: Int = 100, offset: Int = 0): List<RegistryRecipeSummary> =
         withReadyDatabase(project) { conn ->
             val trimmed = query.trim().lowercase()
             val sql = if(trimmed.isBlank()) {
@@ -420,7 +633,7 @@ object RegistryDatabase {
                 SELECT namespace, id, path, recipe_type, group_name, input_slots, output_slots, fuel_slots
                 FROM v_recipe_browser
                 ORDER BY namespace ASC, id ASC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """.trimIndent()
             } else {
                 //language=sql
@@ -431,19 +644,21 @@ object RegistryDatabase {
                    OR lower(COALESCE(recipe_type, '')) LIKE ?
                    OR lower(COALESCE(group_name, '')) LIKE ?
                 ORDER BY namespace ASC, id ASC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """.trimIndent()
             }
 
             conn.prepareStatement(sql).use { stmt ->
                 if(trimmed.isBlank()) {
                     stmt.setInt(1, limit)
+                    stmt.setInt(2, offset)
                 } else {
                     val pattern = "%$trimmed%"
                     stmt.setString(1, pattern)
                     stmt.setString(2, pattern)
                     stmt.setString(3, pattern)
                     stmt.setInt(4, limit)
+                    stmt.setInt(5, offset)
                 }
 
                 stmt.executeQuery().use { rs ->
@@ -610,13 +825,45 @@ object RegistryDatabase {
             }
         }
 
+    data class RecipeTypeSummary(
+        val id: String,
+        val displayName: String?,
+        val rawJson: String
+    )
+
+    fun allRecipeTypes(project: ProjectBase): List<RecipeTypeSummary> =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT id, display_name, raw_json
+                FROM recipe_types
+                ORDER BY id ASC
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                RecipeTypeSummary(
+                                    id = rs.getString("id"),
+                                    displayName = rs.getString("display_name"),
+                                    rawJson = rs.getString("raw_json")
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
     fun itemSummariesByIds(project: ProjectBase, ids: Collection<String>): List<RegistryItemSummary> =
         if (ids.isEmpty()) emptyList() else withReadyDatabase(project) { conn ->
             val placeholders = ids.joinToString(",") { "?" }
             conn.prepareStatement(
                 //language=sql
                 """
-                SELECT namespace, id, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, tag_values
+                SELECT namespace, id, path, display_name, max_count, max_damage, rarity, enchantability, texture_path, animation_json, tag_values
                 FROM v_item_browser
                 WHERE id IN ($placeholders)
                 ORDER BY id ASC
@@ -631,6 +878,224 @@ object RegistryDatabase {
                             add(rs.toItemSummary())
                         }
                     }
+                }
+            }
+        }
+
+    fun browseableValueTypes(project: ProjectBase): List<BrowseableValueType> =
+        withReadyDatabase(project) { conn ->
+            val itemType = BrowseableValueType(
+                id = "item",
+                namespace = "minecraft",
+                path = "item",
+                displayName = "Items",
+                iconTexture = null
+            )
+
+            val customTypes = runCatching {
+                conn.prepareStatement(
+                    //language=sql
+                    """
+                    SELECT id, namespace, path, display_name, icon_texture
+                    FROM v_browseable_value_types
+                    """.trimIndent()
+                ).use { stmt ->
+                    stmt.executeQuery().use { rs ->
+                        buildList {
+                            while (rs.next()) {
+                                add(
+                                    BrowseableValueType(
+                                        id = rs.getString("id"),
+                                        namespace = rs.getString("namespace"),
+                                        path = rs.getString("path"),
+                                        displayName = rs.getString("display_name"),
+                                        iconTexture = rs.getString("icon_texture")
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }.getOrDefault(emptyList())
+
+            if (customTypes.isNotEmpty()) {
+                return@withReadyDatabase listOf(itemType) + customTypes
+            }
+
+            val fallbackTypes = runCatching {
+                conn.prepareStatement(
+                    //language=sql
+                    """
+                    SELECT DISTINCT type_id AS id,
+                           '' AS namespace,
+                           type_id AS path,
+                           type_id AS display_name,
+                           NULL AS icon_texture
+                    FROM custom_values
+                    ORDER BY type_id
+                    """.trimIndent()
+                ).use { stmt ->
+                    stmt.executeQuery().use { rs ->
+                        buildList {
+                            while (rs.next()) {
+                                add(
+                                    BrowseableValueType(
+                                        id = rs.getString("id"),
+                                        namespace = rs.getString("namespace"),
+                                        path = rs.getString("path"),
+                                        displayName = rs.getString("display_name"),
+                                        iconTexture = rs.getString("icon_texture")
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }.getOrDefault(emptyList())
+
+            listOf(itemType) + fallbackTypes
+        }
+
+    fun searchCustomValues(
+        project: ProjectBase,
+        typeId: String,
+        query: String,
+        offset: Int,
+        limit: Int
+    ): List<RegistryValueSummary> =
+        withReadyDatabase(project) { conn ->
+            val trimmed = query.trim().lowercase()
+            val sql = if (trimmed.isBlank()) {
+                //language=sql
+                """
+                SELECT cv.type_id, cv.id, cv.namespace, cv.path, cv.display_name, cv.texture_path, cv.raw_json,
+                       vt.display_name AS type_display_name
+                FROM custom_values cv
+                LEFT JOIN value_types vt ON vt.id = cv.type_id
+                WHERE cv.type_id = ? AND cv.id NOT LIKE '%:flowing_%'
+                  AND cv.id NOT IN (SELECT id FROM items)
+                ORDER BY CASE WHEN cv.namespace = 'minecraft' THEN 0 ELSE 1 END, cv.namespace ASC, COALESCE(cv.display_name, cv.id) ASC
+                LIMIT ? OFFSET ?
+                """.trimIndent()
+            } else {
+                //language=sql
+                """
+                SELECT cv.type_id, cv.id, cv.namespace, cv.path, cv.display_name, cv.texture_path, cv.raw_json,
+                       vt.display_name AS type_display_name
+                FROM custom_values cv
+                LEFT JOIN value_types vt ON vt.id = cv.type_id
+                WHERE cv.type_id = ? AND cv.id NOT LIKE '%:flowing_%'
+                  AND cv.id NOT IN (SELECT id FROM items)
+                  AND (cv.id LIKE ? OR lower(COALESCE(cv.display_name, '')) LIKE ?)
+                ORDER BY CASE WHEN cv.namespace = 'minecraft' THEN 0 ELSE 1 END, cv.namespace ASC, COALESCE(cv.display_name, cv.id) ASC
+                LIMIT ? OFFSET ?
+                """.trimIndent()
+            }
+
+            conn.prepareStatement(sql).use { stmt ->
+                var idx = 1
+                stmt.setString(idx++, typeId)
+                if (trimmed.isNotBlank()) {
+                    val pattern = "%$trimmed%"
+                    stmt.setString(idx++, pattern)
+                    stmt.setString(idx++, pattern)
+                }
+                stmt.setInt(idx++, limit)
+                stmt.setInt(idx, offset)
+
+                stmt.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            val rawJson = rs.getString("raw_json")
+                            val tintColor = rawJson?.let {
+                                runCatching {
+                                    val obj = json.parseToJsonElement(it).jsonObject
+                                    obj["tintColor"]?.jsonPrimitive?.longOrNull
+                                        ?: obj["rawData"]?.jsonObject?.get("tintColor")?.jsonPrimitive?.longOrNull
+                                }.getOrNull()
+                            }
+
+                            add(
+                                RegistryValueSummary(
+                                    typeId = rs.getString("type_id"),
+                                    id = rs.getString("id"),
+                                    namespace = rs.getString("namespace"),
+                                    path = rs.getString("path"),
+                                    displayName = rs.getString("display_name"),
+                                    texturePath = rs.getString("texture_path"),
+                                    typeDisplayName = rs.getString("type_display_name"),
+                                    tintColor = tintColor
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    fun countCustomValues(project: ProjectBase, typeId: String, query: String): Int =
+        withReadyDatabase(project) { conn ->
+            val trimmed = query.trim().lowercase()
+            val sql = if (trimmed.isBlank()) {
+                //language=sql
+                """
+                SELECT COUNT(*) AS count
+                FROM custom_values
+                WHERE type_id = ? AND id NOT LIKE '%:flowing_%'
+                  AND id NOT IN (SELECT id FROM items)
+                """.trimIndent()
+            } else {
+                //language=sql
+                """
+                SELECT COUNT(*) AS count
+                FROM custom_values
+                WHERE type_id = ? AND id NOT LIKE '%:flowing_%'
+                  AND id NOT IN (SELECT id FROM items)
+                  AND (id LIKE ? OR lower(COALESCE(display_name, '')) LIKE ?)
+                """.trimIndent()
+            }
+
+            conn.prepareStatement(sql).use { stmt ->
+                stmt.setString(1, typeId)
+                if (trimmed.isNotBlank()) {
+                    val pattern = "%$trimmed%"
+                    stmt.setString(2, pattern)
+                    stmt.setString(3, pattern)
+                }
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) rs.getInt("count") else 0
+                }
+            }
+        }
+
+    fun customValueDetail(project: ProjectBase, typeId: String, id: String): RegistryValueDetail? =
+        withReadyDatabase(project) { conn ->
+            conn.prepareStatement(
+                //language=sql
+                """
+                SELECT cv.type_id, cv.id, cv.namespace, cv.path, cv.display_name, cv.texture_path, cv.raw_json,
+                       vt.display_name AS type_display_name
+                FROM custom_values cv
+                LEFT JOIN value_types vt ON vt.id = cv.type_id
+                WHERE cv.type_id = ? AND cv.id = ?
+                """.trimIndent()
+            ).use { stmt ->
+                stmt.setString(1, typeId)
+                stmt.setString(2, id)
+                stmt.executeQuery().use { rs ->
+                    if (!rs.next()) return@withReadyDatabase null
+
+                    RegistryValueDetail(
+                        typeId = rs.getString("type_id"),
+                        id = rs.getString("id"),
+                        namespace = rs.getString("namespace"),
+                        path = rs.getString("path"),
+                        displayName = rs.getString("display_name"),
+                        texturePath = rs.getString("texture_path"),
+                        typeDisplayName = rs.getString("type_display_name"),
+                        rawJson = rs.getString("raw_json"),
+                        tags = loadTagsForValue(conn, registryType = typeId, value = id)
+                    )
                 }
             }
         }
@@ -688,7 +1153,9 @@ object RegistryDatabase {
         val config = SQLiteConfig().apply {
             setReadOnly(true)
         }
-        return config.createConnection("jdbc:sqlite:${db.toAbsolute()}")
+        val conn = config.createConnection("jdbc:sqlite:${db.toAbsolute()}")
+        runCatching { conn.createStatement().execute("PRAGMA mmap_size = 268435456") }
+        return conn
     }
 
     private fun meta(conn: Connection, key: String): String? {
@@ -854,6 +1321,7 @@ object RegistryDatabase {
             rarity = getString("rarity"),
             enchantability = getNullableInt("enchantability"),
             texturePath = getString("texture_path"),
+            animationJson = getString("animation_json"),
             tags = rawTags.lines().mapNotNull { it.trim().takeIf(String::isNotBlank) }
         )
     }
@@ -915,6 +1383,7 @@ data class RegistryItemSummary(
     val rarity: String?,
     val enchantability: Int?,
     val texturePath: String?,
+    val animationJson: String? = null,
     val tags: List<String>
 )
 
@@ -928,6 +1397,7 @@ data class RegistryItemDetail(
     val rarity: String?,
     val enchantability: Int?,
     val texturePath: String?,
+    val animationJson: String? = null,
     val rawJson: String,
     val tags: List<String>
 )
@@ -969,7 +1439,8 @@ data class RegistryRecipeDetail(
     val outputSlots: Int?,
     val fuelSlots: Int?,
     val rawJson: String,
-    val recipeTypeRawJson: String?
+    val recipeTypeRawJson: String?,
+    val sourcePath: String? = null
 )
 
 data class RegistryEntryDetail(
@@ -986,6 +1457,37 @@ data class RegistryValuePreview(
     val displayName: String?,
     val typeDisplayName: String?,
     val texturePath: String?
+)
+
+data class BrowseableValueType(
+    val id: String,
+    val namespace: String,
+    val path: String,
+    val displayName: String?,
+    val iconTexture: String?
+)
+
+data class RegistryValueSummary(
+    val typeId: String,
+    val id: String,
+    val namespace: String,
+    val path: String,
+    val displayName: String?,
+    val texturePath: String?,
+    val typeDisplayName: String?,
+    val tintColor: Long? = null
+)
+
+data class RegistryValueDetail(
+    val typeId: String,
+    val id: String,
+    val namespace: String,
+    val path: String,
+    val displayName: String?,
+    val texturePath: String?,
+    val typeDisplayName: String?,
+    val rawJson: String,
+    val tags: List<String>
 )
 
 @Serializable

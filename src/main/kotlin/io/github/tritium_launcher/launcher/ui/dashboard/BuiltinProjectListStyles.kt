@@ -1,8 +1,20 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
-import io.github.tritium_launcher.launcher.*
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.dashboard.*
+import io.github.tritium_launcher.api.loadScaledPixmap
+import io.github.tritium_launcher.api.qs
+import io.github.tritium_launcher.api.redactUserPath
+import io.github.tritium_launcher.launcher.asAlignment
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
+import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.ui.theme.TCol
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.qtStyle
@@ -699,7 +711,7 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
             val name = project?.name ?: index.data(Qt.ItemDataRole.DisplayRole).toString()
             val isInvalid = project?.isInvalidCatalogProject() == true
             val secondary = if (isInvalid) {
-                "Invalid project: missing trproj.json"
+                "Invalid project: missing .trproj"
             } else {
                 project?.path?.toString()?.redactUserPath().orEmpty()
             }
@@ -707,13 +719,13 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
             val nameFont = QFont(opt.font)
             nameFont.setBold(true)
             p.setFont(nameFont)
-            p.setPen(if (isInvalid) QColor(TColors.Warning) else opt.palette.color(QPalette.ColorRole.Text))
+            p.setPen(if (isInvalid) TColors.Warning.toQC() else opt.palette.color(QPalette.ColorRole.Text))
             p.drawText(textRect, Qt.AlignmentFlag.AlignTop.value(), name)
 
             val secondaryFont = QFont(opt.font)
             secondaryFont.setPointSize(max(8, opt.font.pointSize() - 2))
             p.setFont(secondaryFont)
-            p.setPen(if (isInvalid) QColor(TColors.Warning) else opt.palette.color(QPalette.ColorRole.PlaceholderText))
+            p.setPen(if (isInvalid) TColors.Warning.toQC() else opt.palette.color(QPalette.ColorRole.PlaceholderText))
             p.drawText(textRect, Qt.AlignmentFlag.AlignBottom.value(), secondary)
             p.restore()
         }
@@ -1108,7 +1120,7 @@ private class DraggableTile(
     }
 
     private fun applySelectionStyle() {
-        val bg = if (selected) TColors.Highlight else "transparent"
+        val bg = if (selected) TColors.Highlight else TCol("transparent")
         styleSheet = qtStyle {
             widget {
                 backgroundColor(bg)
@@ -1132,7 +1144,7 @@ private fun escapeHtml(input: String): String = input
 private fun wrapProjectName(project: ProjectBase): String {
     val escaped = escapeHtml(project.name)
     val invalidSuffix = if (project.isInvalidCatalogProject()) {
-        """<br/><span style="color:${TColors.Warning}; font-size:10px;">Invalid project (missing trproj.json)</span>"""
+        """<br/><span style="color:${TColors.Warning}; font-size:10px;">Invalid project (missing .trproj)</span>"""
     } else ""
     return "<div style=\"text-align:center; word-break: break-word; overflow-wrap: anywhere;\">$escaped$invalidSuffix</div>"
 }

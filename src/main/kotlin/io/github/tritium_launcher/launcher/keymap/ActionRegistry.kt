@@ -1,12 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.keymap
 
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.keymap.ActionHandler
+import io.github.tritium_launcher.api.keymap.ActionId
+import io.github.tritium_launcher.api.keymap.Keymap
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qAction
 import io.qt.gui.QAction
 import io.qt.gui.QIcon
-
-typealias ActionId = String
-typealias ActionHandler = () -> Unit
 
 enum class ShortcutKind { Keyboard, Mouse }
 
@@ -18,7 +23,9 @@ object ActionRegistry {
         val label: String?,
         val allowedShortcutKinds: Set<ShortcutKind>,
         val focusGroups: Set<String>,
-        val handler: ActionHandler
+        val handler: ActionHandler,
+        val executesOnRelease: Boolean = false,
+        val pressHandler: ActionHandler? = null
     )
 
     fun register(
@@ -28,6 +35,8 @@ object ActionRegistry {
         allowKeyboardShortcuts: Boolean = true,
         allowMouseShortcuts: Boolean = true,
         focusGroups: Set<String> = setOf(KeymapFocusMngr.GLOBAL),
+        executesOnRelease: Boolean = false,
+        pressHandler: ActionHandler? = null,
         handler: ActionHandler
     ): QAction {
         val qAction = qAction(label, icon) {
@@ -38,7 +47,9 @@ object ActionRegistry {
             label = label,
             allowedShortcutKinds = allowedKinds(allowKeyboardShortcuts, allowMouseShortcuts),
             focusGroups = focusGroups.ifEmpty { setOf(KeymapFocusMngr.GLOBAL) },
-            handler = handler
+            handler = handler,
+            executesOnRelease = executesOnRelease,
+            pressHandler = pressHandler
         )
         return qAction
     }
@@ -48,6 +59,8 @@ object ActionRegistry {
         allowKeyboardShortcuts: Boolean = true,
         allowMouseShortcuts: Boolean = true,
         focusGroups: Set<String> = setOf(KeymapFocusMngr.GLOBAL),
+        executesOnRelease: Boolean = false,
+        pressHandler: ActionHandler? = null,
         handler: ActionHandler
     ) {
         val existingAction = actions[id]?.qAction
@@ -57,7 +70,9 @@ object ActionRegistry {
             label = existingLabel,
             allowedShortcutKinds = allowedKinds(allowKeyboardShortcuts, allowMouseShortcuts),
             focusGroups = focusGroups.ifEmpty { setOf(KeymapFocusMngr.GLOBAL) },
-            handler = handler
+            handler = handler,
+            executesOnRelease = executesOnRelease,
+            pressHandler = pressHandler
         )
     }
 
@@ -67,11 +82,16 @@ object ActionRegistry {
 
     fun execute(id: ActionId) { actions[id]?.handler?.invoke() }
 
+    fun executePress(id: ActionId) { actions[id]?.pressHandler?.invoke() }
+
     fun allows(id: ActionId, kind: ShortcutKind): Boolean =
         actions[id]?.allowedShortcutKinds?.contains(kind) ?: true
 
     fun focusGroups(id: ActionId): Set<String> =
         actions[id]?.focusGroups ?: setOf(KeymapFocusMngr.GLOBAL)
+
+    fun executesOnRelease(id: ActionId): Boolean =
+        actions[id]?.executesOnRelease ?: false
 
     fun actionIds(): Set<ActionId> = actions.keys
 

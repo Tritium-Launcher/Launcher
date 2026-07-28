@@ -1,17 +1,24 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.accounts
 
 import com.microsoft.aad.msal4j.DeviceCodeFlowParameters
 import com.microsoft.aad.msal4j.IAccount
 import com.microsoft.aad.msal4j.InteractiveRequestParameters
 import com.microsoft.aad.msal4j.SilentParameters
-import io.github.tritium_launcher.launcher.*
-import io.github.tritium_launcher.launcher.io.IODispatchers
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.io.linkOrCopyFromCache
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.io.IODispatchers
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.io.linkOrCopyFromCache
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
+import io.github.tritium_launcher.launcher.debugLogging
+import io.github.tritium_launcher.launcher.mainLogger
+import io.github.tritium_launcher.launcher.toURI
 import io.ktor.client.network.sockets.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -57,7 +64,7 @@ object MicrosoftAuth {
 
     private val json = Json { ignoreUnknownKeys = true }
     private val sha1FileNameRegex = Regex("^[0-9a-f]{40}$")
-    private val httpClient = HttpClient(CIO) {
+    private val httpClient = HttpClientProvider.client() {
         install(ContentNegotiation) {
             json(json)
         }

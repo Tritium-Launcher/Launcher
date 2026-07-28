@@ -1,10 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.platform
 
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.TritiumEventBus
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.TritiumEventBus
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -17,8 +22,27 @@ object GameProcessMngr {
     private val logger = logger()
     private val lock = Any()
     private val trackedByScope = LinkedHashMap<String, TrackedProcess>()
-    private val _events = MutableSharedFlow<GameProcessEvent>(replay = 0)
+    private val _events = MutableSharedFlow<GameProcessEvent>(replay = 0, extraBufferCapacity = 1)
     val events: SharedFlow<GameProcessEvent> = _events.asSharedFlow()
+    private val _outputFlows = mutableMapOf<String, MutableSharedFlow<String>>()
+
+    fun outputFlow(projectPath: VPath): SharedFlow<String> {
+        val scope = scopeOf(projectPath)
+        return synchronized(lock) {
+            _outputFlows.getOrPut(scope) {
+                MutableSharedFlow(replay = 1000, extraBufferCapacity = 500)
+            }
+        }.asSharedFlow()
+    }
+
+    fun outputFlow(project: ProjectBase): SharedFlow<String> = outputFlow(project.path)
+
+    fun emitOutput(projectPath: VPath, line: String) {
+        val scope = scopeOf(projectPath)
+        synchronized(lock) {
+            _outputFlows[scope]?.tryEmit(line)
+        }
+    }
 
     enum class Source {
         Launch,
@@ -34,7 +58,7 @@ object GameProcessMngr {
         val source: Source,
         val attachedAtEpochMs: Long
     )
-
+    
     /**
      * Events emitted during the lifecycle of a tracked game process.
      */
@@ -138,6 +162,40 @@ object GameProcessMngr {
     fun isActive(project: ProjectBase): Boolean = snapshot(project)?.isRunning == true
 
     /**
+     * Suspends the game process for [project] by sending SIGSTOP.
+     */
+    fun suspend(project: ProjectBase): Boolean {
+        val ctx = snapshot(project) ?: return false
+        if (!ctx.isRunning) return false
+        return try {
+            ProcessBuilder("kill", "-STOP", ctx.pid.toString())
+                .inheritIO()
+                .start()
+                .waitFor() == 0
+        } catch (t: Throwable) {
+            logger.warn("Failed to suspend game process (pid={})", ctx.pid, t)
+            false
+        }
+    }
+
+    /**
+     * Resumes the game process for [project] by sending SIGCONT.
+     */
+    fun resume(project: ProjectBase): Boolean {
+        val ctx = snapshot(project) ?: return false
+        if (!ctx.isRunning) return false
+        return try {
+            ProcessBuilder("kill", "-CONT", ctx.pid.toString())
+                .inheritIO()
+                .start()
+                .waitFor() == 0
+        } catch (t: Throwable) {
+            logger.warn("Failed to resume game process (pid={})", ctx.pid, t)
+            false
+        }
+    }
+
+    /**
      * Returns tracked process context for [project], or null if none.
      */
     fun snapshot(project: ProjectBase): GameProcessContext? = snapshot(project.path)
@@ -145,6 +203,10 @@ object GameProcessMngr {
     /**
      * Returns tracked process context for [projectPath], or null if none.
      */
+    fun resolveScope(project: ProjectBase): String = scopeOf(project.path)
+
+    fun resolveScope(path: VPath): String = scopeOf(path)
+
     fun snapshot(projectPath: VPath): GameProcessContext? {
         val scope = scopeOf(projectPath)
         return synchronized(lock) { trackedByScope[scope]?.toContext() }
@@ -201,6 +263,7 @@ object GameProcessMngr {
             }
         }
         if (!shouldEmit) return
+        _outputFlows.remove(tracked.scope)
         emit(
             GameProcessEvent.Exited(
                 context = tracked.toContext(isRunning = false, isAttached = false),

@@ -1,7 +1,12 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor
 
+import io.github.tritium_launcher.api.logger
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.hexToQColor
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.qt.gui.QColor
@@ -22,7 +27,7 @@ object RainbowBracketHighlighter {
 
     private val currentPalette: Palette
         get() {
-            val currentTheme = ThemeMngr.currentThemeIdValue
+            val currentTheme = ThemeMngr.currentColorThemeIdValue
             if (cachedThemeId != currentTheme || palette == null) {
                 val hexColors = RainbowBracketColorGenerator.loadOrGenerate(
                     currentTheme.ifBlank { "default" }
@@ -31,7 +36,7 @@ object RainbowBracketHighlighter {
                     QTextCharFormat().apply { setForeground(QColor(hex)) }
                 }
                 val errorFormat = QTextCharFormat().apply {
-                    setForeground(TColors.Error.hexToQColor())
+                    setForeground(TColors.Error.toQC())
                 }
                 palette = Palette(formats, errorFormat)
                 cachedThemeId = currentTheme
@@ -41,13 +46,22 @@ object RainbowBracketHighlighter {
 
     private val closerToOpener = mapOf(')' to '(', ']' to '[', '}' to '{')
 
-    fun highlight(textEdit: QTextEdit): List<QTextEdit.ExtraSelection> {
+    data class SyntaxProfile(
+        val lineCommentPrefix: String? = "//",
+        val blockCommentOpen:  String? = "/*",
+        val blockCommentClose: String? = "*/",
+        val multilineStringDelimiter: String? = "\"\"\"",
+        val stringDelimiters:  Set<Char> = setOf('"', '\'')
+    )
+
+    fun highlight(textEdit: QTextEdit, profile: SyntaxProfile = SyntaxProfile()): List<QTextEdit.ExtraSelection> {
         if (!CoreSettingValues.editorRainbowBrackets) return emptyList()
         val doc = textEdit.document ?: return emptyList()
         val text = doc.toPlainText()
         if (text.isEmpty()) return emptyList()
 
         val p      = currentPalette
+        logger().warn("Palette size: ${p.formats.size}")
         val result = mutableListOf<QTextEdit.ExtraSelection>()
         val stack  = ArrayDeque<StackEntry>()
 
@@ -55,30 +69,33 @@ object RainbowBracketHighlighter {
         while(i < text.length) {
             when {
                 // Skip line comments
-                text.startsWith("//", i) -> {
-                    i = (text.indexOf('\n', i).takeIf { it != -1 }?.plus(1)) ?: text.length
+                profile.lineCommentPrefix != null && text.startsWith(profile.lineCommentPrefix, i) -> {
+                    i = (text.indexOf('\n').takeIf { it != -1 }?.plus(1)) ?: text.length
                 }
 
                 // Skip block comments
-                text.startsWith("/*", i) -> {
-                    i = (text.indexOf("*/", i + 2).takeIf { it != -1 }?.plus(2)) ?: text.length
+                profile.blockCommentOpen != null && text.startsWith(profile.blockCommentOpen, i) -> {
+                    val close = profile.blockCommentClose ?: "*/"
+                    i = (text.indexOf(close, i + profile.blockCommentOpen.length).takeIf { it != -1 }?.plus(close.length)) ?: text.length
+                }
+
+                // Skip multiline strings
+                profile.multilineStringDelimiter != null && text.startsWith(profile.multilineStringDelimiter, i) -> {
+                    val delim = profile.multilineStringDelimiter
+                    i += delim.length
+                    while(i < text.length && !text.startsWith(delim, i)) i++
+                    i += delim.length
                 }
 
                 // Skip strings
-                text[i] == '"' -> {
+                text[i] in profile.stringDelimiters -> {
+                    val delim = text[i]
                     i++
-                    while(i < text.length && text[i] != '"') {
+                    while(i < text.length && text[i] != delim) {
                         if(text[i] == '\\') i++
                         i++
                     }
                     i++
-                }
-
-                // Skip multiline strings
-                text.startsWith("\"\"\"", i) -> {
-                    i += 3
-                    while (i < text.length && !text.startsWith("\"\"\"", i)) i++
-                    i += 3
                 }
 
                 // Skip chars
@@ -94,7 +111,9 @@ object RainbowBracketHighlighter {
                 text[i] in "([{" -> {
                     val depth = stack.size
                     val resultIdx = result.size
-                    result += selection(doc, i, i + 1, p.formats[depth % p.formats.size])
+                    val fmt = p.formats[depth % p.formats.size]
+                    logger().warn("'${text[i]}' at line ${text.substring(0, i).count { it == '\n' } + 1} depth=$depth")
+                    result += selection(doc, i, i + 1, fmt)
                     stack.addLast(StackEntry(text[i], depth, i, resultIdx))
                     i++
                 }
@@ -130,7 +149,9 @@ object RainbowBracketHighlighter {
             }
         }
 
-        for(entry in stack) result[entry.resultIdx] = selection(doc, entry.pos, entry.pos + 1, p.errorFormat)
+        logger().warn("Palette size: ${p.formats.size}")
+
+        for((_, _, pos, resultIdx) in stack) result[resultIdx] = selection(doc, pos, pos + 1, p.errorFormat)
 
         return result
     }

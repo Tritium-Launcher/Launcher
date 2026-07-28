@@ -1,12 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.project
 
+import io.github.tritium_launcher.api.formatDurationMs
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.ModLoader
+import io.github.tritium_launcher.api.redactUserPath
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
-import io.github.tritium_launcher.launcher.core.modloader.ModLoader
-import io.github.tritium_launcher.launcher.formatDurationMs
 import io.github.tritium_launcher.launcher.git.Git
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.redactUserPath
 import io.github.tritium_launcher.launcher.ui.notifications.NotificationMngr
 import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
 import kotlinx.coroutines.*

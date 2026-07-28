@@ -1,9 +1,14 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.file.FileTypeDescriptor
+import io.github.tritium_launcher.api.io.VPath
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.qt.gui.QIcon
@@ -13,7 +18,7 @@ import java.security.MessageDigest
 /**
  * Computes the SHA-1 hex digest of a byte array.
  *
- * @param bytes Input data.
+ * @param bytes Input state.
  * @return Lowercase hex string, or `null` if the algorithm is unavailable.
  */
 fun computeSha1(bytes: ByteArray): String? {

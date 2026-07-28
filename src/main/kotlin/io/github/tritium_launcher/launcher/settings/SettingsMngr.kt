@@ -1,31 +1,19 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.settings
 
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigRenderOptions
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.TritiumEventBus
-import io.github.tritium_launcher.launcher.extension.Extension
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.TritiumEventBus
+import io.github.tritium_launcher.api.extension.Extension
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.settings.*
 import io.github.tritium_launcher.launcher.extension.core.CoreExtension.namespace
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.settings.SettingsMngr.applyPending
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.category
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.childrenOf
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.comment
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.currentValue
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.currentValueOrNull
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.events
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.findSetting
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.forNamespace
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.persistAll
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.persistNamespace
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.register
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.registerCategory
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.registerSetting
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.suggestValue
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.text
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.toggle
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.updateValue
-import io.github.tritium_launcher.launcher.settings.SettingsMngr.widget
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -211,7 +199,7 @@ object SettingsMngr {
      * @param block Builder mutation block.
      * @return Registered comment setting node.
      * @see CommentBuilder
-     * @see CommentSettingDescriptor
+     * @see io.github.tritium_launcher.api.settings.CommentSettingDescriptor
      */
     fun comment(namespace: String, category: CategoryPath, id: String, block: CommentBuilder.() -> Unit = {}): SettingNode<Unit> =
         registerSetting(namespace, category, CommentBuilder(id).apply(block).build())
@@ -238,7 +226,7 @@ object SettingsMngr {
      * @param block Builder mutation block.
      * @return Registered setting node.
      * @see WidgetBuilder
-     * @see WidgetSettingDescriptor
+     * @see io.github.tritium_launcher.api.settings.WidgetSettingDescriptor
      */
     fun <T> widget(namespace: String, category: CategoryPath, id: String, block: WidgetBuilder<T>.() -> Unit): SettingNode<T> =
         registerSetting(namespace, category, WidgetBuilder<T>(id).apply(block).build())
@@ -306,7 +294,7 @@ object SettingsMngr {
      * @param suggestedValue Value being suggested.
      * @param reason Optional human-readable reason for the suggestion.
      * @param source Optional source tag for diagnostics/analytics.
-     * @see SettingValueSuggestedEvent
+     * @see io.github.tritium_launcher.api.settings.SettingValueSuggestedEvent
      * @see suggestValue
      */
     fun <T> suggestValue(
@@ -436,7 +424,7 @@ object SettingsMngr {
      * @param query Free-form query text.
      * @param limit Maximum number of results to return. Values <= 0 disable limiting.
      * @return Ranked matching settings.
-     * @see SettingSearchHit
+     * @see io.github.tritium_launcher.api.settings.SettingSearchHit
      */
     fun search(query: String, limit: Int = 100): List<SettingSearchHit> {
         val normalized = query.trim().lowercase()
@@ -468,10 +456,10 @@ object SettingsMngr {
     /* Values */
 
     /**
-     * Returns the current value for [node], resolving namespace data lazily if needed.
+     * Returns the current value for [node], resolving namespace state lazily if needed.
      *
      * @param node Setting node to query.
-     * @return [SettingValue] containing value and source origin.
+     * @return [io.github.tritium_launcher.api.settings.SettingValue] containing value and source origin.
      * @see updateValue
      */
     @Suppress("UNCHECKED_CAST")
@@ -862,7 +850,7 @@ class CategoryBuilder(private val id: String) {
 }
 
 /**
- * Builder for [ToggleSettingDescriptor].
+ * Builder for [io.github.tritium_launcher.api.settings.ToggleSettingDescriptor].
  *
  * @param id Local setting id.
  * @see SettingsMngr.toggle
@@ -876,7 +864,7 @@ class ToggleBuilder(private val id: String) {
     var order: Int = -1
 
     /**
-     * Builds an immutable [ToggleSettingDescriptor].
+     * Builds an immutable [io.github.tritium_launcher.api.settings.ToggleSettingDescriptor].
      *
      * @return Built toggle descriptor.
      */
@@ -885,7 +873,7 @@ class ToggleBuilder(private val id: String) {
 }
 
 /**
- * Builder for [TextSettingDescriptor].
+ * Builder for [io.github.tritium_launcher.api.settings.TextSettingDescriptor].
  *
  * @param id Local setting id.
  * @see SettingsMngr.text
@@ -910,7 +898,7 @@ class TextBuilder(private val id: String) {
     }
 
     /**
-     * Builds an immutable [TextSettingDescriptor].
+     * Builds an immutable [io.github.tritium_launcher.api.settings.TextSettingDescriptor].
      *
      * @return Built text descriptor.
      */
@@ -947,7 +935,7 @@ class CommentBuilder(private val id: String) {
 }
 
 /**
- * Builder for [WidgetSettingDescriptor].
+ * Builder for [io.github.tritium_launcher.api.settings.WidgetSettingDescriptor].
  *
  * @param id Local setting id.
  * @see SettingsMngr.widget
@@ -965,7 +953,7 @@ class WidgetBuilder<T>(private val id: String) {
     lateinit var widgetFactory: SettingWidgetFactory<T>
 
     /**
-     * Builds an immutable [WidgetSettingDescriptor].
+     * Builds an immutable [io.github.tritium_launcher.api.settings.WidgetSettingDescriptor].
      *
      * @return Built widget descriptor.
      * @throws IllegalStateException when [defaultValue] or [widgetFactory] is not configured.

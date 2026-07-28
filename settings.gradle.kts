@@ -11,7 +11,8 @@ dependencyResolutionManagement {
     }
 }
 
-enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 enableFeaturePreview("STABLE_CONFIGURATION_CACHE")
 
-rootProject.name = "tritium"
+rootProject.name = "Tritium Minecraft Launcher"
+
+include(":api")

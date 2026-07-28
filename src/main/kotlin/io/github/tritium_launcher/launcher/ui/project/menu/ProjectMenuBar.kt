@@ -1,13 +1,22 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.menu
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.core.project.ProjectType
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.menu.MenuActionContext
+import io.github.tritium_launcher.api.menu.MenuItem
+import io.github.tritium_launcher.api.menu.MenuItemKind
+import io.github.tritium_launcher.api.project.ProjectType
 import io.github.tritium_launcher.launcher.keymap.ActionRegistry
 import io.github.tritium_launcher.launcher.keymap.KeymapMngr
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.registrydb.RegistryRefreshService
 import io.github.tritium_launcher.launcher.ui.project.ProjectViewWindow
 import io.github.tritium_launcher.launcher.ui.project.menu.builtin.BuiltinMenuItems
 import io.github.tritium_launcher.launcher.ui.theme.TColors
@@ -17,6 +26,8 @@ import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.LongPressButton
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.pushButton
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
 import io.qt.core.QSize
 import io.qt.core.QTimer
 import io.qt.core.Qt
@@ -34,10 +45,10 @@ import kotlinx.coroutines.launch
  * - Action buttons
  * - Drop-down menus
  * - Separators
- * - Arbitrary embedded widgets via [MenuItem.widgetFactory]
+ * - Arbitrary embedded widgets via [io.github.tritium_launcher.api.menu.MenuItem.widgetFactory]
  *
  * Extensions contribute items via the `ui.menu` registry.
- * Visible items are filtered by the active project's [io.github.tritium_launcher.launcher.core.project.ProjectType.menuScope].
+ * Visible items are filtered by the active project's [ProjectType.menuScope].
  * Mnemonics are supported via '&' in titles (Qt standard).
  */
 class ProjectMenuBar : QWidget() {
@@ -57,6 +68,7 @@ class ProjectMenuBar : QWidget() {
     private var projectNameLabel: QLabel? = null
     private var playBtn: QPushButton? = null
     private var stopBtn: QPushButton? = null
+    private var buildBtn: QPushButton? = null
     private var settingsBtn: QPushButton? = null
 
     /** Container for left-side menu items, overlaid to avoid shifting the center. */
@@ -234,7 +246,7 @@ class ProjectMenuBar : QWidget() {
             layout.removeWidget(cs)
             cs.disposeLater()
         }
-        centerSection = QWidget().apply {
+        centerSection = qWidget {
             objectName = "menuBarCenterSection"
             val hbox = hBoxLayout(this) {
                 widgetSpacing = 12
@@ -292,7 +304,7 @@ class ProjectMenuBar : QWidget() {
                 destroyed.connect { stateTimer.stop() }
             }
 
-            stopBtn = QPushButton().apply {
+            stopBtn = pushButton {
                 val stopItem = BuiltinRegistries.MenuItem.all().find { it.id == "stop_game" }
                 val useShiftHoverForceIcon = stopItem?.meta?.get("shiftHoverForceIcon") == "true"
                 objectName = "menuBarStopBtn"
@@ -330,18 +342,52 @@ class ProjectMenuBar : QWidget() {
                 destroyed.connect { stateTimer.stop() }
             }
 
+            buildBtn = LongPressButton().apply {
+                objectName = "menuBarBuildBtn"
+                setProperty("menuIconOnly", true)
+                isFlat = true
+                icon = loadMenuIcon("menu/build", 22)
+                iconSize = QSize(24, 24)
+                holdOnPress = true
+
+                fun refreshBuildState() {
+                    isEnabled = !RegistryRefreshService.isBuilding(project)
+                    icon = loadMenuIcon("menu/build", 24)
+                    toolTip = "Build Registry"
+                }
+                refreshBuildState()
+
+                onNormalClick = {
+                    RegistryRefreshService.triggerBuild(project)
+                    refreshBuildState()
+                }
+
+                onLongPress = {
+                    RegistryRefreshService.triggerRefresh(project)
+                    refreshBuildState()
+                }
+
+                val stateTimer = QTimer(this).apply {
+                    interval = 200
+                    timeout.connect { refreshBuildState() }
+                    start()
+                }
+                destroyed.connect { stateTimer.stop() }
+            }
+
             hbox.addWidget(projectIconLabel!!)
             hbox.addWidget(projectNameLabel!!)
             hbox.addWidget(playBtn!!)
             hbox.addWidget(stopBtn!!)
+            hbox.addWidget(buildBtn!!)
         }
         layout.addWidget(centerSection)
     }
 
     private fun createSettingsButton(window: QMainWindow) {
-        settingsBtn = QPushButton(this).apply {
-            icon = loadMenuIcon("menu/settings", 22)
-            iconSize = QSize(22, 22)
+        settingsBtn = pushButton(this) {
+            icon = loadMenuIcon("menu/settings", 24)
+            iconSize = QSize(24, 24)
             objectName = "menuBarSettingsBtn"
             toolTip = "Settings"
             isFlat = true
@@ -598,7 +644,7 @@ class ProjectMenuBar : QWidget() {
             act.triggered.connect {
                 try {
                     val ctx = MenuActionContext(project, window, selection, item.meta)
-                    item.action.invoke(ctx)
+                    item.action!!.invoke(ctx)
                 } catch (t: Throwable) {
                     logger.warn("Menu action '{}' failed", item.id, t)
                 }
@@ -674,7 +720,7 @@ class ProjectMenuBar : QWidget() {
             focusGroups = item.shortcutFocusGroups
         ) {
             val actionCtx = MenuActionContext(project, window, selection, item.meta)
-            item.action.invoke(actionCtx)
+            item.action!!.invoke(actionCtx)
         }
     }
 
@@ -733,6 +779,7 @@ class ProjectMenuBar : QWidget() {
         projectNameLabel = null
         playBtn = null
         stopBtn = null
+        buildBtn = null
         settingsBtn = null
     }
 }

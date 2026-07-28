@@ -1,17 +1,20 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.project.templates.generation.builtin
 
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.project.template.GeneratorContext
+import io.github.tritium_launcher.api.project.template.GeneratorStep
+import io.github.tritium_launcher.api.project.template.GeneratorStepDescriptor
+import io.github.tritium_launcher.api.project.template.StepExecutionResult
 import io.github.tritium_launcher.launcher.core.mod.InstalledMod
 import io.github.tritium_launcher.launcher.core.mod.ModDatabase
 import io.github.tritium_launcher.launcher.core.mod.ModSide
 import io.github.tritium_launcher.launcher.core.mod.readModJarIcon
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorContext
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStep
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
-import io.github.tritium_launcher.launcher.core.project.templates.generation.StepExecutionResult
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -67,7 +70,7 @@ class ImportModsStep(
         }
     }
 
-    override suspend fun execute(ctx: GeneratorContext): StepExecutionResult = withContext(Dispatchers.IO) {
+    override suspend fun execute(ctx: GeneratorContext): StepExecutionResult {
         val projectRoot = VPath.get(ctx.projectRoot.toString())
         try {
             ModDatabase(projectRoot).use { db ->
@@ -131,10 +134,10 @@ class ImportModsStep(
                     }
                 }
             }
-            StepExecutionResult(id, type, success = true, message = "Imported ${mods.size} mod(s)")
+            return StepExecutionResult(id, type, success = true, message = "Imported ${mods.size} mod(s)")
         } catch (t: Throwable) {
             logger.error("ImportModsStep failed", t)
-            StepExecutionResult(id, type, success = false, message = t.message)
+            return StepExecutionResult(id, type, success = false, message = t.message)
         }
     }
 }
@@ -160,7 +163,7 @@ class ImportFilesStep(
         }
     }
 
-    override suspend fun execute(ctx: GeneratorContext): StepExecutionResult = withContext(Dispatchers.IO) {
+    override suspend fun execute(ctx: GeneratorContext): StepExecutionResult {
         val projectRoot = VPath.get(ctx.projectRoot.toString())
         val sourceRoot = VPath.get(sourceMinecraftDir)
         try {
@@ -176,10 +179,10 @@ class ImportFilesStep(
                     copied++
                 }
             }
-            StepExecutionResult(id, type, success = true, message = "Copied $copied file(s)")
+            return StepExecutionResult(id, type, success = true, message = "Copied $copied file(s)")
         } catch (t: Throwable) {
             logger.error("ImportFilesStep failed", t)
-            StepExecutionResult(id, type, success = false, message = t.message)
+            return StepExecutionResult(id, type, success = false, message = t.message)
         }
     }
 }

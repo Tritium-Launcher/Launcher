@@ -1,10 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.project.templates
 
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorContext
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
-import io.github.tritium_launcher.launcher.core.project.templates.generation.StepExecutionResult
-import io.github.tritium_launcher.launcher.core.project.templates.generation.StepRegistry
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.project.template.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Path
@@ -44,7 +47,7 @@ object ProjectTemplateExecutor {
         val results = mutableListOf<StepExecutionResult>()
         for ((i, desc) in steps.withIndex()) {
             onStep?.invoke(desc.id, i, steps.size)
-            val step = StepRegistry.create(desc)
+            val step = BuiltinRegistries.Step.create(desc)
             logger.info("Executing template step {} type={}", desc.id, desc.type)
             val res = step.execute(ctx)
             results += res
@@ -62,6 +65,53 @@ object ProjectTemplateExecutor {
             }
         }
         TemplateExecutionResult(
+            templateId = templateId,
+            projectRoot = projectRoot.toString(),
+            startTime = start,
+            endTime = Instant.now(),
+            successful = true,
+            snapshotPath = null,
+            stepResults = results,
+            logs = emptyList()
+        )
+    }
+
+    suspend fun runOnCaller(
+        templateId: String,
+        projectRoot: Path,
+        variables: Map<String, String>,
+        steps: List<GeneratorStepDescriptor>,
+        onStep: (suspend (stepId: String, index: Int, total: Int) -> Unit)? = null
+    ): TemplateExecutionResult {
+        val start = Instant.now()
+        val ctx = GeneratorContext(
+            projectRoot = projectRoot,
+            variables = variables,
+            logger = logger,
+            workingDir = projectRoot,
+            snapshotDir = projectRoot.resolve(".tr/snapshots")
+        )
+        val results = mutableListOf<StepExecutionResult>()
+        for ((i, desc) in steps.withIndex()) {
+            onStep?.invoke(desc.id, i, steps.size)
+            val step = BuiltinRegistries.Step.create(desc)
+            logger.info("Executing template step {} type={}", desc.id, desc.type)
+            val res = step.execute(ctx)
+            results += res
+            if(!res.success) {
+                return TemplateExecutionResult(
+                    templateId = templateId,
+                    projectRoot = projectRoot.toString(),
+                    startTime = start,
+                    endTime = Instant.now(),
+                    successful = false,
+                    snapshotPath = null,
+                    stepResults = results,
+                    logs = emptyList()
+                )
+            }
+        }
+        return TemplateExecutionResult(
             templateId = templateId,
             projectRoot = projectRoot.toString(),
             startTime = start,

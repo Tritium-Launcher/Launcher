@@ -1,10 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor
 
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.qs
+import io.github.tritium_launcher.launcher.ui.theme.TCol
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
@@ -28,7 +34,7 @@ import kotlinx.coroutines.launch
 /**
  * An individual Tab Bar for the Editor.
  * @see EditorTab
- * @see EditorArea
+ * @see DefaultEditorArea
  */
 class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     var onCurrentChanged:  ((Int) -> Unit)? = null
@@ -39,6 +45,10 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     private val contentLayout = hBoxLayout(content)
     private val tabWidgets    = ArrayList<EditorTab>()
     private val dropdownBtn   = toolButton()
+    private val viewToolbarLayout = hBoxLayout {
+        setContentsMargins(0, 0, 0, 0)
+        setSpacing(0)
+    }
     private val themeListener: () -> Unit = {
         updateBorderStyle()
         tabWidgets.forEach { it.updateColors() }
@@ -98,6 +108,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
             contentsMargins = 0.m
             widgetSpacing = 0
             addWidget(scrollArea)
+            addLayout(viewToolbarLayout)
             addWidget(dropdownBtn)
         }
 
@@ -139,7 +150,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         }
 
         scope.launch {
-            ThemeMngr.currentThemeId.collect {
+            ThemeMngr.currentColorThemeId.collect {
                 updateBorderStyle()
                 tabWidgets.forEach { tab -> tab.updateColors() }
             }
@@ -320,7 +331,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         val bgImage = CoreSettingValues.uiBackgroundImage
         if (bgImage.isNullOrBlank()) {
             val painter = QPainter(this)
-            painter.fillRect(rect, QColor(TColors.Surface0))
+            painter.fillRect(rect, TColors.Surface0.toQC())
             painter.end()
         }
         super.paintEvent(event)
@@ -409,7 +420,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     private fun updateBorderStyle() {
         val bgImage = CoreSettingValues.uiBackgroundImage
         val isBgImageSet = !bgImage.isNullOrBlank()
-        val tabBarSurface = if (isBgImageSet) "transparent" else TColors.Surface0
+        val tabBarSurface = if (isBgImageSet) TCol("transparent") else TColors.Surface0
         val surfaceWithBottomBorder: StyleBuilder.() -> Unit = {
             backgroundColor(tabBarSurface)
             border()
@@ -446,7 +457,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
                 backgroundColor(tabBarSurface)
             }
         }.toStyleSheet()
-        applyViewportSurface(scrollArea.viewport(), tabBarSurface)
+        applyViewportSurface(scrollArea.viewport(), tabBarSurface.value)
         content.styleSheet = ""
         dropdownBtn.styleSheet = qtStyle {
             selector("QToolButton", surfaceWithBottomBorder)
@@ -526,6 +537,26 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     }
 
     val count: Int get() = tabWidgets.size
+
+    /**
+     * Set or clear the view-mode toggle toolbar shown between the tab scroll
+     * area and the dropdown button.
+     */
+    var viewToolbar: QWidget? = null
+        set(value) {
+            while (viewToolbarLayout.count() > 0) {
+                val old = viewToolbarLayout.takeAt(0)?.widget()
+                if (old != null && old !== value) {
+                    old.hide()
+                    old.setParent(null)
+                    old.disposeLater()
+                }
+            }
+            if (value != null) {
+                viewToolbarLayout.addWidget(value)
+            }
+            field = value
+        }
 
     fun setTabText(idx: Int, text: String) {
         tabWidgets.getOrNull(idx)?.setText(text)

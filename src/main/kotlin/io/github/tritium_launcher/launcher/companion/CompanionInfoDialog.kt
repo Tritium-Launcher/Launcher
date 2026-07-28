@@ -1,10 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.companion
 
-import io.github.tritium_launcher.launcher.core.project.ModpackMeta
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.ModpackMeta
 import io.github.tritium_launcher.launcher.core.project.Project
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.qt.widgets.QApplication
 import io.qt.widgets.QMessageBox

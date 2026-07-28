@@ -1,14 +1,19 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import.ui
 
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.loadScaledPixmap
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.accounts.ModrinthProject
-import io.github.tritium_launcher.launcher.connect
 import io.github.tritium_launcher.launcher.core.mod.ModSide
 import io.github.tritium_launcher.launcher.import.DetectedInstance
 import io.github.tritium_launcher.launcher.import.ImportableMod
 import io.github.tritium_launcher.launcher.import.KnownLauncher
 import io.github.tritium_launcher.launcher.import.LauncherDetector
-import io.github.tritium_launcher.launcher.loadScaledPixmap
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
@@ -94,7 +99,7 @@ class ImportOption(val launcher: KnownLauncher) : QFrame() {
  * A row widget in the mod list on the review page. Displays a checkbox, mod icon, mod name
  * and ID, side badge, and availability status.
  *
- * @param mod The mod data to display.
+ * @param mod The mod state to display.
  * @param index Position index used for callback identification.
  * @param onCheckedChanged Callback with (index, checked) when the checkbox is toggled.
  * @param onFetchOnlineIcon Callback with (index, iconUrl) to fetch the online project icon.
@@ -235,7 +240,7 @@ class ImportableModRow(
  * A row widget representing a Modrinth modpack project in the instance list when the user
  * selects a Modrinth account. Shows the project icon, title, and metadata pills.
  *
- * @param project The Modrinth project data.
+ * @param project The Modrinth project state.
  */
 class ModrinthPackItemWidget(val project: ModrinthProject) : QFrame() {
     val iconLabel = QLabel()
@@ -272,7 +277,7 @@ class ModrinthPackItemWidget(val project: ModrinthProject) : QFrame() {
  * A row widget representing a detected Minecraft instance in the instance list.
  * Shows the instance icon, name, and metadata (game version + loader).
  *
- * @param instance The detected instance data.
+ * @param instance The detected instance state.
  */
 class InstanceItemWidget(val instance: DetectedInstance) : QFrame() {
     override fun sizeHint(): QSize = QSize(200, 44)

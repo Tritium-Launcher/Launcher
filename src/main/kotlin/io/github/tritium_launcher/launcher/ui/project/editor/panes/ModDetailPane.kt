@@ -1,34 +1,30 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.TritiumEventBus
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.editor.EditorPane
+import io.github.tritium_launcher.api.editor.EditorPaneProvider
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.modpack.*
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.platform.Platform
 import io.github.tritium_launcher.launcher.companion.CompanionModProvider
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.TritiumEventBus
-import io.github.tritium_launcher.launcher.core.project.ModpackMeta
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.core.project.Project
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.core.source.*
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.ui.helpers.CacheManager
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
-import io.github.tritium_launcher.launcher.ui.project.editor.EditorPane
-import io.github.tritium_launcher.launcher.ui.project.editor.EditorPaneProvider
+import io.github.tritium_launcher.launcher.ui.helpers.CacheMngr
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.widgets.RemoteImageTextBrowser
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -60,7 +56,7 @@ class ModDetailPane(
     private val logger = logger()
     private val shared = ModBrowserState.forProject(project)
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val httpClient = HttpClient(CIO) {
+    private val httpClient = HttpClientProvider.client() {
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000
             connectTimeoutMillis = 10_000
@@ -115,7 +111,7 @@ class ModDetailPane(
         val sourceId = activeSource?.id ?: "unknown"
         val cacheFile = imageCacheDir.resolve(sourceId).resolve(urlHash(url))
         cacheFile.bytesOrNull()?.let {
-            CacheManager.touch(cacheFile)
+            CacheMngr.touch(cacheFile)
             return it
         }
         val bytes = httpClient.get(url).bodyAsBytes()
@@ -125,7 +121,7 @@ class ModDetailPane(
                 Files.createDirectories(path.parent)
                 Files.write(path, bytes)
             }
-            CacheManager.evictIfNeeded(imageCacheDir.parent(), "descriptions")
+            CacheMngr.evictIfNeeded(imageCacheDir.parent(), "descriptions")
         }
         return bytes
     }
@@ -236,7 +232,7 @@ class ModDetailPane(
         queueButton.isEnabled = false
         openPageButton.isEnabled = false
 
-        ioScope.launch { CacheManager.evict(imageCacheDir.parent(), "descriptions") }
+        ioScope.launch { CacheMngr.evict(imageCacheDir.parent(), "descriptions") }
     }
 
     override fun onOpen() {
@@ -510,7 +506,7 @@ class ModDetailPane(
     }
 
     private fun createDependencyButton(dependency: ModDependencyRef, details: ModDetails?): QToolButton =
-        QToolButton().apply {
+        toolButton {
             text = details?.title ?: dependency.projectId
             toolButtonStyle = Qt.ToolButtonStyle.ToolButtonTextUnderIcon
             iconSize = QSize(48, 48)

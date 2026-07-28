@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.mod_config.formats
 
-import io.github.tritium_launcher.launcher.core.mod_config.*
+import io.github.tritium_launcher.api.modpack.*
 
 class ForgeCfgConfigFormat: ConfigFormat {
     override val id: String = "forge_cfg"
@@ -130,16 +135,16 @@ class ForgeCfgConfigFormat: ConfigFormat {
 
     private fun inferTypeKey(node: ConfigNode?): Char = when (node) {
         is ConfigString -> 'S'
-        is ConfigInt    -> 'I'
-        is ConfigBool   -> 'B'
+        is ConfigInt -> 'I'
+        is ConfigBool -> 'B'
         is ConfigDouble -> 'D'
         else            -> 'S'
     }
 
     private fun serializeScalar(node: ConfigNode): String = when (node) {
         is ConfigString -> node.value
-        is ConfigInt    -> node.value.toString()
-        is ConfigBool   -> node.value.toString()
+        is ConfigInt -> node.value.toString()
+        is ConfigBool -> node.value.toString()
         is ConfigDouble -> node.value.toString()
         else            -> ""
     }

@@ -29,6 +29,7 @@ depends=(
   'libxi'
   'libxrender'
   'libxtst'
+  'wmctrl'
 )
 
 package() {

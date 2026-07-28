@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.font
 
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.logger
 import io.qt.gui.QFont
 import io.qt.gui.QFontDatabase
 
