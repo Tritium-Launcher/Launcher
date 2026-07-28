@@ -1,5 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.keymap
 
+import io.github.tritium_launcher.api.keymap.ActionId
+import io.github.tritium_launcher.api.keymap.Keystroke
+import io.github.tritium_launcher.api.keymap.MouseStroke
 import io.qt.Nullable
 import io.qt.core.QEvent
 import io.qt.core.QObject
@@ -20,6 +28,7 @@ class KeymapDispatcher(
 ): QObject() {
 
     private var pendingChordFirst: Keystroke? = null
+    private val pendingReleaseKeys = mutableMapOf<Int, ActionId>()
 
     override fun eventFilter(
         watched: @Nullable QObject?,
@@ -31,12 +40,16 @@ class KeymapDispatcher(
         if (event.type() == QEvent.Type.MouseButtonPress) {
             return handleMousePress(event as? QMouseEvent ?: return false)
         }
+        if (event.type() == QEvent.Type.KeyRelease) {
+            return handleKeyRelease(event as? QKeyEvent ?: return false)
+        }
         if(event.type() != QEvent.Type.KeyPress) return false
 
         val keyEvent = event as? QKeyEvent ?: return false
 
         val key = keyEvent.key()
         if(isModifierKey(key)) return false
+        if (keyEvent.isAutoRepeat) return false
 
         if (isTextEditKeystroke(key) || keyEvent.modifiers().value() == Qt.KeyboardModifier.ControlModifier.value() && key in textEditCtrlKeys) {
             val focusWidget = QApplication.focusWidget()
@@ -68,15 +81,30 @@ class KeymapDispatcher(
         val actionId = keymap.resolveAction(stroke)
         if(actionId != null) {
             if (!registry.allows(actionId, ShortcutKind.Keyboard)) return false
-            if (activeFocusGroup !in registry.focusGroups(actionId)) return false
+            val actionGroups = registry.focusGroups(actionId)
+            if (KeymapFocusMngr.GLOBAL !in actionGroups && activeFocusGroup !in actionGroups) return false
             val qAction = registry[actionId]
             if(qAction == null || qAction.shortcuts().isEmpty) {
+                if (registry.executesOnRelease(actionId)) {
+                    pendingReleaseKeys[key] = actionId
+                    registry.executePress(actionId)
+                    return true
+                }
                 registry.execute(actionId)
                 return true
             }
         }
 
         return false
+    }
+
+    private fun handleKeyRelease(event: QKeyEvent): Boolean {
+        val key = event.key()
+        if (isModifierKey(key)) return false
+        if (event.isAutoRepeat) return false
+        val actionId = pendingReleaseKeys.remove(key) ?: return false
+        registry.execute(actionId)
+        return true
     }
 
     fun cancelPendingChord() { pendingChordFirst = null }

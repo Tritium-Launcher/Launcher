@@ -1,15 +1,26 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.extension.core
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.onEvent
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.onEvent
+import io.github.tritium_launcher.api.keymap.KeyBinding
+import io.github.tritium_launcher.api.keymap.Keystroke
+import io.github.tritium_launcher.api.keymap.MouseStroke
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.settings.RefreshableSettingWidget
+import io.github.tritium_launcher.api.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.font.FontMngr
-import io.github.tritium_launcher.launcher.keymap.*
+import io.github.tritium_launcher.launcher.keymap.ActionRegistry
+import io.github.tritium_launcher.launcher.keymap.KeymapMngr
+import io.github.tritium_launcher.launcher.keymap.ShortcutKind
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.settings.RefreshableSettingWidget
-import io.github.tritium_launcher.launcher.settings.SettingWidgetContext
 import io.github.tritium_launcher.launcher.settings.settingsDefinition
+import io.github.tritium_launcher.launcher.ui.project.editor.inspection.InspectionSettingsWidget
 import io.github.tritium_launcher.launcher.ui.widgets.InfoLineEditWidget
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
@@ -699,6 +710,26 @@ internal object CoreSettings {
             }
         }
 
+        //TODO: NOT IMPLEMENTED
+        widget(ui.path, "ui.dock_button_style") {
+            title = "Dock Button Style"
+            description = "Controls how side panel dock buttons are displayed."
+            defaultValue = "default"
+            serializer = String.serializer()
+            comments = listOf(
+                "Default: compact icon-only buttons. IntelliJ Classic: full-size buttons with rotated titles and no hover effects."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("default", "Default"),
+                        ChoiceSettingOption("intellij_classic", "IntelliJ Classic")
+                    )
+                )
+            }
+        }
+
         val projects = category("projects") {
             title = "Projects"
             allowForeignSettings = true
@@ -820,6 +851,23 @@ internal object CoreSettings {
                     )
                 )
             }
+        }
+
+        val inspections = category("inspections") {
+            title = "Inspections"
+            description = "Configure code inspection severity and enabled state."
+            parent = editor
+            allowForeignSettings = true
+        }
+
+        widget(inspections.path, "inspections_config") {
+            title = "Inspections"
+            description = "Browse and configure all registered code inspections."
+            defaultValue = "{}"
+            serializer = String.serializer()
+            fullWidth = true
+            fullHeight = true
+            widgetFactory = { ctx -> InspectionSettingsWidget(ctx) }
         }
 
         toggle(projects.path, "projects.close_dashboard_on_open") {

@@ -1,11 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.settings
 
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigRenderOptions
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import java.io.File
 
 /**

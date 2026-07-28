@@ -1,8 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor
 
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
@@ -185,7 +190,7 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
         pixmap.fill(Qt.GlobalColor.transparent)
         val painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QBrush(QColor(TColors.Unsaved)))
+        painter.setBrush(TColors.Unsaved.toQB())
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(4, 4, 8, 8)
         painter.end()
@@ -209,7 +214,7 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
             val indicatorHeight = 2
             val intensity = CoreSettingValues.editorUnsavedIndicatorIntensity
             val color = if (isModified && intensity == CoreSettingValues.UnsavedIndicatorIntensity.High) {
-                QColor(TColors.Unsaved)
+                TColors.Unsaved.toQC()
             } else {
                 QColor(255, 255, 255, 230)
             }

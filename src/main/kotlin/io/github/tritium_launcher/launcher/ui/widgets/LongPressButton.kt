@@ -1,9 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets
 
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.qt.core.QRectF
 import io.qt.core.Qt
-import io.qt.gui.*
+import io.qt.gui.QGuiApplication
+import io.qt.gui.QMouseEvent
+import io.qt.gui.QPaintEvent
+import io.qt.gui.QPainter
 import io.qt.widgets.QPushButton
 import io.qt.widgets.QWidget
 import kotlinx.coroutines.*
@@ -19,13 +27,14 @@ class LongPressButton(parent: QWidget? = null) : QPushButton(parent) {
 
     var onNormalClick: (() -> Unit)? = null
     var onLongPress: (() -> Unit)? = null
+    var holdOnPress: Boolean = false
 
     private var holdJob: Job? = null
 
     override fun mousePressEvent(event: QMouseEvent?) {
         if (event?.button() == Qt.MouseButton.LeftButton) {
             val shiftHeld = QGuiApplication.queryKeyboardModifiers().testFlag(Qt.KeyboardModifier.ShiftModifier)
-            if (shiftHeld) {
+            if (shiftHeld || holdOnPress) {
                 holdActive = true
                 longPressFired = false
                 animActive = false
@@ -83,7 +92,7 @@ class LongPressButton(parent: QWidget? = null) : QPushButton(parent) {
         if (animActive && animProgress > 0.01f) {
             val painter = QPainter(this)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            val pen = QPen(QColor(TColors.Accent), 2.5)
+            val pen = TColors.Accent.toQP { setWidthF(2.5) }
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             painter.setPen(pen)
             val w = width()

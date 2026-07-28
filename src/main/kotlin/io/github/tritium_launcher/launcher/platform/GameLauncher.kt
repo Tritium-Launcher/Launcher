@@ -1,24 +1,31 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.platform
 
-import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.LaunchContext
+import io.github.tritium_launcher.api.modpack.ModLoader
+import io.github.tritium_launcher.api.modpack.ModpackMeta
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.redactUserPath
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
 import io.github.tritium_launcher.launcher.accounts.ProfileMngr
 import io.github.tritium_launcher.launcher.core.mod.ModDatabase
-import io.github.tritium_launcher.launcher.core.modloader.LaunchContext
-import io.github.tritium_launcher.launcher.core.modloader.ModLoader
-import io.github.tritium_launcher.launcher.core.project.ModpackMeta
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.launcher.core.project.ProjectFiles
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.io.IODispatchers
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.redactUserPath
 import io.qt.gui.QGuiApplication
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.*
 import java.io.File
 import java.nio.file.Files
@@ -130,6 +137,18 @@ object GameLauncher {
      */
     fun isRuntimePreparationActive(project: ProjectBase): Boolean =
         runtimePreparingScopes.containsKey(scopeOf(project.path))
+
+    /**
+     * Returns true if the game can be launched for [project] — i.e. it is not
+     * already running, no runtime download is needed, and no preparation is
+     * currently in progress.
+     */
+    fun isLaunchable(project: ProjectBase): Boolean {
+        if (isGameRunning(project)) return false
+        if (needsRuntimeDownload(project)) return false
+        if (isRuntimePreparationActive(project)) return false
+        return true
+    }
 
     /**
      * Returns true when runtime files are missing and need to be downloaded/materialized.
@@ -327,15 +346,22 @@ object GameLauncher {
                 .directory(project.projectDir.toJFile())
                 .redirectErrorStream(true)
             processBuilder.environment()["TRITIUM_COMPANION_WS_TOKEN"] = companionToken
-            val process = withContext(IODispatchers.FileIO) { runInterruptible { processBuilder.start() } }
+
+            //TODO: This is set to prevent all Linux audio freezing when pausing the game. Needs to be set in a more proper location.
+            if(Platform.isLinux) {
+                processBuilder.environment().putIfAbsent("ALSOFT_DRIVERS", "pulse")
+            }
+
+            val process = withContext(Dispatchers.IO) { runInterruptible { processBuilder.start() } }
             GameProcessMngr.attachLaunched(project, process)
 
-            val outputJob = scope.launch(IODispatchers.FileIO) {
+            val outputJob = scope.launch(Dispatchers.IO) {
                 try {
+                    val projectScope = scopeOf(project.path)
                     runInterruptible {
                         process.inputStream.bufferedReader().useLines { lines ->
                             lines.forEach { line ->
-                                logger.info("MC: {}", sanitizeMcOutputLine(line))
+                                GameProcessMngr.emitOutput(project.path, sanitizeMcOutputLine(line))
                             }
                         }
                     }
@@ -344,7 +370,7 @@ object GameLauncher {
                 }
             }
 
-            scope.launch(IODispatchers.FileIO) {
+            scope.launch(Dispatchers.IO) {
                 val exit = runInterruptible { process.waitFor() }
                 outputJob.join()
                 logger.info("Minecraft exited with code {}", exit)
@@ -1068,43 +1094,48 @@ object GameLauncher {
             return null
         }
 
-        val metaFile = project.projectDir.resolve("trmodpack.json")
-        val metaText = metaFile.readTextOrNull()
-        if (metaText.isNullOrBlank()) {
+        runCatching {
+            val tomlFile = project.projectDir.resolve("trmodpack.toml")
+            val tomlText = tomlFile.readText()
+            if (!tomlText.isBlank()) {
+                ProjectFiles.toml.decodeFromString<ModpackMeta>(tomlText)
+            } else {
+                val jsonFile = project.projectDir.resolve("trmodpack.json")
+                val jsonText = jsonFile.readText()
+                if (!jsonText.isBlank()) {
+                    json.decodeFromString<ModpackMeta>(jsonText)
+                } else null
+            }
+        }.onFailure { t ->
             if (logFailures) {
-                logger.warn("Cannot launch; trmodpack.json missing for project '{}'", project.name)
+                logger.warn("Cannot launch; trmodpack.toml or trmodpack.json missing or failed to parse for project '{}'", project.name, t)
             }
             return null
-        }
+        }.onSuccess { meta ->
+            if (meta != null) {
+                val mcVersion = meta.minecraftVersion
+                val loaderId = meta.loader
+                val loaderVersion = meta.loaderVersion
+                val mergedId = "$mcVersion-$loaderId-$loaderVersion"
+                val loader = BuiltinRegistries.ModLoader.all().find { it.id == loaderId }
+                if (loader == null) {
+                    if (logFailures) {
+                        logger.warn("No mod loader registered for id={}", loaderId)
+                    }
+                    return null
+                }
 
-        val meta = runCatching { json.decodeFromString(ModpackMeta.serializer(), metaText) }.getOrNull()
-        if (meta == null) {
-            if (logFailures) {
-                logger.warn("Cannot launch; failed to parse trmodpack.json for project '{}'", project.name)
+                return LaunchSpec(
+                    meta = meta,
+                    loader = loader,
+                    mcVersion = mcVersion,
+                    loaderId = loaderId,
+                    loaderVersion = loaderVersion,
+                    mergedId = mergedId
+                )
             }
-            return null
         }
-
-        val mcVersion = meta.minecraftVersion
-        val loaderId = meta.loader
-        val loaderVersion = meta.loaderVersion
-        val mergedId = "$mcVersion-$loaderId-$loaderVersion"
-        val loader = BuiltinRegistries.ModLoader.all().find { it.id == loaderId }
-        if (loader == null) {
-            if (logFailures) {
-                logger.warn("No mod loader registered for id={}", loaderId)
-            }
-            return null
-        }
-
-        return LaunchSpec(
-            meta = meta,
-            loader = loader,
-            mcVersion = mcVersion,
-            loaderId = loaderId,
-            loaderVersion = loaderVersion,
-            mergedId = mergedId
-        )
+        return null
     }
 
     private fun hasMissingRuntime(spec: LaunchSpec, projectDir: VPath): Boolean {

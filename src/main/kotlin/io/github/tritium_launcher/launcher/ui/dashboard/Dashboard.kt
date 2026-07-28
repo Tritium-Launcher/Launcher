@@ -1,7 +1,18 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
-import io.github.tritium_launcher.launcher.*
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.applyRainbowOverlay
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.qs
+import io.github.tritium_launcher.launcher.add
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
+import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.ui.settings.SettingsLink
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
@@ -116,6 +127,7 @@ class Dashboard internal constructor() : QMainWindow() {
         val accountBtn  = createNavBtn("Accounts")
         val themesBtn   = createNavBtn("Themes")
         val extensionsBtn = createNavBtn("Extensions")
+        val registriesBtn = createNavBtn("Registries")
         settingsBtn = createNavBtn("Settings").apply {
             isCheckable = false
         }
@@ -143,13 +155,18 @@ class Dashboard internal constructor() : QMainWindow() {
             stackedWidget.currentIndex = 3
         }
 
+        registriesBtn.onClicked {
+            updateSelectedBtn(registriesBtn)
+            stackedWidget.currentIndex = 4
+        }
+
         settingsBtn.onClicked {
             openSettings()
         }
 
         leftLayout.addWidget(tritiumWidget)
         leftLayout.addSpacing(8)
-        leftLayout.add(projectsBtn, accountBtn, themesBtn, extensionsBtn, settingsBtn)
+        leftLayout.add(projectsBtn, accountBtn, themesBtn, extensionsBtn, registriesBtn, settingsBtn)
         leftLayout.addStretch(1)
 
         val bottomWidget = qWidget()
@@ -256,6 +273,10 @@ class Dashboard internal constructor() : QMainWindow() {
         // Extensions
         val extensionsPanel = ExtensionsPanel()
         stackedWidget.addWidget(extensionsPanel)
+
+        // Registries
+        val registriesPanel = RegistryDashboardPanel()
+        stackedWidget.addWidget(registriesPanel)
     }
 
     /**

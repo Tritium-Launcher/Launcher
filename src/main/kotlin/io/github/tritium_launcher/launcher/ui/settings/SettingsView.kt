@@ -1,12 +1,18 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.settings
 
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.settings.*
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.keymap.KeymapMngr
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
 import io.github.tritium_launcher.launcher.onClicked
-import io.github.tritium_launcher.launcher.settings.*
+import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
@@ -500,7 +506,7 @@ class SettingsView : QWidget() {
      *
      * @param node Setting node being edited.
      * @param value Candidate value.
-     * @return Validation result from [SettingDescriptor.validate].
+     * @return Validation result from [io.github.tritium_launcher.api.settings.SettingDescriptor.validate].
      */
     private fun <T> stageValue(node: SettingNode<T>, value: T): SettingValidation {
         val validation = node.descriptor.validate(value)

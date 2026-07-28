@@ -1,21 +1,32 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.project
 
-import io.github.tritium_launcher.launcher.*
+import com.akuleshov7.ktoml.Toml
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.license.LicenseGenerator
+import io.github.tritium_launcher.api.modpack.ModpackMeta
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.project.ProjectMenuScope
+import io.github.tritium_launcher.api.project.ProjectType
+import io.github.tritium_launcher.api.project.template.GeneratorStepDescriptor
+import io.github.tritium_launcher.api.project.template.StandardProjectSteps
+import io.github.tritium_launcher.api.project.template.TemplateExecutionResult
 import io.github.tritium_launcher.launcher.accounts.MCVersion
 import io.github.tritium_launcher.launcher.accounts.MCVersionType
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth
+import io.github.tritium_launcher.launcher.asAlignment
 import io.github.tritium_launcher.launcher.companion.CompanionModProvider
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectTemplateExecutor
-import io.github.tritium_launcher.launcher.core.project.templates.TemplateExecutionResult
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
 import io.github.tritium_launcher.launcher.core.project.templates.generation.license.AuthorResolver
-import io.github.tritium_launcher.launcher.core.project.templates.generation.license.LicenseGenerator
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.git.Git
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.ui.project.menu.builtin.BuiltinMenuItems
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setStyle
@@ -28,6 +39,8 @@ import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
 import io.qt.widgets.*
 import kotlinx.coroutines.*
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import java.net.URI
 import java.nio.file.Path
@@ -36,7 +49,7 @@ import java.nio.file.Path
  * Project type for creating Modpack projects.
  */
 class ModpackProjectType : ProjectType {
-    override val id: String = "source"
+    override val id: String = "modpack"
     override val displayName: String = "Modpack" // TODO: Localization
     override val description: String = "Create a ModPack project"
     override val icon: QIcon = QIcon(TIcons.TrMeta)
@@ -50,6 +63,23 @@ class ModpackProjectType : ProjectType {
         BuiltinMenuItems.Game,
         BuiltinMenuItems.Help
     )
+
+    override val metaFileName: String = "trmodpack.toml"
+
+    override fun loadTypeMeta(projectDir: VPath): JsonObject? {
+        val file = projectDir.resolve(metaFileName)
+        if(!file.exists()) return null
+        return Toml.decodeFromString<ModpackMeta>(file.readText())
+            .let { Json.encodeToJsonElement(it).jsonObject }
+    }
+
+    override fun writeTypeMeta(
+        projectDir: VPath,
+        meta: JsonObject
+    ) {
+        val modpackMeta = Json.decodeFromJsonElement<ModpackMeta>(meta)
+        projectDir.resolve(metaFileName).writeBytes(Toml.encodeToString(modpackMeta).toByteArray())
+    }
 
     private val scope      = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val logger     = logger()
@@ -455,7 +485,7 @@ class ModpackProjectType : ProjectType {
     }
 
     /**
-     * Create the project on disk and write `trproj.json` plus source metadata.
+     * Create the project on disk and write `.trproj` plus source metadata.
      */
     override suspend fun createProject(
         vars: Map<String, String>
@@ -513,7 +543,7 @@ class ModpackProjectType : ProjectType {
             loaderVersion = loaderVersion,
             source = source.id,
             license = license,
-            icon = if(iconPath.isNotBlank()) "icon.png" else null
+            icon = if (iconPath.isNotBlank()) "icon.png" else null
         )
         val manifest = json.encodeToString(ModpackMeta.serializer(), modpackMeta)
 
@@ -550,18 +580,15 @@ class ModpackProjectType : ProjectType {
         // Only write project definition if generation succeeded
         if(execResult.successful) {
             val iconValue = if(iconPath.isNotBlank()) "icon.png" else TIcons.defaultProjectIcon
-            val rawMeta = buildJsonObject {
-                put("metaPath", "trmodpack.json")
-            }
             val trMeta = ProjectFiles.buildMeta(
                 type = id,
                 name = packName,
                 icon = iconValue,
                 schemaVersion = ModpackTemplateDescriptor.currentSchema,
-                meta = rawMeta
+                metaPath = "trmodpack.toml"
             )
             ProjectFiles.writeTrProject(projectRoot, trMeta)
-            logger.info("Wrote trproj.json for {}", packName)
+            logger.info("Wrote .trproj for {}", packName)
 
             // Perform synchronously
             if(!license.isNullOrBlank() && !license.equals("none", ignoreCase = true)) {

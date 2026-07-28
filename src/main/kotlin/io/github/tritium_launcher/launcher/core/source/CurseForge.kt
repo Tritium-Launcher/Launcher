@@ -1,13 +1,18 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.source
 
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.*
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.registry.Registrable
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.core.source.curseforge.*
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.registry.Registrable
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
-import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -39,7 +44,7 @@ class CurseForge : ModSource(), Registrable {
     private var cachedCategories: List<ModCategory>? = null
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val client = HttpClient(CIO) {
+    private val client = HttpClientProvider.client {
         install(ContentNegotiation) { json(json) }
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000
@@ -267,7 +272,8 @@ class CurseForge : ModSource(), Registrable {
                 .filter { it.isAvailable }
                 .filter { file ->
                     (context.minecraftVersion == null || file.gameVersions.any { it == context.minecraftVersion }) &&
-                    (context.modLoaderId == null || file.modLoaders == null || file.modLoaders.any { it.id.lowercase().startsWith(context.modLoaderId.lowercase()) })
+                    (context.modLoaderId == null || file.modLoaders == null || file.modLoaders.any { it.id.lowercase().startsWith(
+                        context.modLoaderId!!.lowercase()) })
                 }
                 .sortedByDescending { it.fileDate }
                 .map { file ->
@@ -333,7 +339,11 @@ class CurseForge : ModSource(), Registrable {
 
             val match = (response.data.exactMatches + response.data.partialMatches).firstOrNull() ?: return null
             val modId = match.file.modId ?: return null
-            HashProjectInfo(projectId = modId.toString(), projectTitle = match.file.displayName, versionId = match.file.id.toString())
+            HashProjectInfo(
+                projectId = modId.toString(),
+                projectTitle = match.file.displayName,
+                versionId = match.file.id.toString()
+            )
         } catch (e: ClientRequestException) {
             when (e.response.status) {
                 Unauthorized, Forbidden ->

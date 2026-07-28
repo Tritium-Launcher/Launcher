@@ -1,10 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.registrydb
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.io.VWatchEvent
-import io.github.tritium_launcher.launcher.io.watch
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.formatDurationMs
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.io.VWatchEvent
+import io.github.tritium_launcher.api.io.watch
+import io.github.tritium_launcher.api.logger
 import io.github.tritium_launcher.launcher.platform.CompanionBridge
 import io.github.tritium_launcher.launcher.ui.project.ProjectTaskMngr
 import io.ktor.utils.io.core.*
@@ -28,12 +34,17 @@ object RegistryRefreshService {
     private val json = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val refreshJobs = ConcurrentHashMap<String, Job>()
-    private val projectWatchers = ConcurrentHashMap<String, Closeable>()
-    
+    private val projectWatchers = ConcurrentHashMap<String, Pair<ProjectBase, Closeable>>()
+    private var eventListener: Job? = null
+
     private val _dbUpdated = MutableSharedFlow<ProjectBase>(extraBufferCapacity = 16)
     val dbUpdated = _dbUpdated.asSharedFlow()
 
     fun isRefreshing(project: ProjectBase): Boolean = refreshJobs.containsKey(project.projectDir.toString())
+
+    fun isBuilding(project: ProjectBase): Boolean =
+        refreshJobs.containsKey(project.projectDir.toString()) ||
+            refreshJobs.containsKey("${project.projectDir.toString()}:build")
 
     /**
      * Starts watching for changes in the project's registryObjs directory and game_registry.db.
@@ -42,7 +53,7 @@ object RegistryRefreshService {
         val key = project.projectDir.toString()
         if (projectWatchers.containsKey(key)) return
 
-        val root = project.projectDir.resolve("registryObjs").toAbsolute()
+        val root = project.projectDir.expandHome().resolve("registryObjs").toAbsolute()
         if (!root.exists()) {
             runCatching { root.mkdirs() }
         }
@@ -51,14 +62,29 @@ object RegistryRefreshService {
             val watcher = root.watch({ event ->
                 handleWatchEvent(project, event)
             })
-            projectWatchers[key] = watcher
+            projectWatchers[key] = project to watcher
             logger.info("Started watching registry for project '{}'", project.name)
         }
+        ensureEventListener()
     }
 
     fun stopWatching(project: ProjectBase) {
         val key = project.projectDir.toString()
-        projectWatchers.remove(key)?.close()
+        projectWatchers.remove(key)?.second?.close()
+    }
+
+    private fun ensureEventListener() {
+        if (eventListener?.isActive == true) return
+        eventListener = scope.launch {
+            CompanionBridge.events.collect { event ->
+                if (event.action == "dump_complete") {
+                    logger.info("Received dump_complete event from Companion mod")
+                    projectWatchers.forEach { (_, pair) ->
+                        triggerBuild(pair.first)
+                    }
+                }
+            }
+        }
     }
 
     private fun handleWatchEvent(project: ProjectBase, event: VWatchEvent) {
@@ -71,36 +97,38 @@ object RegistryRefreshService {
 
     fun triggerRefresh(project: ProjectBase) {
         val key = project.projectDir.toString()
-        if (refreshJobs.containsKey(key)) {
+
+        if (refreshJobs.putIfAbsent(key, Job()) != null) {
             logger.info("Refresh already in progress for '{}'", project.name)
             return
         }
 
-        val job = scope.launch {
+        scope.launch {
             try {
                 performRefresh(project)
             } finally {
                 refreshJobs.remove(key)
             }
         }
-        refreshJobs[key] = job
     }
 
-    private fun triggerBuild(project: ProjectBase) {
-        val key = project.projectDir.toString() + ":build"
-        if (refreshJobs.containsKey(key) || refreshJobs.containsKey(project.projectDir.toString())) return
+    fun triggerBuild(project: ProjectBase) {
+        if (refreshJobs.containsKey(project.projectDir.toString())) return
 
-        val job = scope.launch {
+        val key = project.projectDir.toString() + ":build"
+        if (refreshJobs.putIfAbsent(key, Job()) != null) return
+
+        scope.launch {
             try {
                 val locations = resolveRegistryLocations(project)
                 if (runRegistryBuilder(project, locations)) {
+                    RegistryDatabase.invalidateCachedConnection()
                     _dbUpdated.emit(project)
                 }
             } finally {
                 refreshJobs.remove(key)
             }
         }
-        refreshJobs[key] = job
     }
 
     private suspend fun performRefresh(project: ProjectBase) {
@@ -110,31 +138,36 @@ object RegistryRefreshService {
             detail = "Triggering dump from game...",
             progressPercent = 0.0
         )
+        val totalStart = System.currentTimeMillis()
 
         try {
             // 1. Trigger dump
-            val bridgeResponse = CompanionBridge.sendCommand("dumpRegistry")
-            if (!bridgeResponse.ok) {
-                ProjectTaskMngr.update(taskId, detail = "Failed to trigger dump: ${bridgeResponse.message}")
-                delay(3000.milliseconds)
-                return
+            val sendStart = System.currentTimeMillis()
+            val bridgeResponse = CompanionBridge.sendCommand("dumpRegistry", timeoutMs = 10_000)
+            if (bridgeResponse.ok) {
+                logger.info("Dump registry command dispatched in {}", formatDurationMs(System.currentTimeMillis() - sendStart))
+            } else {
+                logger.warn("Dump registry dispatch result (may still proceed): {}", bridgeResponse.message)
             }
 
             ProjectTaskMngr.updateProgress(taskId, 20.0)
             ProjectTaskMngr.update(taskId, detail = "Waiting for dump to complete...")
 
             // 2. Wait for a complete dump snapshot instead of waiting for a DB that does not exist yet.
-            val dumpReady = awaitCompleteDump(project, timeoutMs = 60_000)
+            val waitStart = System.currentTimeMillis()
+            val dumpReady = awaitCompleteDump(project, timeoutMs = 10 * 60 * 1000L)  // 10 min for large packs
             if (!dumpReady) {
                 ProjectTaskMngr.update(taskId, detail = "Timed out waiting for registry dump.")
                 delay(3000.milliseconds)
                 return
             }
+            logger.info("Dump completed in {}", formatDurationMs(System.currentTimeMillis() - waitStart))
 
             ProjectTaskMngr.updateProgress(taskId, 50.0)
             ProjectTaskMngr.update(taskId, detail = "Building registry database (Rust)...")
 
             // 3. Run registry-builder (manual run to ensure progress tracking)
+            val buildStart = System.currentTimeMillis()
             val locations = resolveRegistryLocations(project)
             val buildOk = runRegistryBuilder(project, locations)
             if (!buildOk) {
@@ -142,9 +175,14 @@ object RegistryRefreshService {
                 delay(3000.milliseconds)
                 return
             }
+            logger.info("Registry database built in {}", formatDurationMs(System.currentTimeMillis() - buildStart))
+            RegistryDatabase.invalidateCachedConnection()
+
+            val totalTime = System.currentTimeMillis() - totalStart
+            logger.info("Registry refresh completed in {} total", formatDurationMs(totalTime))
 
             ProjectTaskMngr.updateProgress(taskId, 100.0)
-            ProjectTaskMngr.update(taskId, detail = "Registry refresh complete.")
+            ProjectTaskMngr.update(taskId, detail = "Registry refresh complete (${formatDurationMs(totalTime)}).")
             
             // 4. Notify UI (though the watcher might have already done it)
             _dbUpdated.emit(project)
@@ -162,26 +200,36 @@ object RegistryRefreshService {
     private fun runRegistryBuilder(project: ProjectBase, locations: RegistryLocations): Boolean {
         val rootDir = VPath.get("").toAbsolute() // Project root
         val builderPath = rootDir.resolve("tools/registry-builder")
-        
+        val binaryPath = builderPath.resolve("target/release/registry-builder")
         val cmd = listOf(
-            "cargo", "run", "--release", "--",
-            "--input", locations.registryObjs.toAbsolute().toString(),
-            "--output", locations.database.toAbsolute().toString()
+            binaryPath.toAbsolute().expandHome().toString(),
+            "--input", locations.registryObjs.toAbsolute().expandHome().toString(),
+            "--output", locations.database.toAbsolute().expandHome().toString()
         )
-
-        logger.info("Running registry-builder: {}", cmd.joinToString(" "))
         
         return try {
+            logger.info("Running registry-builder: {}", cmd.joinToString(" "))
             val pb = ProcessBuilder(cmd)
             pb.directory(builderPath.toJFile())
             pb.redirectErrorStream(true)
+            pb.environment().putAll(System.getenv())
+
             val process = pb.start()
-            
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            
+            val reader = process.inputStream.bufferedReader()
+            var line: String?
+            var exitCode: Int? = null
+
+            while (true) {
+                line = reader.readLine()
+                if (line == null) {
+                    exitCode = process.waitFor()
+                    break
+                }
+                logger.info("registry-builder: {}", line)
+            }
+
             if (exitCode != 0) {
-                logger.error("registry-builder failed with exit code {}:\n{}", exitCode, output)
+                logger.error("registry-builder failed with exit code {}", exitCode)
                 false
             } else {
                 logger.info("registry-builder finished successfully.")
@@ -197,11 +245,25 @@ object RegistryRefreshService {
         val locations = resolveRegistryLocations(project)
         val root = locations.registryObjs
 
+        val initialSnapshotId = readLatestPointer(root.resolve("latest.json"))?.snapshotId
+
         return withTimeoutOrNull(timeoutMs.milliseconds) {
             callbackFlow {
+                var lastSeenId: String? = initialSnapshotId
+
                 fun check() {
                     val latestPointer = readLatestPointer(root.resolve("latest.json"))
                     if (latestPointer != null) {
+                        if (latestPointer.snapshotId == lastSeenId) {
+                            val manifestPath = root.resolve(latestPointer.path).resolve("manifest.json").toAbsolute()
+                            val manifest = readManifest(manifestPath)
+                            if (manifest?.complete == true) {
+                                trySend(true)
+                                close()
+                            }
+                            return
+                        }
+                        lastSeenId = latestPointer.snapshotId
                         val manifestPath = root.resolve(latestPointer.path).resolve("manifest.json").toAbsolute()
                         val manifest = readManifest(manifestPath)
                         if (manifest?.complete == true) {
@@ -216,14 +278,24 @@ object RegistryRefreshService {
 
                 val watcher = root.watch(
                     callback = { event: VWatchEvent ->
-                        // Watch for latest.json changes in the root
                         if (event.path.fileName() == "latest.json") {
                             check()
                         }
                     }
                 )
 
-                awaitClose { watcher.close() }
+
+                val pollJob = launch {
+                    while (isActive) {
+                        delay(5000.milliseconds)
+                        check()
+                    }
+                }
+
+                awaitClose {
+                    watcher.close()
+                    pollJob.cancel()
+                }
             }.first()
         } ?: false
     }
@@ -241,7 +313,7 @@ object RegistryRefreshService {
     }.getOrNull()
 
     private fun resolveRegistryLocations(project: ProjectBase): RegistryLocations {
-        val root = project.projectDir.resolve("registryObjs").toAbsolute()
+        val root = project.projectDir.expandHome().resolve("registryObjs").toAbsolute()
         return RegistryLocations(
             registryObjs = root,
             database = root.resolve("game_registry.db")

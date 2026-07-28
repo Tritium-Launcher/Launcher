@@ -1,15 +1,22 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.mod_config.*
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.editor.EditorPane
+import io.github.tritium_launcher.api.editor.EditorPaneProvider
+import io.github.tritium_launcher.api.file.FileTypeDescriptor
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.modpack.*
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.io.VPath
 import io.github.tritium_launcher.launcher.m
-import io.github.tritium_launcher.launcher.ui.project.editor.EditorPane
-import io.github.tritium_launcher.launcher.ui.project.editor.EditorPaneProvider
-import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
 import io.github.tritium_launcher.launcher.ui.project.editor.file.builtin.BuiltinFileTypes
+import io.github.tritium_launcher.launcher.ui.theme.TCol
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
@@ -28,7 +35,33 @@ internal class ModConfigPane(
     file: VPath,
     private var root: ConfigNode,
     private val format: ConfigFormat
-) : EditorPane(project, file) {
+) : SplitEditorPane(project, file) {
+
+    override val viewModes: List<String> = listOf("Preview", "Split", "Text")
+    override var currentViewMode: String? = "Preview"
+
+    override fun viewModeIcon(mode: String): String? = when (mode) {
+        "Preview" -> "ui/editor_visual"
+        "Split" -> "ui/editor_text_other_right"
+        "Text" -> "ui/editor_text"
+        else -> null
+    }
+
+    override fun onViewModeChanged(mode: String) {
+        when (mode) {
+            "Preview" -> { syncTextToPreview(); showLeftOnly() }
+            "Text" -> { syncPreviewToText(); showRightOnly() }
+            "Split" -> { syncPreviewToText(); showBoth() }
+        }
+    }
+
+    private val textEditor: TextEditorPane = run {
+        val lang = BuiltinRegistries.SyntaxLanguage.all().find { it.matches(file) }
+        TextEditorPane(project, file, lang)
+    }
+
+    private var previewModified = false
+
     private val paneFile: VPath get() = file!!
 
     private fun applyItemMargins(layout: QBoxLayout, compact: Boolean) {
@@ -88,22 +121,56 @@ internal class ModConfigPane(
                 border()
             }
         }
+
+        setLeftContent(scrollArea)
+        setRightContent(textEditor.widget(), textEditor)
+        textEditor.widget().hide()
     }
 
-    override fun widget(): QWidget = scrollArea
     override fun onOpen() {
         val bgImage = CoreSettingValues.uiBackgroundImage
         container.autoFillBackground = bgImage.isNullOrBlank()
         rebuild()
+        super.onOpen()
+    }
+
+    override fun onClose() {
+        super.onClose()
     }
 
     override suspend fun save(): Boolean = try {
-        paneFile.writeBytes(serialize().toByteArray())
-        rebuild()
+        when (currentViewMode) {
+            "Text", "Split" -> {
+                if (!textEditor.save()) return false
+                val text = paneFile.readTextOrNull() ?: ""
+                root = format.parse(text)
+                rebuild()
+            }
+            else -> {
+                paneFile.writeBytes(serialize().toByteArray())
+            }
+        }
+        previewModified = false
         modified = false
         true
     } catch (_: Throwable) {
         false
+    }
+
+    override fun recalcModified() {
+        modified = previewModified || (rightPane?.modified == true)
+    }
+
+    private fun syncPreviewToText() {
+        paneFile.writeBytes(serialize().toByteArray())
+        textEditor.reload()
+    }
+
+    private fun syncTextToPreview() {
+        val text = textEditor.textContent
+        paneFile.writeBytes(text.toByteArray())
+        root = format.parse(text)
+        rebuild()
     }
 
     fun rebuild() {
@@ -255,10 +322,10 @@ internal class ModConfigPane(
                 widgetSpacing = 10
             }
 
-            val titleLbl = QLabel(displayLabel(label).uppercase()).apply {
+            val titleLbl = label(displayLabel(label).uppercase()) {
                 objectName = "modConfigSectionTitle"
             }
-            val ruleLine = QFrame().apply {
+            val ruleLine = frame {
                 objectName = "modConfigSectionRule"
                 frameShape = QFrame.Shape.HLine
                 frameShadow = QFrame.Shadow.Plain
@@ -266,7 +333,7 @@ internal class ModConfigPane(
                 sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 maximumHeight = 1
             }
-            val arrowLbl = QLabel("▾").apply {
+            val arrowLbl = label("▾") {
                 objectName = "modConfigSectionArrow"
             }
 
@@ -277,7 +344,7 @@ internal class ModConfigPane(
             header.setThemedStyle {
                 val isBgImageSet = !CoreSettingValues.uiBackgroundImage.isNullOrBlank()
                 selector("QWidget#modConfigSectionHeader") {
-                    backgroundColor(if (isBgImageSet) "transparent" else TColors.Surface1)
+                    backgroundColor(if (isBgImageSet) TCol.transparent else TColors.Surface1)
                 }
                 selector("QLabel#modConfigSectionTitle") {
                     color(TColors.Subtext)
@@ -358,7 +425,7 @@ internal class ModConfigPane(
         }
         headerLayout.addWidget(title, 0)
 
-        val addBtn = QToolButton().apply {
+        val addBtn = toolButton {
             text = "+"
             objectName = "modConfigInlineButton"
             setFixedSize(28, 28)
@@ -389,7 +456,7 @@ internal class ModConfigPane(
                 val childWidget = buildWidget(child, i.toString(), path + i.toString(), FieldMeta())
                 rowLayout.addWidget(childWidget, 0)
 
-                val removeBtn = QToolButton().apply {
+                val removeBtn = toolButton {
                     text = "-"
                     objectName = "modConfigInlineButton"
                     setFixedSize(28, 28)
@@ -476,7 +543,7 @@ internal class ModConfigPane(
     private fun buildResetButton(control: QWidget, node: ConfigNode, meta: FieldMeta, onReset: (ConfigNode) -> Unit): QToolButton? {
         val defaultNode = parseDefaultNode(node, meta) ?: return null
         val size = control.sizeHint().height().coerceAtLeast(control.minimumSizeHint().height()).coerceAtLeast(22)
-        return QToolButton().apply {
+        return toolButton {
             icon = style()?.standardIcon(QStyle.StandardPixmap.SP_BrowserReload) ?: QIcon(TIcons.QuestionMark)
             toolTip = "Reset to default (${meta.default})"
             setFixedSize(size, size)
@@ -588,7 +655,7 @@ internal class ModConfigPane(
     fun buildNullBadge(key: String?, path: List<String>, compact: Boolean): QWidget {
         val badge = label("null")
 
-        val setButton = QPushButton("Set value").apply {
+        val setButton = pushButton("Set value") {
             minimumHeight = 28
         }
         setButton.clicked.connect {

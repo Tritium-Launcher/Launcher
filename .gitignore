@@ -6,6 +6,8 @@ build/
 
 ### IntelliJ IDEA ###
 .idea/
+!.idea/copyright/
+!.idea/copyright/**
 *.iws
 *.iml
 *.ipr
@@ -47,6 +49,7 @@ src/main/resources/icons
 AppDir
 tools/registry-builder/target/
 /tools/os-helper/target/
+/tools/indexer/target/
 CMakeCache.txt
 CMakeFiles/
 Makefile

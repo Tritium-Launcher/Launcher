@@ -1,7 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import kotlinx.serialization.json.*
 import kotlin.math.abs
@@ -11,6 +17,7 @@ object RainbowBracketColorGenerator {
     private val bracketDir: VPath by lazy {
         TConstants.TR_DIR.resolve(TConstants.Dirs.SETTINGS).resolve("rainbow_brackets").also { it.mkdirs() }
     }
+    private val logger = logger()
     private val json = Json { prettyPrint = true }
 
     private const val CACHE_VERSION = 1
@@ -59,7 +66,10 @@ object RainbowBracketColorGenerator {
     private fun resolveBgHex(themeId: String): String =
         listOf("LineEdit.Bg", "Surface1", "Surface0")
             .firstNotNullOfOrNull { ThemeMngr.getThemeColorHex(themeId, it) }
-            ?: "#242424"
+            ?: run {
+                logger.error("No background color found for theme '$themeId'")
+                "#242424"
+            }
 
     internal fun generateColors(bgHex: String, count: Int = COLOR_COUNT): List<String> {
         val bgLum = relativeLuminance(bgHex)

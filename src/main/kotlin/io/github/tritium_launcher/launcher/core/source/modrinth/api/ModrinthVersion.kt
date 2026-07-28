@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.source.modrinth.api
 
-import io.github.tritium_launcher.launcher.core.source.ReleaseType
+import io.github.tritium_launcher.api.modpack.ReleaseType
 import kotlinx.serialization.Serializable
 
 /**

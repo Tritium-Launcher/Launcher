@@ -1,8 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
@@ -188,7 +193,7 @@ fun saveImportCache(instance: DetectedInstance, sourceId: String, mods: List<Imp
 }
 
 /**
- * Removes the cached import data for a given instance + source.
+ * Removes the cached import state for a given instance + source.
  *
  * @param instance The detected instance.
  * @param sourceId The mod source identifier.

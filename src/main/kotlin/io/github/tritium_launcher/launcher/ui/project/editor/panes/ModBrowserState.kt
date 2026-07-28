@@ -1,10 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.panes
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.core.source.ModDependencyRef
-import io.github.tritium_launcher.launcher.core.source.ModDetails
-import io.github.tritium_launcher.launcher.core.source.ModSearchResult
-import io.github.tritium_launcher.launcher.core.source.ModVersionOption
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.modpack.ModDependencyRef
+import io.github.tritium_launcher.api.modpack.ModDetails
+import io.github.tritium_launcher.api.modpack.ModSearchResult
+import io.github.tritium_launcher.api.modpack.ModVersionOption
 import io.qt.gui.QIcon
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -40,14 +45,34 @@ object ModBrowserState {
     }
 
     class BrowserState {
-        val detailsCache = ConcurrentHashMap<String, ModDetails>()
-        val versionsCache = ConcurrentHashMap<String, List<ModVersionOption>>()
-        val iconCache = ConcurrentHashMap<String, QIcon>()
-        val dominantColorCache = ConcurrentHashMap<String, Triple<Int, Int, Int>>()
+        val detailsCache: MutableMap<String, ModDetails> = Collections.synchronizedMap(
+            object : LinkedHashMap<String, ModDetails>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ModDetails>): Boolean = size > 256
+            }
+        )
+        val versionsCache: MutableMap<String, List<ModVersionOption>> = Collections.synchronizedMap(
+            object : LinkedHashMap<String, List<ModVersionOption>>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<ModVersionOption>>): Boolean = size > 256
+            }
+        )
+        val iconCache: MutableMap<String, QIcon> = Collections.synchronizedMap(
+            object : LinkedHashMap<String, QIcon>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, QIcon>): Boolean = size > 128
+            }
+        )
+        val dominantColorCache: MutableMap<String, Triple<Int, Int, Int>> = Collections.synchronizedMap(
+            object : LinkedHashMap<String, Triple<Int, Int, Int>>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Triple<Int, Int, Int>>): Boolean = size > 256
+            }
+        )
         val queuedDownloads = Collections.synchronizedMap(linkedMapOf<String, QueuedDownload>())
         val manuallyQueuedIds = Collections.synchronizedSet(linkedSetOf<String>())
         val queuedDetailIds = ConcurrentHashMap.newKeySet<String>()
-        val resultsCache = Collections.synchronizedMap(linkedMapOf<String, ModSearchResult>())
+        val resultsCache: MutableMap<String, ModSearchResult> = Collections.synchronizedMap(
+            object : LinkedHashMap<String, ModSearchResult>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ModSearchResult>): Boolean = size > 64
+            }
+        )
 
         fun clearSearchState() {
             resultsCache.clear()

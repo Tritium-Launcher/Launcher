@@ -1,9 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets.pixel
 
-import io.github.tritium_launcher.launcher.currentDpr
+import io.github.tritium_launcher.api.currentDpr
+import io.github.tritium_launcher.launcher.ui.theme.TCol
 import io.qt.gui.*
 import io.qt.widgets.QWidget
-import java.util.concurrent.ConcurrentHashMap
+import java.util.*
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -35,6 +41,7 @@ class PixelPaletteBuilder {
     fun color(name: String, hex: String) {
         colors[name] = QColor(hex)
     }
+    fun color(name: String, col: TCol) = color(name, col.value)
 
     internal fun build(): Map<String, QColor> = colors.toMap()
 }
@@ -368,7 +375,11 @@ class PixelSkin internal constructor(
         val dprBucket: Int
     )
 
-    private val cache = ConcurrentHashMap<CacheKey, QPixmap>()
+    private val cache: MutableMap<CacheKey, QPixmap> = Collections.synchronizedMap(
+        object : LinkedHashMap<CacheKey, QPixmap>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CacheKey, QPixmap>): Boolean = size > 64
+        }
+    )
     private val paletteBrushes = palette.mapValues { (_, color) -> QBrush(color) }
     private val defaultState = states["normal"] ?: states.values.firstOrNull()
 

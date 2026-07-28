@@ -1,4 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.settings
+
+import io.github.tritium_launcher.api.settings.*
 
 /**
  * Reusable settings registration block bound to a [SettingsNamespaceScope] receiver.
@@ -20,7 +27,7 @@ typealias SettingsRegistration = SettingsNamespaceScope.() -> Unit
 fun settingsDefinition(block: SettingsRegistration): SettingsRegistration = block
 
 /**
- * Namespace-bound registrar facade for defining settings outside [io.github.tritium_launcher.launcher.extension.Extension] context.
+ * Namespace-bound registrar facade for defining settings outside [io.github.tritium_launcher.api.extension.Extension] context.
  *
  * @property namespace Namespace all registrations in this scope belong to.
  * @see SettingsMngr.forNamespace

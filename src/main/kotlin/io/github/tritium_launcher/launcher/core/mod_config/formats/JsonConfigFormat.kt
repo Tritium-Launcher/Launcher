@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.mod_config.formats
 
-import io.github.tritium_launcher.launcher.core.mod_config.*
+import io.github.tritium_launcher.api.modpack.*
 import io.github.tritium_launcher.launcher.core.mod_config.formats.JsonConfigFormat.Variant.*
 import kotlinx.serialization.json.*
 import li.songe.json5.Json5

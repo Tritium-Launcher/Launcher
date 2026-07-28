@@ -1,10 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.notifications
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.notification.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -22,7 +28,7 @@ import javax.imageio.ImageIO
  * General notification runtime with registry definitions and preferences.
  *
  * Notifications are posted by id from the registry and stored as project-scoped
- * history. Active notifications are those where [NotificationEntry.dismissed] is `false`.
+ * history. Active notifications are those where [io.github.tritium_launcher.api.notification.NotificationEntry.dismissed] is `false`.
  */
 object NotificationMngr {
     private const val GLOBAL_SCOPE = "__global__"

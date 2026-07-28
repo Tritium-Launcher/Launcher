@@ -1,32 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.sidebar
 
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.docks.ProjectTreeDirectoryPresentation
+import io.github.tritium_launcher.api.file.FileTypeDescriptor
+import io.github.tritium_launcher.api.io.VPath
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.registry.Registrable
-import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
 
-/**
- * Extension point for customizing how a specific directory is presented in the project files tree.
- *
- * Implementations can target one or more directories and modify ordering or display names for the
- * immediate children shown within that directory.
- */
-interface ProjectTreeDirectoryPresentation : Registrable {
-    val order: Int get() = 0
-
-    fun matches(directory: VPath, project: ProjectBase): Boolean
-
-    fun sortChildren(directory: VPath, children: List<VPath>, project: ProjectBase): List<VPath> = children
-
-    fun displayName(
-        directory: VPath,
-        child: VPath,
-        project: ProjectBase,
-        primaryType: FileTypeDescriptor?,
-        currentDisplayName: String
-    ): String = currentDisplayName
-}
 
 object ProjectTreeDirectoryPresentations {
     fun all(): List<ProjectTreeDirectoryPresentation> = listOf(ConfigDirectoryPresentation)

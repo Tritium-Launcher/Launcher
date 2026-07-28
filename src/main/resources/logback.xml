@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright (c) 2025 FooterMan and contributors.
+  ~ SPDX-License-Identifier: AGPL-3.0-only
+  -->
+
 <configuration>
     <conversionRule conversionWord="trPrefixColor" converterClass="io.github.tritium_launcher.launcher.logging.AnsiLevelPrefixColorConverter" />
     <conversionRule conversionWord="trColorReset" converterClass="io.github.tritium_launcher.launcher.logging.AnsiResetConverter" />
@@ -11,7 +16,7 @@
     </appender>
     <appender name="TRITIUM_FILE" class="io.github.tritium_launcher.launcher.logging.LogAppender" />
 
-    <root level="INFO">
+    <root level="DEBUG">
         <appender-ref ref="CONSOLE" />
         <appender-ref ref="TRITIUM_FILE" />
     </root>

@@ -2,7 +2,7 @@
 name = "os-helper"
 version = "0.1.0"
 edition = "2024"
-description = "OS-level utilities for Tritium: window focus, Recall blocking, etc."
+description = "OS-level utilities for Tritium: file type registration, window focus, Recall blocking, etc."
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

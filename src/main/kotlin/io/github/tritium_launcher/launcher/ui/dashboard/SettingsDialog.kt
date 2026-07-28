@@ -1,7 +1,12 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.m
-import io.github.tritium_launcher.launcher.qs
 import io.github.tritium_launcher.launcher.ui.settings.SettingsLink
 import io.github.tritium_launcher.launcher.ui.settings.SettingsView
 import io.github.tritium_launcher.launcher.ui.theme.TColors

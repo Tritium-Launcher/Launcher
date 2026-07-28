@@ -6,9 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Current schema version for the game registry database.
-const REGISTRY_DB_SCHEMA_VERSION: i64 = 1;
+const REGISTRY_DB_SCHEMA_VERSION: i64 = 2;
 const RECIPE_PRODUCT_KEYS: &[&str] = &["result", "results", "output", "outputs"];
 const RECIPE_INGREDIENT_KEYS: &[&str] = &[
     "ingredient",
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
     let config = Config::from_env()?;
     let snapshot = SnapshotInput::load(&config.input)?;
 
-    if snapshot.manifest.schema_version != 1 {
+    if snapshot.manifest.schema_version != 2 {
         bail!(
             "unsupported manifest schema version: {}",
             snapshot.manifest.schema_version
@@ -362,6 +363,14 @@ fn init_db(conn: &mut Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_tag_values_value ON tag_values(value);
         CREATE INDEX IF NOT EXISTS idx_tag_values_registry_value ON tag_values(registry_type, value);
 
+        CREATE INDEX IF NOT EXISTS idx_registry_entries_source_path ON registry_entries(source_path);
+        CREATE INDEX IF NOT EXISTS idx_items_source_path ON items(source_path);
+        CREATE INDEX IF NOT EXISTS idx_recipe_types_source_path ON recipe_types(source_path);
+        CREATE INDEX IF NOT EXISTS idx_recipes_source_path ON recipes(source_path);
+        CREATE INDEX IF NOT EXISTS idx_value_types_source_path ON value_types(source_path);
+        CREATE INDEX IF NOT EXISTS idx_custom_values_source_path ON custom_values(source_path);
+        CREATE INDEX IF NOT EXISTS idx_tags_source_path ON tags(source_path);
+
         DROP VIEW IF EXISTS v_registry_counts;
         CREATE VIEW v_registry_counts AS
         SELECT registry_type, COUNT(*) AS entry_count
@@ -417,13 +426,36 @@ fn init_db(conn: &mut Connection) -> Result<()> {
             i.rarity,
             i.enchantability,
             i.texture_path,
+            i.animation_json,
             COALESCE(GROUP_CONCAT(tv.tag_id, char(10)), '') AS tag_values
         FROM items i
         LEFT JOIN tag_values tv
             ON tv.registry_type = 'item'
             AND tv.value = i.id
         GROUP BY
-            i.namespace, i.id, i.path, i.display_name, i.max_count, i.max_damage, i.rarity, i.enchantability, i.texture_path;
+            i.namespace, i.id, i.path, i.display_name, i.max_count, i.max_damage, i.rarity, i.enchantability, i.texture_path, i.animation_json;
+
+        DROP VIEW IF EXISTS v_custom_value_browser;
+        CREATE VIEW v_custom_value_browser AS
+        SELECT
+            cv.type_id,
+            cv.id,
+            cv.namespace,
+            cv.path,
+            cv.display_name,
+            cv.texture_path,
+            vt.display_name AS type_display_name,
+            vt.icon_texture AS type_icon_texture
+        FROM custom_values cv
+        LEFT JOIN value_types vt ON vt.id = cv.type_id
+        ORDER BY cv.type_id, cv.namespace, cv.display_name, cv.id;
+
+        DROP VIEW IF EXISTS v_browseable_value_types;
+        CREATE VIEW v_browseable_value_types AS
+        SELECT id, namespace, path, display_name, icon_texture
+        FROM value_types
+        WHERE browseable = 1
+        ORDER BY id;
 
         DROP VIEW IF EXISTS v_recipe_browser;
         CREATE VIEW v_recipe_browser AS
@@ -443,7 +475,9 @@ fn init_db(conn: &mut Connection) -> Result<()> {
 
     ensure_column(conn, "items", "texture_ref", "TEXT")?;
     ensure_column(conn, "items", "texture_path", "TEXT")?;
+    ensure_column(conn, "items", "animation_json", "TEXT")?;
     ensure_column(conn, "recipe_types", "display_name", "TEXT")?;
+    ensure_column(conn, "recipe_types", "catalysts", "TEXT")?;
 
     Ok(())
 }
@@ -476,7 +510,7 @@ fn populate_db_incremental(conn: &mut Connection, snapshot: &SnapshotInput) -> R
     let existing_schema_version = read_schema_version(conn)?;
     let full_rebuild = existing_schema_version != Some(REGISTRY_DB_SCHEMA_VERSION);
 
-    let existing_files: std::collections::HashMap<String, String> = if full_rebuild {
+    let existing_files: HashMap<String, String> = if full_rebuild {
         HashMap::new()
     } else {
         //language=sqlite
@@ -493,33 +527,93 @@ fn populate_db_incremental(conn: &mut Connection, snapshot: &SnapshotInput) -> R
 
     insert_metadata(&tx, snapshot)?;
 
+    let total = snapshot.manifest.files.len();
+    let overall_start = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut processed: usize = 0;
+    let mut current_task = String::new();
+    let mut task_counts: HashMap<String, usize> = HashMap::new();
     let mut current_paths = HashSet::new();
+
     for file in &snapshot.manifest.files {
         current_paths.insert(file.path.clone());
-        
+
         let needs_update = match existing_files.get(&file.path) {
             Some(existing_hash) => existing_hash != &file.sha256,
             None => true,
         };
 
         if needs_update {
-            //language=sqlite
-            tx.execute("DELETE FROM source_files WHERE path = ?1", params![file.path])?;
+            current_task = progress_task_name(&file.path, &file.file_type);
+            *task_counts.entry(current_task.clone()).or_insert(0) += 1;
 
+            tx.execute("DELETE FROM source_files WHERE path = ?1", params![file.path])?;
             insert_source_file(&tx, file)?;
             route_file(&tx, &snapshot.snapshot_dir, file)?;
         }
+
+        processed += 1;
+
+        if last_progress.elapsed().as_secs() >= 10 {
+            let elapsed = overall_start.elapsed();
+            let pct = processed * 100 / total;
+            eprintln!(
+                "[{}/{}] {:3}% - {:4}s - {}",
+                processed, total, pct, elapsed.as_secs(), current_task
+            );
+            last_progress = Instant::now();
+        }
     }
+
+    let total_elapsed = overall_start.elapsed();
+    eprintln!();
+    eprintln!("Task breakdown:");
+    let mut task_list: Vec<_> = task_counts.iter().collect();
+    task_list.sort_by(|a, b| b.1.cmp(a.1));
+    for (task, count) in &task_list {
+        eprintln!("  {:20} {}", task, count);
+    }
+    eprintln!("Elapsed: {:4}s", total_elapsed.as_secs());
 
     for path in existing_files.keys() {
         if !current_paths.contains(path) {
-            //language=sqlite
             tx.execute("DELETE FROM source_files WHERE path = ?1", params![path])?;
         }
     }
 
     tx.commit()?;
     Ok(())
+}
+
+fn capitalize_snake_case(s: &str) -> String {
+    s.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().to_string() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn progress_task_name(path: &str, file_type: &str) -> String {
+    let mut parts = path.splitn(3, '/');
+    match parts.next() {
+        Some("data") => {
+            let sub = parts.next().unwrap_or("");
+            let name = if sub == "registry" { file_type } else { sub };
+            capitalize_snake_case(name)
+        }
+        Some("assets") => parts
+            .next()
+            .map(capitalize_snake_case)
+            .unwrap_or_else(|| "Other".to_string()),
+        Some("icons") => "Icons".to_string(),
+        _ => path.to_string(),
+    }
 }
 
 /// Writes manifest metadata into the registry database.
@@ -662,14 +756,24 @@ fn insert_item(tx: &Transaction<'_>, snapshot_dir: &Path, file: &ManifestFile) -
     let (namespace, path) = split_id(&file.id)?;
     let texture_ref = resolve_item_texture_ref(snapshot_dir, &file.id);
     let texture_path = texture_ref.as_ref().map(|value| texture_ref_to_asset_path(value));
+    let animation_json = texture_path.as_ref().and_then(|tp| {
+        let mcmeta_path = format!("{}.mcmeta", tp);
+        let full = snapshot_dir.join(&mcmeta_path);
+        if full.exists() {
+            fs::read_to_string(&full).ok()
+        } else {
+            None
+        }
+    });
 
     tx.execute(
         //language=sqlite
         r#"
         INSERT INTO items (
             id, namespace, path, id_lower, display_name, display_name_lower,
-            max_count, max_damage, rarity, enchantability, texture_ref, texture_path, raw_json, source_path
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            max_count, max_damage, rarity, enchantability, texture_ref, texture_path,
+            animation_json, raw_json, source_path
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
         "#,
         params![
             file.id,
@@ -684,6 +788,7 @@ fn insert_item(tx: &Transaction<'_>, snapshot_dir: &Path, file: &ManifestFile) -
             json_get_i64(&json, "enchantability"),
             texture_ref,
             texture_path,
+            animation_json,
             json.to_string(),
             file.path
         ],
@@ -695,15 +800,17 @@ fn insert_item(tx: &Transaction<'_>, snapshot_dir: &Path, file: &ManifestFile) -
 fn insert_recipe_type(tx: &Transaction<'_>, snapshot_dir: &Path, file: &ManifestFile) -> Result<()> {
     let json = read_json(snapshot_dir, &file.path)?;
     let (namespace, path) = split_id(&file.id)?;
-
+    let catalysts = json.get("catalysts")
+        .and_then(Value::as_array)
+        .map(|arr| serde_json::to_string(arr).unwrap_or_else(|_| "[]".to_string()));
 
     tx.execute(
         //language=sqlite
         r#"
         INSERT INTO recipe_types (
             id, namespace, path, id_lower, display_name, input_slots, fuel_slots, output_slots, input_tanks,
-            output_tanks, energy_cells, note, raw_json, source_path
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            output_tanks, energy_cells, note, catalysts, raw_json, source_path
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
         "#,
         params![
             file.id,
@@ -718,6 +825,7 @@ fn insert_recipe_type(tx: &Transaction<'_>, snapshot_dir: &Path, file: &Manifest
             json_get_i64(&json, "outputTanks"),
             json_get_i64(&json, "energyCells"),
             json_get_string(&json, "note"),
+            catalysts,
             json.to_string(),
             file.path
         ],

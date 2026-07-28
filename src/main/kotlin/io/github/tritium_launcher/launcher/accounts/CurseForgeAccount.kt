@@ -1,12 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.accounts
 
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.api.accounts.*
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.icon
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -35,7 +40,7 @@ class CurseForgeAccount : AccountProvider {
         const val STORAGE_SERVICE = "tritium_curseforge"
     }
 
-    private val httpClient = HttpClient(CIO) {
+    private val httpClient = HttpClientProvider.client() {
         install(HttpTimeout) {
             requestTimeoutMillis = 15_000
             connectTimeoutMillis = 10_000

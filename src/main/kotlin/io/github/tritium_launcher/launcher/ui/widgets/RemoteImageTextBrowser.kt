@@ -1,13 +1,19 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.runOnGuiThread
 import io.qt.NonNull
 import io.qt.core.QUrl
 import io.qt.core.Qt
 import io.qt.gui.QPixmap
 import io.qt.widgets.QTextBrowser
 import kotlinx.coroutines.*
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -17,8 +23,16 @@ class RemoteImageTextBrowser(
     private val fetchBytes: suspend (String) -> ByteArray
 ): QTextBrowser() {
 
-    private val imageCache = ConcurrentHashMap<String, ByteArray>()
-    private val pixmapCache = ConcurrentHashMap<String, QPixmap>()
+    private val imageCache: MutableMap<String, ByteArray> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean = size > 64
+        }
+    )
+    private val pixmapCache: MutableMap<String, QPixmap> = Collections.synchronizedMap(
+        object : LinkedHashMap<String, QPixmap>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, QPixmap>): Boolean = size > 64
+        }
+    )
     private val pending = ConcurrentHashMap.newKeySet<String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var currentHtml: String = ""

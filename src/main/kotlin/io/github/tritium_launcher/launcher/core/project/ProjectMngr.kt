@@ -1,18 +1,25 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.project
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.TritiumEventBus
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.TritiumEventBus
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.project.template.TemplateDescriptor
 import io.github.tritium_launcher.launcher.core.project.templates.MigrationRegistry
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectFileLoader
-import io.github.tritium_launcher.launcher.core.project.templates.TemplateDescriptor
-import io.github.tritium_launcher.launcher.core.project.templates.TemplateRegistry
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
 import io.github.tritium_launcher.launcher.ui.project.ProjectWindows
+import io.github.tritium_launcher.launcher.ui.project.editor.reflection.JavaReflectionEngine
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.qt.widgets.QApplication
 import io.qt.widgets.QMessageBox
@@ -45,7 +52,8 @@ object ProjectMngr {
     const val INVALID_CATALOG_PROJECT_TYPE: String = "catalog.invalid"
     private const val PREFS_NODE = "/tritium/project-mngr"
     private const val PREF_ACTIVE_PROJECT = "active-project"
-    private const val PROJECT_FILE_NAME = "trproj.json"
+    private const val PROJECT_FILE_NAME = ".trproj"
+    private const val PROJECT_FILE_NAME_OLD = "trproj.json"
 
     private val logger = logger()
     @Volatile var generationActive: Boolean = false
@@ -104,7 +112,7 @@ object ProjectMngr {
 
     private fun loadProjectFromDir(dir: VPath): ProjectBase? {
         val trMeta = ProjectFiles.readTrProject(dir) ?: run {
-            logger.warn("No trproj.json found in {}", dir)
+            logger.warn("No trproj found in {}", dir)
             return null
         }
 
@@ -112,7 +120,9 @@ object ProjectMngr {
         val name = trMeta.name.ifBlank { "Unknown" }
         val icon = trMeta.icon.ifBlank { TIcons.defaultProjectIcon }
         val schemaVersion = trMeta.schemaVersion
-        val metaElem = trMeta.meta.jsonObjectOrEmpty()
+        val projectType = BuiltinRegistries.ProjectType.all().find { it.id == typeId }
+        val metaElem = projectType?.loadTypeMeta(dir)
+            ?: JsonObject(emptyMap())
 
         val descriptor = resolveTemplateDescriptor(typeId)
         if(descriptor is ProjectFileLoader) {
@@ -161,9 +171,9 @@ object ProjectMngr {
      * Resolves a project template descriptor.
      */
     private fun resolveTemplateDescriptor(typeId: String): TemplateDescriptor<*>? {
-        TemplateRegistry.get(typeId)?.let { return it }
+        BuiltinRegistries.Template.get(typeId)?.let { return it }
         return when (typeId) {
-            "modpack" -> TemplateRegistry.get(ModpackTemplateDescriptor.typeId)
+            "modpack" -> BuiltinRegistries.Template.get(ModpackTemplateDescriptor.id)
             else -> null
         }
     }
@@ -180,11 +190,10 @@ object ProjectMngr {
         }
     }
 
-    /** Returns `true` when the given project directory contains `trproj.json`. */
-    private fun hasProjectDefinition(dir: VPath): Boolean {
-        val file = dir.resolve(PROJECT_FILE_NAME)
-        return file.exists() && file.isFile()
-    }
+    /** Returns `true` when the given project directory contains valid project definition file. */
+    private fun hasProjectDefinition(dir: VPath): Boolean =
+        dir.resolve(PROJECT_FILE_NAME).let { it.exists() && it.isFile() } ||
+                dir.resolve(PROJECT_FILE_NAME_OLD).let { it.exists() && it.isFile() }
 
     /** Builds a fallback display name for a catalog entry from its path. */
     private fun fallbackCatalogName(path: String): String {
@@ -354,7 +363,7 @@ object ProjectMngr {
     fun addProjectToCatalog(projectDir: VPath, projectName: String? = null): Boolean {
         val dir = projectDir.expandHome().toAbsolute().normalize()
         if (!hasProjectDefinition(dir)) {
-            logger.warn("Skipping catalog add for {} (missing trproj.json)", dir)
+            logger.warn("Skipping catalog add for {} (missing .trproj)", dir)
             return false
         }
         val resolvedName = projectName?.trim().takeUnless { it.isNullOrBlank() }
@@ -382,6 +391,8 @@ object ProjectMngr {
         if (currentActive != null && normalizeCatalogPath(currentActive.projectDir) == normalized) {
             _activeProject.value = null
         }
+
+        JavaReflectionEngine.invalidateProject(projectDir)
         return true
     }
 

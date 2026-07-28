@@ -1,32 +1,12 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project
 
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.serializer
-import kotlinx.serialization.descriptors.SerialDescriptor
-import kotlinx.serialization.encoding.Decoder
-import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
-
-/**
- * Custom serializer for ByteArray that stores data as an array of integers (0-255).
- * This is more robust than the default serializer which might throw on unsigned values
- * or use a format that varies between platforms/versions.
- */
-object SafeByteArraySerializer : KSerializer<ByteArray> {
-    override val descriptor: SerialDescriptor = ListSerializer(Int.serializer()).descriptor
-
-    override fun serialize(encoder: Encoder, value: ByteArray) {
-        val ints = value.map { it.toInt() and 0xFF }
-        encoder.encodeSerializableValue(ListSerializer(Int.serializer()), ints)
-    }
-
-    override fun deserialize(decoder: Decoder): ByteArray {
-        val ints = decoder.decodeSerializableValue(ListSerializer(Int.serializer()))
-        return ByteArray(ints.size) { ints[it].toByte() }
-    }
-}
 
 /**
  * Stored Values for a Project used for restoration
@@ -36,14 +16,17 @@ data class ProjectUIState(
     val tabMode: String = "SINGLE_ROW",
     val openFiles: List<String> = emptyList(),
     val sidePanels: List<SidePanelState> = emptyList(),
-    val projectFilesActiveViewId: String = "project_files",
+    val projectFilesActiveViewId: String = "project",
     val projectFilesViewStates: List<ProjectFilesViewState> = emptyList(),
     val projectFilesExpandedPaths: List<String> = emptyList(),
     val projectFilesSelectedPath: String? = null,
-    @Serializable(with = SafeByteArraySerializer::class)
     val mainWindowState: ByteArray? = null,
-    @Serializable(with = SafeByteArraySerializer::class)
-    val mainWindowGeometry: ByteArray? = null,
+    val windowX: Int? = null,
+    val windowY: Int? = null,
+    val windowWidth: Int? = null,
+    val windowHeight: Int? = null,
+    val windowMaximized: Boolean = false,
+    val windowScreenName: String? = null,
 ) {
     @Serializable
     data class SidePanelState(
@@ -65,38 +48,14 @@ data class ProjectUIState(
             coerceInputValues = true
         }
 
-        fun fromParts(
-            tabMode: String,
-            openFiles: List<String>,
-            sidePanels: List<SidePanelState>,
-            projectFilesActiveViewId: String,
-            projectFilesViewStates: List<ProjectFilesViewState>,
-            projectFilesExpandedPaths: List<String>,
-            projectFilesSelectedPath: String?,
-            state: ByteArray?,
-            geom: ByteArray?
-        ): ProjectUIState {
-            return ProjectUIState(
-                tabMode = tabMode,
-                openFiles = openFiles,
-                sidePanels = sidePanels,
-                projectFilesActiveViewId = projectFilesActiveViewId,
-                projectFilesViewStates = projectFilesViewStates,
-                projectFilesExpandedPaths = projectFilesExpandedPaths,
-                projectFilesSelectedPath = projectFilesSelectedPath,
-                mainWindowState = state,
-                mainWindowGeometry = geom
-            )
-        }
-
         /**
          * Parses persisted UI state robustly using SafeByteArraySerializer.
          */
         fun parseOrNull(text: String): ProjectUIState? {
             return try {
                 parser.decodeFromString<ProjectUIState>(text)
-            } catch (t: Throwable) {
-                // Fallback for extremely old or malformed payloads
+            } catch (_: Throwable) {
+                // Fallback for ancient or malformed payloads
                 null
             }
         }
@@ -104,8 +63,15 @@ data class ProjectUIState(
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
-        if (other !is ProjectUIState) return false
+        if (javaClass != other?.javaClass) return false
 
+        other as ProjectUIState
+
+        if (windowX != other.windowX) return false
+        if (windowY != other.windowY) return false
+        if (windowWidth != other.windowWidth) return false
+        if (windowHeight != other.windowHeight) return false
+        if (windowMaximized != other.windowMaximized) return false
         if (tabMode != other.tabMode) return false
         if (openFiles != other.openFiles) return false
         if (sidePanels != other.sidePanels) return false
@@ -113,14 +79,19 @@ data class ProjectUIState(
         if (projectFilesViewStates != other.projectFilesViewStates) return false
         if (projectFilesExpandedPaths != other.projectFilesExpandedPaths) return false
         if (projectFilesSelectedPath != other.projectFilesSelectedPath) return false
-        if (!(mainWindowState contentEquals other.mainWindowState)) return false
-        if (!(mainWindowGeometry contentEquals other.mainWindowGeometry)) return false
+        if (!mainWindowState.contentEquals(other.mainWindowState)) return false
+        if (windowScreenName != other.windowScreenName) return false
 
         return true
     }
 
     override fun hashCode(): Int {
-        var result = tabMode.hashCode()
+        var result = windowX ?: 0
+        result = 31 * result + (windowY ?: 0)
+        result = 31 * result + (windowWidth ?: 0)
+        result = 31 * result + (windowHeight ?: 0)
+        result = 31 * result + windowMaximized.hashCode()
+        result = 31 * result + tabMode.hashCode()
         result = 31 * result + openFiles.hashCode()
         result = 31 * result + sidePanels.hashCode()
         result = 31 * result + projectFilesActiveViewId.hashCode()
@@ -128,7 +99,7 @@ data class ProjectUIState(
         result = 31 * result + projectFilesExpandedPaths.hashCode()
         result = 31 * result + (projectFilesSelectedPath?.hashCode() ?: 0)
         result = 31 * result + (mainWindowState?.contentHashCode() ?: 0)
-        result = 31 * result + (mainWindowGeometry?.contentHashCode() ?: 0)
+        result = 31 * result + (windowScreenName?.hashCode() ?: 0)
         return result
     }
 }

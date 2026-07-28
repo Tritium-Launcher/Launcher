@@ -1,12 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.wizard
 
-import io.github.tritium_launcher.launcher.*
+import io.github.tritium_launcher.api.*
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.project.ProjectType
 import io.github.tritium_launcher.launcher.core.project.ProjectGenerator
 import io.github.tritium_launcher.launcher.core.project.ProjectMngr
-import io.github.tritium_launcher.launcher.core.project.ProjectType
-import io.github.tritium_launcher.launcher.coroutines.UIDispatcher
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.io.VPath
+import io.github.tritium_launcher.launcher.m
+import io.github.tritium_launcher.launcher.onClicked
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.AnimatedScrollController
@@ -91,12 +96,12 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         rightLayout.addWidget(statusLabel)
 
         createButton.apply {
-            tint = TColors.Green
+            setTint(TColors.Green)
             text = "Create"
             minimumHeight = 36
         }
         cancelButton.apply {
-            tint = TColors.Warning
+            setTint(TColors.Warning)
             text = "Cancel"
             minimumHeight = 36
         }
@@ -347,7 +352,7 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
                     }
 
                     if(project == null) {
-                        statusLabel.text = "Project created, but failed to load (trproj.json missing?)."
+                        statusLabel.text = "Project created, but failed to load (.trproj missing?)."
                         finishDialog(accepted = true)
                         return@fold
                     }
@@ -456,8 +461,8 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
                 logger.warn("Skipping cancellation cleanup for symbolic-link directory {}", rootPath)
                 return false
             }
-            if (Files.exists(rootPath.resolve("trproj.json"))) {
-                logger.info("Skipping cancellation cleanup for {} because trproj.json exists", rootPath)
+            if (Files.exists(rootPath.resolve(".trproj"))) {
+                logger.info("Skipping cancellation cleanup for {} because .trproj exists", rootPath)
                 return false
             }
             Files.walk(rootPath).use { stream ->

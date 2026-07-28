@@ -1,11 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.logging
 
 import ch.qos.logback.classic.PatternLayout
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.sanitizeForLogs
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.sanitizeForLogs
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow

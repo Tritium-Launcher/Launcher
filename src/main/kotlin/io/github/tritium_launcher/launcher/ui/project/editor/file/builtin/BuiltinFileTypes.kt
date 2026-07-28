@@ -1,10 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.file.builtin
 
-import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.file.FileTypeDescriptor
 import io.github.tritium_launcher.launcher.matches
-import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
-import io.github.tritium_launcher.launcher.ui.project.editor.file.builtin.BuiltinFileTypes.File
-import io.github.tritium_launcher.launcher.ui.project.editor.file.builtin.BuiltinFileTypes.Folder
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 
@@ -33,6 +36,20 @@ object BuiltinFileTypes {
         icon = TIcons.Folder.icon,
         matches = { file, _ -> file.isDir() },
         order = Int.MAX_VALUE
+    )
+
+    val Log = FileTypeDescriptor.create(
+        id = "log",
+        displayName = "Log",
+        icon = TIcons.Log.icon,
+        matches = { file, _ -> file.extension().matches("log") }
+    )
+
+    val CompressedLog = FileTypeDescriptor.create(
+        id = "log_compressed",
+        displayName = "Compressed Log",
+        icon = TIcons.LogComp.icon,
+        matches = { file, _ -> file.extension().matches("log.gz") }
     )
 
     val CSV = FileTypeDescriptor.create(
@@ -69,7 +86,17 @@ object BuiltinFileTypes {
         id = "image",
         displayName = "Image",
         icon = TIcons.Image.icon,
-        matches = { file, _ -> file.extension().matches(TConstants.Lists.ImageExtensions) }
+        matches = { file, _ ->
+            file.extension().matches(TConstants.Lists.ImageExtensions) &&
+                    !file.extension().matches("svg", "svgz")
+        }
+    )
+
+    val SvgImage = FileTypeDescriptor.create(
+        id = "svg",
+        displayName = "SVG Image",
+        icon = TIcons.Image.icon,
+        matches = { file, _ -> file.extension().matches("svg", "svgz") }
     )
 
     val Json = FileTypeDescriptor.create(
@@ -227,7 +254,57 @@ object BuiltinFileTypes {
         }
     )
 
+    val Gradle = FileTypeDescriptor.create(
+        id = "gradle",
+        displayName = "Gradle",
+        icon = TIcons.Gradle.icon,
+        matches = { file, _ ->
+            file.extension().matches("gradle")
+        }
+    )
+
+    val Gradlew = FileTypeDescriptor.create(
+        id = "gradlew",
+        displayName = "Gradle Wrapper",
+        icon = TIcons.GradleW.icon,
+        matches = { file, _ ->
+            file.extension().matches("gradlew", "gradlew.bat")
+        }
+    )
+
+    val Java = FileTypeDescriptor.create(
+        id = "java",
+        displayName = "Java",
+        icon = TIcons.Java.icon,
+        matches = { file, _ -> file.extension().matches("java") }
+    )
+
+    val JavaClass = FileTypeDescriptor.create(
+        id = "java_class",
+        displayName = "Java Class",
+        icon = TIcons.JavaClass.icon,
+        matches = { file, _ -> file.extension().matches("class") }
+    )
+
+    val Database = FileTypeDescriptor.create(
+        id = "database",
+        displayName = "Database",
+        icon = TIcons.Database.icon,
+        matches = { file, _ ->
+            file.extension().matches(
+                "db", "sql", "sqlite", "sqlite3", "dbf"
+            )
+        }
+    )
+
     /* Tritium Icons */
+
+    val Project = FileTypeDescriptor.create(
+        id = "project",
+        displayName = "Tritium Project",
+        icon = TIcons.Project.icon,
+        matches = { file, _ -> file.extension().matches("trproj") }
+    )
 
     val ModConfig = FileTypeDescriptor.create(
         id = "modcfg",
@@ -287,8 +364,19 @@ object BuiltinFileTypes {
         matches = { file, _ -> file.extension().matches("mcfunction") }
     )
 
+    val OptionsTxt = FileTypeDescriptor.create(
+        id = "options_txt",
+        displayName = "Options",
+        icon = TIcons.OptionsTxt.icon,
+        matches = { file, project ->
+            file.fileName().matches("options.txt") && file.parent().toAbsolute() == project.projectDir.toAbsolute()
+        },
+        order = -200
+    )
+
     fun all() = listOf(
-        File, Folder, CSV, HTML, JS, TS, Image, Json, TOML, Archive, Jar, Markdown, CSS, Python, Shell,
-        Powershell, Yaml, ModConfig, ZenScript, AnvilRegion, SessionLock, NBT, Schematic, McFunction
+        File, Folder, Log, CompressedLog, CSV, HTML, JS, TS, Image, SvgImage, Json, TOML, Archive, Jar, Markdown, CSS,
+        Python, Shell, Powershell, Yaml, Gradle, Gradlew, Java, JavaClass, Database, Project, ModConfig, ZenScript,
+        AnvilRegion, SessionLock, NBT, Schematic, McFunction, OptionsTxt
     )
 }

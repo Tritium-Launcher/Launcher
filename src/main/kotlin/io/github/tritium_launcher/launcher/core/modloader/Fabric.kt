@@ -1,19 +1,25 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.modloader
 
-import io.github.tritium_launcher.launcher.TConstants
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.IODispatchers
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.io.linkOrCopyFromCache
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.LaunchContext
+import io.github.tritium_launcher.api.modpack.ModLoader
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.api.registry.Registrable
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.github.tritium_launcher.launcher.core.modloader.fabric.LoaderCompatibility
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.IODispatchers
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.io.linkOrCopyFromCache
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.github.tritium_launcher.launcher.registry.Registrable
 import io.github.tritium_launcher.launcher.toURI
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
-import io.ktor.client.*
 import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -58,7 +64,7 @@ class Fabric : ModLoader(), Registrable {
         ignoreUnknownKeys = true
     }
 
-    private val client = HttpClient(CIO) {
+    private val client = HttpClientProvider.client {
         install(ContentNegotiation) { json(json) }
         install(HttpTimeout) {
             requestTimeoutMillis = 60_000

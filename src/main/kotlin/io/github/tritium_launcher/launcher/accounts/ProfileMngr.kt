@@ -1,13 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.accounts
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.io.atomicWrite
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.ClientIdentity
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.io.atomicWrite
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.ClientIdentity
+import io.github.tritium_launcher.launcher.core.HttpClientProvider
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
@@ -45,7 +49,7 @@ object ProfileMngr {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    internal var httpClient = HttpClient(CIO) {
+    internal var httpClient = HttpClientProvider.client() {
         install(ContentNegotiation) {
             json(json)
         }
@@ -282,7 +286,7 @@ object ProfileMngr {
                     append("variant", variant)
                     append("file", bytes, Headers.build {
                         append(HttpHeaders.ContentType, "image/png")
-                        append(HttpHeaders.ContentDisposition, "form-data; name=\"file\"; filename=\"$fileName\"")
+                        append(HttpHeaders.ContentDisposition, "form-state; name=\"file\"; filename=\"$fileName\"")
                     })
                 }))
             }

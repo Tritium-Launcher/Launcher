@@ -1,9 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.keymap
 
-import io.github.tritium_launcher.launcher.TConstants
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.api.TConstants
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.keymap.*
+import io.github.tritium_launcher.api.platform.Platform
 import io.qt.gui.QKeySequence
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

@@ -1,23 +1,29 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.TritiumEvent
-import io.github.tritium_launcher.launcher.core.TritiumEventBus
-import io.github.tritium_launcher.launcher.core.onEvent
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.TritiumEvent
+import io.github.tritium_launcher.api.core.TritiumEventBus
+import io.github.tritium_launcher.api.core.onEvent
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.editor.EditorArea
+import io.github.tritium_launcher.api.editor.EditorPane
+import io.github.tritium_launcher.api.editor.EditorPaneProvider
+import io.github.tritium_launcher.api.file.FileTypeDescriptor
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.registry.DeferredRegistryBuilder
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.registry.DeferredRegistryBuilder
-import io.github.tritium_launcher.launcher.ui.project.editor.file.FileTypeDescriptor
 import io.github.tritium_launcher.launcher.ui.project.editor.panes.TextEditorPane
 import io.github.tritium_launcher.launcher.ui.theme.TColors
+import io.github.tritium_launcher.launcher.ui.theme.TIcons
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.hBoxLayout
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.label
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.qWidget
-import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.vBoxLayout
+import io.github.tritium_launcher.launcher.ui.widgets.constructor_functions.*
 import io.qt.core.QTimer
 import io.qt.gui.QIcon
 import io.qt.widgets.*
@@ -27,9 +33,9 @@ import kotlinx.coroutines.*
  * This is the main Editor area of [io.github.tritium_launcher.launcher.ui.project.ProjectViewWindow],
  * which includes the Tab Bar, Code Editor, and handles opening files.
  */
-class EditorArea(
+class DefaultEditorArea(
     private val project: ProjectBase
-) {
+) : EditorArea {
     var onOpenFilesChanged: (() -> Unit)? = null
 
     private val container = QWidget()
@@ -163,7 +169,7 @@ class EditorArea(
 
     fun widget(): QWidget = container
 
-    fun openFile(file: VPath): EditorPane? {
+    override fun openFile(file: VPath): EditorPane? {
         val absolute = file.toAbsolute()
         val existingEntry = tabDescriptors.entries.firstOrNull { it.value.file?.toAbsolute() == absolute }
 
@@ -212,10 +218,10 @@ class EditorArea(
         return descriptor.pane
     }
 
-    fun openEditorPane(
+    override fun openEditorPane(
         provider: EditorPaneProvider,
         title: String,
-        icon: QIcon? = null,
+        icon: QIcon?,
         paneFactory: (ProjectBase) -> EditorPane
     ): EditorPane {
         val singletonGroup = provider.singletonGroup
@@ -243,7 +249,12 @@ class EditorArea(
         )
         tabDescriptors[idx] = descriptor
 
-        stack.insertWidget(idx, pane.widget())
+        val w = if (pane.viewModes.isNotEmpty()) {
+            wrapMultiViewPane(pane, idx)
+        } else {
+            pane.widget()
+        }
+        stack.insertWidget(idx, w)
         stack.removeWidget(placeholder)
         placeholder.disposeLater()
 
@@ -277,6 +288,68 @@ class EditorArea(
         return providersSnapshot.firstOrNull { it.canOpen(file, project) }
     }
 
+    private fun wrapMultiViewPane(pane: EditorPane, idx: Int): QWidget {
+        if (pane.currentViewMode == null) pane.currentViewMode = pane.viewModes.first()
+        return pane.widget()
+    }
+
+    private fun updateViewToolbar(idx: Int) {
+        val pane = tabDescriptors[idx]?.pane
+        tabBar.viewToolbar = if (pane != null && pane.viewModes.isNotEmpty()) {
+            buildViewToolbar(pane)
+        } else null
+    }
+
+    private fun buildViewToolbar(pane: EditorPane): QWidget {
+        val bar = QWidget()
+        val layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(0)
+        if (pane.currentViewMode == null) pane.currentViewMode = pane.viewModes.first()
+        val buttons = pane.viewModes.map { mode ->
+            pushButton {
+                val iconKey = pane.viewModeIcon(mode)
+                if (iconKey != null) {
+                    val px = TIcons.pix(iconKey, 16)
+                    if (!px.isNull) icon = QIcon(px)
+                }
+                toolTip = mode
+                isCheckable = true
+                isChecked = pane.currentViewMode == mode
+                setFixedSize(28, 28)
+                setThemedStyle {
+                    selector("QPushButton") {
+                        backgroundColor("transparent")
+                        border()
+                        borderRadius(3)
+                        margin(4, 4, 4, 4)
+                    }
+                    selector("QPushButton:hover") {
+                        backgroundColor(TColors.Surface1)
+                    }
+                    selector("QPushButton:checked") {
+                        backgroundColor(TColors.Surface2)
+                        border(1, TColors.Surface2.brightness(0.20f))
+                        borderRadius(3)
+                    }
+                    selector("QPushButton:pressed") {
+                        backgroundColor(TColors.Surface2)
+                    }
+                }
+            }
+        }
+        buttons.forEachIndexed { i, btn ->
+            val mode = pane.viewModes[i]
+            btn.clicked.connect {
+                pane.currentViewMode = mode
+                pane.onViewModeChanged(mode)
+                buttons.forEach { b -> b.isChecked = b == btn }
+            }
+        }
+        buttons.forEach { layout.addWidget(it) }
+        return bar
+    }
+
     private fun ensurePaneInstantiated(idx: Int): EditorPane? {
         val desc = tabDescriptors[idx] ?: return null
         if (desc.pane != null) return desc.pane
@@ -289,7 +362,11 @@ class EditorArea(
         }
         
         desc.pane = pane
-        val w = pane.widget()
+        val w = if (pane.viewModes.isNotEmpty()) {
+            wrapMultiViewPane(pane, idx)
+        } else {
+            pane.widget()
+        }
         
         // Replace placeholder with actual widget at the same index
         val placeholderIndex = stack.indexOf(desc.placeholder)
@@ -374,6 +451,9 @@ class EditorArea(
         if(idx >= 0 && idx < stack.count) {
             ensurePaneInstantiated(idx)
             stack.currentIndex = idx
+            updateViewToolbar(idx)
+        } else {
+            tabBar.viewToolbar = null
         }
     }
 
@@ -450,6 +530,7 @@ class EditorArea(
         val hasTabs = tabBar.count > 0
         stack.isVisible = hasTabs
         emptyStateWidget.isVisible = !hasTabs
+        if (!hasTabs) tabBar.viewToolbar = null
     }
 
     private fun createEmptyStateWidget(): QWidget {

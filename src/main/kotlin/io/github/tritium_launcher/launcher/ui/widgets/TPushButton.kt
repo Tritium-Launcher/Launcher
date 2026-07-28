@@ -1,7 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.currentDpr
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.currentDpr
+import io.github.tritium_launcher.launcher.ui.theme.TCol
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.github.tritium_launcher.launcher.ui.widgets.pixel.PixelSkin
@@ -45,6 +51,11 @@ class TPushButton(
                 update()
             }
         }
+
+    fun setTint(col: TCol?) {
+        tint = col?.value
+        update()
+    }
 
     /**
      * Additional Y offset applied to the button label.
@@ -171,7 +182,7 @@ class TPushButton(
 
         init {
             scope.launch {
-                ThemeMngr.currentThemeId.collect {
+                ThemeMngr.currentColorThemeId.collect {
                     val prev = skin
                     skin = buildSkin()
                     prev.clearCache(disposePixmaps = true)
@@ -259,6 +270,10 @@ class TPushButton(
             return QColor.fromHsl(effectiveHue, s, l).name()
         }
 
+        private fun tintColor(originalHex: String, tintCol: TCol): String = tintColor(originalHex, tintCol.value)
+        private fun tintColor(originalCol: TCol, tintCol: TCol): String = tintColor(originalCol.value, tintCol.value)
+        private fun tintColor(originalCol: TCol, tintHex: String): String = tintColor(originalCol.value, tintHex)
+
         /**
          * Build Sprite
          */
@@ -319,5 +334,7 @@ class TPushButton(
 
         operator fun invoke(parent: QWidget? = null, tint: String? = null, block: TPushButton.() -> Unit = {}): TPushButton =
             TPushButton(parent, tint).apply(block)
+        @JvmName("invokeTCol")
+        operator fun invoke(parent: QWidget? = null, tint: TCol, block: TPushButton.() -> Unit = {}): TPushButton = invoke(parent, tint.value, block)
     }
 }

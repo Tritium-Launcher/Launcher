@@ -1,8 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.mod
 
-import io.github.tritium_launcher.launcher.fromTR
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.fromTR
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromJsonElement
 import org.sqlite.SQLiteConfig
@@ -25,7 +30,6 @@ data class VersionHistoryRecord(
     val changedAt: Instant
 )
 
-@OptIn(ExperimentalTime::class)
 data class InstalledMod(
     val projectId: String,
     val modId: String,
@@ -47,7 +51,6 @@ data class InstalledMod(
     val dependencies: List<String> = emptyList()
 )
 
-@OptIn(ExperimentalTime::class)
 class ModDatabase(private val projectDir: VPath) : Closeable {
     private val logger = logger()
     private val dbPath: VPath = projectDir.resolve(".tr/mods.db")
@@ -149,7 +152,6 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
         needsBackup = true
         val c = connection()
         c.prepareStatement(
-            //language=sql
             """
             INSERT OR REPLACE INTO installed_mods
             (project_id, mod_id, file_name, display_name, side, release_type,
@@ -396,8 +398,17 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
             ps.executeUpdate()
         }
         if (dependencyIds.isEmpty()) return
-        c.prepareStatement("INSERT OR IGNORE INTO mod_dependencies (mod_id, depends_on_id) VALUES (?, ?)").use { ps ->
-            dependencyIds.forEach { depId ->
+        val existingIds = c.prepareStatement(
+            "SELECT project_id FROM installed_mods WHERE project_id = ?"
+        ).use { ps ->
+            dependencyIds.filter { depId ->
+                ps.setString(1, depId)
+                ps.executeQuery().use { it.next() }
+            }.toSet()
+        }
+        if (existingIds.isEmpty()) return
+        c.prepareStatement("INSERT INTO mod_dependencies (mod_id, depends_on_id) VALUES (?, ?)").use { ps ->
+            existingIds.forEach { depId ->
                 ps.setString(1, projectId)
                 ps.setString(2, depId)
                 ps.addBatch()
@@ -429,7 +440,6 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
         needsBackup = true
         val c = connection()
         c.prepareStatement(
-            //language=sql
             """
             INSERT INTO mod_version_history
             (project_id, old_version_id, old_version_label, old_file_hash,
@@ -464,7 +474,6 @@ class ModDatabase(private val projectDir: VPath) : Closeable {
 
     fun getPreviousVersion(projectId: String): VersionHistoryRecord? {
         connection().prepareStatement(
-            //language=sql
             """
             SELECT * FROM mod_version_history
             WHERE project_id = ? AND skipped = 0

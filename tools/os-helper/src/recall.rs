@@ -1,7 +1,7 @@
 /// Prevent Windows Recall from capturing windows belonging to the given PID.
 /// Returns `true` if all windows were successfully protected (or no-op on Linux).
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub fn block_recall(target_pid: u32) -> bool {
     use std::sync::atomic::{AtomicBool, Ordering};
     use windows::Win32::Foundation::{BOOL, LPARAM};

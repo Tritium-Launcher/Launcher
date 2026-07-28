@@ -1,6 +1,13 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.accounts
 
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.accounts.AccountDescriptor
+import io.github.tritium_launcher.api.accounts.AccountProvider
+import io.github.tritium_launcher.api.logger
 import io.github.tritium_launcher.launcher.toQImage
 import io.github.tritium_launcher.launcher.toUrl
 import io.github.tritium_launcher.launcher.ui.theme.TIcons

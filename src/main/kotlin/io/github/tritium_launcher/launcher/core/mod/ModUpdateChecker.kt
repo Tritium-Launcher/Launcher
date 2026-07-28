@@ -1,14 +1,19 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.mod
 
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.ModBrowserContext
+import io.github.tritium_launcher.api.modpack.ModSource
+import io.github.tritium_launcher.api.modpack.ModVersionOption
+import io.github.tritium_launcher.api.modpack.ModpackMeta
 import io.github.tritium_launcher.launcher.companion.CompanionModProvider
-import io.github.tritium_launcher.launcher.core.project.ModpackMeta
 import io.github.tritium_launcher.launcher.core.project.Project
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.core.source.ModBrowserContext
-import io.github.tritium_launcher.launcher.core.source.ModSource
-import io.github.tritium_launcher.launcher.core.source.ModVersionOption
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
-import io.github.tritium_launcher.launcher.logger
 import kotlinx.coroutines.*
 
 object ModUpdateChecker {

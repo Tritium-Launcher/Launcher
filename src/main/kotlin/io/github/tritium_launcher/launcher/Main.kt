@@ -1,5 +1,17 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher
 
+import io.github.tritium_launcher.api.applyRainbowOverlay
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.platform.Platform.Companion.arch
+import io.github.tritium_launcher.api.platform.Platform.Companion.current
+import io.github.tritium_launcher.api.platform.Platform.Companion.version
+import io.github.tritium_launcher.api.qs
 import io.github.tritium_launcher.launcher.accounts.MicrosoftAuth.attemptAutoSignIn
 import io.github.tritium_launcher.launcher.bootstrap.runLowPriorityTasks
 import io.github.tritium_launcher.launcher.bootstrap.startHost
@@ -11,7 +23,6 @@ import io.github.tritium_launcher.launcher.font.FontMngr
 import io.github.tritium_launcher.launcher.git.Git
 import io.github.tritium_launcher.launcher.logging.Logs
 import io.github.tritium_launcher.launcher.platform.GameProcessMngr
-import io.github.tritium_launcher.launcher.platform.Platform
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
 import io.github.tritium_launcher.launcher.ui.global.TooltipInterceptor
 import io.github.tritium_launcher.launcher.ui.helpers.installEventFilter
@@ -20,11 +31,11 @@ import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.github.tritium_launcher.launcher.ui.theme.TritiumProxyStyle
 import io.github.tritium_launcher.launcher.ui.theme.qt.icon
 import io.github.tritium_launcher.launcher.util.SeasonalEvents.isPrideMonth
-import io.qt.core.QCoreApplication
 import io.qt.core.QLogging
 import io.qt.core.Qt
 import io.qt.core.QtMsgType
 import io.qt.gui.QFont
+import io.qt.gui.QGuiApplication
 import io.qt.gui.QIcon
 import io.qt.widgets.QApplication
 import io.qt.widgets.QMessageBox
@@ -34,6 +45,7 @@ import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.slf4j.bridge.SLF4JBridgeHandler
+import java.io.File
 
 // TODO: Needs some cleanup
 
@@ -73,14 +85,13 @@ class Main {
 
             try {
                 mainLogger.info("Starting Tritium (argCount={})", args.size)
-                Platform.printSystemDetails(mainLogger)
+                printSystemDetails(mainLogger)
 
                 check(QApplication.instance() == null) { "QApplication already initialized" }
                 QApplication.initialize(args)
                 appInstance = QApplication.instance() as QApplication
+                DprMonitor.init(QGuiApplication.instance()!!)
 
-                QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, true)
-                QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, true)
 
                 referenceWidget = QWidget()
 
@@ -90,7 +101,7 @@ class Main {
 
                 startSettings()
 
-                startHost(TConstants.EXT_DIR)
+                startHost()
 
                 startKeymap()
 
@@ -100,7 +111,7 @@ class Main {
 
                 val baseStyle = QStyleFactory.create("Fusion") ?: QApplication.style()
                 QApplication.setStyle(TritiumProxyStyle(baseStyle))
-                ThemeMngr.setTheme(ThemeMngr.currentThemeIdValue)
+                ThemeMngr.refresh()
 
                 applyStartupFont()
 
@@ -132,6 +143,8 @@ class Main {
                     Platform.runProcess(cmd)
                 }
 
+                registerTrprojFileType()
+
                 QApplication.exec()
             } catch (t: Throwable) {
                 mainLogger.error("Fatal startup failure", t)
@@ -139,6 +152,57 @@ class Main {
             }
         }
 
+        /**
+         * Register the `.trproj` file type using the bundled os-helper tool.
+         */
+        private fun registerTrprojFileType() {
+            if (Platform.isMacOS) return
+
+            val helperPath = Platform.resolveOsHelper()
+            if (helperPath == null) {
+                mainLogger.info("registerTrprojFileType: os-helper binary not found, skipping file type registration")
+                return
+            }
+
+            val checkCmd = listOf(helperPath, "check-file-type")
+            if (Platform.runProcess(checkCmd)) {
+                mainLogger.info("registerTrprojFileType: .trproj file type already registered, skipping")
+                return
+            }
+
+            val launcherPath = resolveLauncherPath()
+            val iconPath = resolveIconPath(helperPath)
+            val args = mutableListOf(helperPath, "register-file-type")
+            if (launcherPath != null) {
+                args.add("--exec")
+                args.add(launcherPath)
+            }
+            if (iconPath != null) {
+                args.add("--icon")
+                args.add(iconPath)
+            }
+
+            mainLogger.info("registerTrprojFileType: running: {}", args.joinToString(" "))
+            Platform.runProcess(args)
+        }
+
+        private fun resolveLauncherPath(): String? {
+            return listOfNotNull(
+                try {
+                    System.getProperty("jpackage.app-path")
+                } catch (_: Exception) { null }
+            ).firstOrNull()
+        }
+
+        private fun resolveIconPath(helperPath: String): String? {
+            val helperDir = File(helperPath).parentFile ?: return null
+            return sequenceOf(
+                File(helperDir, "trproj_256.png"),
+                File("tools/os-helper/trproj_256.png").absoluteFile,
+            ).firstOrNull { it.isFile() }?.absolutePath
+        }
+
+        @Suppress("deprecation", "RedundantSuppression") // suppress the suppression warning
         private fun installQtMessageHandler() {
             QLogging.qInstallMessageHandler({ type, ctx, msg ->
                 when(type) {
@@ -203,4 +267,12 @@ class Main {
             QApplication.setFont(QFont(family, size))
         }
     }
+}
+
+fun printSystemDetails(logger: Logger) {
+    logger.info("=== SYSTEM ===")
+    logger.info("OS: $current")
+    logger.info("ARCH: $arch")
+    logger.info("VERSION: $version")
+    logger.info("=== SYSTEM ===")
 }

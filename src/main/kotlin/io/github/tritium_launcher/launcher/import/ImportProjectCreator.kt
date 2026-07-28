@@ -1,16 +1,23 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
-import io.github.tritium_launcher.launcher.core.project.*
+import io.github.tritium_launcher.api.BuiltinRegistries
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.modpack.ModpackMeta
+import io.github.tritium_launcher.api.project.template.GeneratorStepDescriptor
+import io.github.tritium_launcher.api.project.template.StandardProjectSteps
+import io.github.tritium_launcher.api.project.template.TemplateExecutionResult
+import io.github.tritium_launcher.launcher.core.project.ModpackTemplateDescriptor
+import io.github.tritium_launcher.launcher.core.project.ProjectBootstrap
+import io.github.tritium_launcher.launcher.core.project.ProjectFiles
 import io.github.tritium_launcher.launcher.core.project.templates.ProjectTemplateExecutor
-import io.github.tritium_launcher.launcher.core.project.templates.TemplateExecutionResult
-import io.github.tritium_launcher.launcher.core.project.templates.generation.GeneratorStepDescriptor
-import io.github.tritium_launcher.launcher.extension.core.BuiltinRegistries
 import io.github.tritium_launcher.launcher.import.ui.ImportProjectDialog
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.ui.theme.TIcons
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 /**
@@ -18,10 +25,10 @@ import kotlinx.serialization.json.*
  *
  * This is the entry point used by [ImportProjectDialog] to convert a detected instance
  * into a Tritium project. It orchestrates:
- * - Metadata and export-rule file generation via [StandardProjectSteps].
+ * - Metadata and export-rule file generation via [io.github.tritium_launcher.api.project.template.StandardProjectSteps].
  * - Optional mod import via the `"importMods"` step.
  * - Optional file import via the `"importFiles"` step.
- * - Project metadata (`trproj.json`) and icon writing.
+ * - Project metadata (`.trproj`) and icon writing.
  * - Minecraft and loader bootstrapping via [ProjectBootstrap].
  * - Import cache cleanup on success.
  *
@@ -67,11 +74,9 @@ object ImportProjectCreator {
 
         logger.info("Import createProject start: name={} source={}", packName, sourceId)
 
-        withContext(Dispatchers.IO) {
-            if (projectRoot.existsNotEmpty()) {
-                logger.warn("Aborting import, project directory already exists: {}", projectRoot)
-                throw IllegalArgumentException("Project directory already exists: $projectRoot")
-            }
+        if (projectRoot.existsNotEmpty()) {
+            logger.warn("Aborting import, project directory already exists: {}", projectRoot)
+            throw IllegalArgumentException("Project directory already exists: $projectRoot")
         }
 
         onProgress?.invoke("Building project metadata...")
@@ -143,7 +148,7 @@ object ImportProjectCreator {
 
         onProgress?.invoke("Writing project files...")
 
-        val execResult = ProjectTemplateExecutor.run(
+        val execResult = ProjectTemplateExecutor.runOnCaller(
             templateId = "import:$packName",
             projectRoot = projectRoot.toJPath(),
             variables = emptyMap(),
@@ -157,13 +162,12 @@ object ImportProjectCreator {
             onProgress?.invoke("Finalizing project...")
 
             val iconValue = if (iconPath != null) "icon.png" else TIcons.defaultProjectIcon
-            val rawMeta = buildJsonObject { put("metaPath", "trmodpack.json") }
             val trMeta = ProjectFiles.buildMeta(
                 type = "source",
                 name = packName,
                 icon = iconValue,
                 schemaVersion = ModpackTemplateDescriptor.currentSchema,
-                meta = rawMeta
+                metaPath = "trmodpack.toml"
             )
             ProjectFiles.writeTrProject(projectRoot, trMeta)
 

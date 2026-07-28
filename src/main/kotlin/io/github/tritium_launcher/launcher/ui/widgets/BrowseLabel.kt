@@ -1,6 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.widgets
 
-import io.github.tritium_launcher.launcher.platform.Platform
+import io.github.tritium_launcher.api.platform.Platform
 import io.qt.Nullable
 import io.qt.core.QEvent
 import io.qt.core.Qt

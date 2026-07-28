@@ -1,9 +1,14 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.core.mod_config.formats
 
 import com.akuleshov7.ktoml.Toml
 import com.akuleshov7.ktoml.tree.nodes.*
 import com.akuleshov7.ktoml.tree.nodes.pairs.values.*
-import io.github.tritium_launcher.launcher.core.mod_config.*
+import io.github.tritium_launcher.api.modpack.*
 
 class TomlConfigFormat : ConfigFormat {
     override val id: String = "toml"
@@ -81,7 +86,12 @@ class TomlConfigFormat : ConfigFormat {
                 ConfigDouble(unsignedValue.toDouble())
             }
         }
-        is TomlArray -> @Suppress("unchecked_cast") ConfigArray((value.content as List<Any>).map { arrayValueToConfig(it) }.toMutableList())
+        is TomlArray -> @Suppress("unchecked_cast") (ConfigArray((value.content as List<Any>).map {
+            arrayValueToConfig(
+                it
+            )
+        }
+            .toMutableList()))
         is TomlNull -> ConfigNull()
         is TomlDateTime -> ConfigString(value.content.toString())
     }

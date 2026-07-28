@@ -1,9 +1,14 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.treesitter
 
 import io.github.treesitter.ktreesitter.Node
 import io.github.treesitter.ktreesitter.Parser
 import io.github.treesitter.ktreesitter.Tree
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.logger
 import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.grammar.TreeSitterJavascript
 
 object TreeSitterService {
@@ -12,8 +17,11 @@ object TreeSitterService {
     private var jsParser: Parser? = null
     private var cachedText: String? = null
     private var cachedResult: TreeSitterParseResult? = null
+    private val grammarLanguages = mutableMapOf<String, io.github.treesitter.ktreesitter.Language>()
 
     fun isAvailable(): Boolean = jsLanguage != null
+
+    fun grammarFor(name: String): io.github.treesitter.ktreesitter.Language? = grammarLanguages[name]
 
     fun init() {
         loadJsLanguage()
@@ -42,11 +50,16 @@ object TreeSitterService {
     }
 
     private fun loadJsLanguage() {
-        jsLanguage = try {
+        val lang = try {
             TreeSitterJavascript.language()
         } catch (e: Throwable) {
             log.warn("Failed to load JS grammar", e)
             null
+        }
+        jsLanguage = lang
+        if (lang != null) {
+            grammarLanguages["javascript"] = lang
+            grammarLanguages["kubescript"] = lang
         }
     }
 }

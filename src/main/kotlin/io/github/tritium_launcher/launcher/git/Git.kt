@@ -1,12 +1,16 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.git
 
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.settings.SettingNode
+import io.github.tritium_launcher.api.settings.SettingValidation
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
-import io.github.tritium_launcher.launcher.git.Git.findGitExecutable
-import io.github.tritium_launcher.launcher.io.VPath
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.settings.SettingNode
-import io.github.tritium_launcher.launcher.settings.SettingValidation
 import io.github.tritium_launcher.launcher.settings.SettingsMngr
 
 /**

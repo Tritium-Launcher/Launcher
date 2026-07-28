@@ -1,5 +1,11 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project.editor.syntax
 
+import io.github.tritium_launcher.api.file.SyntaxLanguage
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.qt.NonNull
 import io.qt.gui.QSyntaxHighlighter

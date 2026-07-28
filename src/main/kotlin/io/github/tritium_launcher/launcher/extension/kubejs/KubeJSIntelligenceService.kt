@@ -1,15 +1,19 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.extension.kubejs
 
 import io.github.treesitter.ktreesitter.Node
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.extension.kubejs.KubeJSIntelligenceService.getCompletions
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.editor.intelligence.*
+import io.github.tritium_launcher.api.io.VPath
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.search.IndexableDocument
 import io.github.tritium_launcher.launcher.extension.kubejs.typings.KubeTypings
 import io.github.tritium_launcher.launcher.extension.kubejs.typings.TypeKind
-import io.github.tritium_launcher.launcher.logger
-import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.CompletionItem
-import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.CompletionItemKind
-import io.github.tritium_launcher.launcher.ui.project.editor.intelligence.HoverContent
-import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.ItemSlotInfo
+import io.github.tritium_launcher.launcher.ui.project.editor.reflection.JavaReflectionEngine
 import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.TreeSitterParseResult
 import io.github.tritium_launcher.launcher.ui.project.editor.treesitter.TreeSitterService
 import kotlinx.serialization.SerialName
@@ -19,6 +23,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.sqlite.SQLiteConfig
+import java.io.File
 import java.nio.ByteBuffer
 import java.sql.Connection
 import java.util.concurrent.ConcurrentHashMap
@@ -33,13 +38,13 @@ import java.util.concurrent.ConcurrentHashMap
  * used to infer callback parameter types, call signatures, recipe schema argument
  * types, and item string drop targets inside KubeJS scripts.
  */
-object KubeJSIntelligenceService {
+object KubeJSIntelligenceService : EditorIntelligence {
     private val logger = logger()
     private val json = Json { ignoreUnknownKeys = true }
 
     /**
      * Deserializes `registryObjs/latest.json`, which points at the newest registry
-     * snapshot directory and identifies the snapshot that produced the typings data.
+     * snapshot directory and identifies the snapshot that produced the typings state.
      */
     @Serializable
     private data class LatestPointer(
@@ -189,7 +194,7 @@ object KubeJSIntelligenceService {
     /**
      * Drops all cached KubeJS typing state and closes the SQLite connection.
      */
-    fun invalidateConnection() {
+    override fun invalidateConnection() {
         sqliteCache?.connection?.close()
         flatCache = null
         sqliteCache = null
@@ -484,10 +489,10 @@ object KubeJSIntelligenceService {
      * Returns line-oriented completions for the current cursor position.
      *
      * This path handles global names and simple dotted receivers from the current
-     * line only. It tries FlatBuffer-backed data first, then SQLite if the newer
+     * line only. It tries FlatBuffer-backed state first, then SQLite if the newer
      * snapshot is unavailable.
      */
-    fun getCompletions(project: ProjectBase, line: String, column: Int): List<CompletionItem> {
+    override fun getCompletions(project: ProjectBase, line: String, column: Int): List<CompletionItem> {
         val fb = getData(project)
         if (fb != null) {
             return getCompletionsFlat(fb, line, column)
@@ -503,10 +508,10 @@ object KubeJSIntelligenceService {
      * This extends [getCompletions] by resolving callback parameter receivers such
      * as `event.` inside `ServerEvents.recipes(event => ...)`.
      */
-    fun getContextualCompletions(project: ProjectBase, fullText: String, cursorPos: Int): List<CompletionItem> {
+    override fun getContextualCompletions(project: ProjectBase, fullText: String, cursorPos: Int): List<CompletionItem> {
         val fb = getData(project)
         if (fb != null) {
-            return getContextualCompletionsFlat(fb, fullText, cursorPos)
+            return getContextualCompletionsFlat(fb, fullText, cursorPos, project)
         }
         val sqlite = getSqlite(project) ?: return emptyList()
         return getContextualCompletionsSqlite(sqlite, fullText, cursorPos)
@@ -519,7 +524,7 @@ object KubeJSIntelligenceService {
      * infer the type of a dotted callback parameter receiver when no simple result
      * is available.
      */
-    private fun getContextualCompletionsFlat(cache: FlatCache, fullText: String, cursorPos: Int): List<CompletionItem> {
+    private fun getContextualCompletionsFlat(cache: FlatCache, fullText: String, cursorPos: Int, project: ProjectBase? = null): List<CompletionItem> {
         val lineStart = fullText.lastIndexOf('\n', cursorPos - 1).let { if (it == -1) 0 else it + 1 }
         val lineEnd = fullText.indexOf('\n', cursorPos).let { if (it == -1) fullText.length else it }
         val line = fullText.substring(lineStart, lineEnd)
@@ -536,11 +541,36 @@ object KubeJSIntelligenceService {
             return existing
         }
 
+        val sharedParse = if (TreeSitterService.isAvailable()) TreeSitterService.parse(fullText) else null
+
+        if (sharedParse != null) {
+            val searchPos = lineStart + dotPos
+            val beforeDotNode = if (searchPos > 0) sharedParse.findNodeAt(searchPos - 1) else null
+            if (beforeDotNode != null) {
+                var expr: Node? = beforeDotNode
+                while (expr != null && expr.type !in setOf("call_expression", "member_expression", "identifier")) {
+                    expr = expr.parent
+                }
+                if (expr != null) {
+                    val exprEnd = expr.endByte.toInt()
+                    if (exprEnd <= searchPos + 1) {
+                        val exprType = resolveExpressionType(cache, fullText, expr)
+                        if (exprType != null) {
+                            val members = membersOfClass(cache, exprType)
+                            if (members.isNotEmpty()) {
+                                logger.info("getContextualCompletionsFlat: expression resolved type='{}' {} items", exprType, members.size)
+                                return members
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         val varName = prefix.substring(0, dotPos).trim().split(Regex("[^a-zA-Z0-9_]")).lastOrNull() ?: return existing.also {
             logger.info("getContextualCompletionsFlat: varName is null")
         }
         logger.info("getContextualCompletionsFlat: dotPos={} varName='{}'", dotPos, varName)
-        val sharedParse = if (TreeSitterService.isAvailable()) TreeSitterService.parse(fullText) else null
         val typeName = resolveCallbackParameterTypeFlat(cache, fullText, cursorPos, varName, sharedParse)
         logger.info("getContextualCompletionsFlat: callback param resolved typeName='{}'", typeName)
         if (typeName != null) {
@@ -551,9 +581,23 @@ object KubeJSIntelligenceService {
         val localType = resolveLocalVariableType(cache, fullText, cursorPos, varName, sharedParse)
         logger.info("getContextualCompletionsFlat: local var resolved typeName='{}'", localType)
         if (localType != null) {
+            if (project != null) {
+                val reflected = JavaReflectionEngine.getCachedCompletions(project, localType)
+                if (reflected != null) {
+                    logger.info("getContextualCompletionsFlat: reflection cache hit for type '{}' = {} items", localType, reflected.size)
+                    return reflected
+                }
+            }
             val members = membersOfClass(cache, localType)
             logger.info("getContextualCompletionsFlat: membersOfClass({}) = {} items", localType, members.size)
             return members
+        }
+        if (project != null) {
+            val reflected = JavaReflectionEngine.resolveReflectedCompletions(project, fullText, varName)
+            if (reflected != null) {
+                logger.info("getContextualCompletionsFlat: reflection cache hit for var '{}' = {} items", varName, reflected.size)
+                return reflected
+            }
         }
         return existing
     }
@@ -747,6 +791,20 @@ object KubeJSIntelligenceService {
         val funcNode = node.children.firstOrNull { it.isNamed }
         if (funcNode == null) return null
         if (funcNode.type == "member_expression") {
+            val objectNode = funcNode.children.firstOrNull { it.type == "identifier" }
+            val propNode = funcNode.children.firstOrNull { it.type == "property_identifier" }
+            if (objectNode != null && propNode != null) {
+                val objText = objectNode.text().toString()
+                val propText = propNode.text().toString()
+                if (objText == "Java" && propText == "loadClass") {
+                    val argNode = node.children.firstOrNull { it.type == "arguments" }
+                    val stringArg = argNode?.children?.firstOrNull { it.type == "string" || it.type == "template_string" }
+                    if (stringArg != null) {
+                        val raw = stringArg.text().toString()
+                        return raw.removeSurrounding("'").removeSurrounding("\"").removeSurrounding("`")
+                    }
+                }
+            }
             return resolveMethodCallType(cache, fullText, funcNode)
         }
         if (funcNode.type == "identifier") {
@@ -829,23 +887,15 @@ object KubeJSIntelligenceService {
      */
     private fun extractCallTarget(call: Node): String? {
         val namedChildren = call.children.toList()
-        logger.info("extractCallTarget: {} named children, first type='{}' text='{}'",
-            namedChildren.size, namedChildren.firstOrNull()?.type, namedChildren.firstOrNull()?.text().toString().replace("\n", "\\n"))
-        namedChildren.forEachIndexed { i, n ->
-            logger.info("extractCallTarget: children[{}] type='{}' text='{}'", i, n.type, n.text().toString().replace("\n", "\\n"))
-        }
         if (namedChildren.isEmpty()) return null
         val func = namedChildren[0]
-        logger.info("extractCallTarget: func.type='{}'", func.type)
         return if (func.type == "member_expression") {
             val parts = mutableListOf<String>()
             collectMemberParts(func, parts)
-            logger.info("extractCallTarget: member_expression parts={}", parts)
             if (parts.size >= 2) parts.joinToString(".") else null
         } else if (func.type == "identifier") {
             func.text().toString()
         } else {
-            logger.info("extractCallTarget: unexpected func type '{}', returning null", func.type)
             null
         }
     }
@@ -997,7 +1047,7 @@ object KubeJSIntelligenceService {
      * Signature help currently requires the FlatBuffer cache because it depends on
      * recipe schemas and class metadata that are most complete in that path.
      */
-    fun getSignatureHelp(project: ProjectBase, fullText: String, cursorPos: Int): String? {
+    override fun getSignatureHelp(project: ProjectBase, fullText: String, cursorPos: Int): String? {
         logger.info("getSignatureHelp: called cursorPos={} fullTextLen={}", cursorPos, fullText.length)
         val fb = getData(project)
         logger.info("getSignatureHelp: fb={}", fb != null)
@@ -1015,126 +1065,97 @@ object KubeJSIntelligenceService {
      */
     private fun getSignatureHelpFlat(cache: FlatCache, fullText: String, cursorPos: Int): String? {
         if (!TreeSitterService.isAvailable()) return null
-        val result = TreeSitterService.parse(fullText) ?: return null.also {
-            logger.info("getSignatureHelpFlat: parse returned null")
-        }
-        val start = result.findNodeAt(cursorPos) ?: return null.also {
-            logger.info("getSignatureHelpFlat: findNodeAt({}) returned null", cursorPos)
-        }
-        logger.info("getSignatureHelpFlat: deepest node type='{}' text='{}'", start.type, start.text().toString().replace("\n", "\\n"))
+        val result = TreeSitterService.parse(fullText) ?: return null
+        val start = result.findNodeAt(cursorPos) ?: return null
         var node: Node? = start
         var passedCallback = false
 
         while (node != null) {
-            logger.info("getSignatureHelpFlat: visiting type='{}'", node.type)
             if (node.type == "arrow_function" || node.type == "function") {
                 passedCallback = true
             }
 
-            if (node.type == "arguments") {
-                if (passedCallback) {
-                    logger.info("getSignatureHelpFlat: skipping arguments (inside callback)")
+            if (node.type == "arguments" && !passedCallback) {
+                val call = node.parent ?: break
+                if (call.type != "call_expression") break
+                val paramIndex = currentParameterIndex(fullText, node, cursorPos)
+                val sig = resolveSignatureForCall(cache, call, paramIndex)
+                if (sig != null) return sig
+            }
+            if (node.type == "call_expression" && !passedCallback) {
+                val argsChild = node.children.find { it.type == "arguments" }
+                val funcChild = node.children.find { it.type == "member_expression" || it.type == "identifier" }
+                val cursorInArgs = if (argsChild != null) {
+                    cursorPos >= argsChild.startByte.toInt()
+                } else if (funcChild != null) {
+                    cursorPos >= funcChild.endByte.toInt()
                 } else {
-                    val call = node.parent ?: break
-                    logger.info("getSignatureHelpFlat: found arguments, call type='{}'", call.type)
-                    if (call.type != "call_expression") break
-                    val paramIndex = currentParameterIndex(fullText, node, cursorPos)
-                    val sig = resolveSignatureForCall(cache, call, paramIndex)
+                    false
+                }
+                if (cursorInArgs) {
+                    val paramIndex = if (argsChild != null) {
+                        currentParameterIndex(fullText, argsChild, cursorPos)
+                    } else {
+                        0
+                    }
+                    val sig = resolveSignatureForCall(cache, node, paramIndex)
                     if (sig != null) return sig
                 }
             }
-            if (node.type == "call_expression") {
-                if (passedCallback) {
-                    logger.info("getSignatureHelpFlat: skipping call_expression (inside callback)")
-                } else {
-                    val argsChild = node.children.find { it.type == "arguments" }
-                    val funcChild = node.children.find { it.type == "member_expression" || it.type == "identifier" }
-                    val cursorInArgs = if (argsChild != null) {
-                        cursorPos >= argsChild.startByte.toInt()
-                    } else if (funcChild != null) {
-                        cursorPos >= funcChild.endByte.toInt()
-                    } else {
-                        false
-                    }
-                    if (!cursorInArgs) {
-                        logger.info("getSignatureHelpFlat: skipping call_expression (cursor not in argument area)")
-                    } else {
-                        logger.info("getSignatureHelpFlat: found call_expression directly")
-                        val paramIndex = if (argsChild != null) {
-                            currentParameterIndex(fullText, argsChild, cursorPos)
-                        } else {
-                            0
-                        }
-                        val sig = resolveSignatureForCall(cache, node, paramIndex)
-                        if (sig != null) return sig
-                    }
-                }
-            }
-            if (node.type == "ERROR") {
-                if (passedCallback) {
-                    logger.info("getSignatureHelpFlat: skipping ERROR (inside callback, already passed relevant scope)")
-                } else {
-                    logger.info("getSignatureHelpFlat: visiting ERROR node")
-                    val target = resolveIncompleteCallFromError(node)
-                    if (target != null) {
-                        logger.info("getSignatureHelpFlat: resolved incomplete call target='{}'", target)
-                        val parts = target.split('.')
-                        if (parts.size >= 2) {
-                            val varName = parts[0]
-                            val methodName = parts.drop(1).joinToString(".")
-                            val typeName = resolveVarTypeFromEnclosingCallback(cache, node, varName)
-                            if (typeName != null) {
-                                val paramIndex = estimateParamIndexInError(fullText, node, cursorPos)
-                                val sig = formatMethodSignature(cache, typeName, methodName, target, paramIndex)
-                                if (sig != null) return sig
-                                val fieldSig = formatFieldSignature(cache, typeName, methodName, target, paramIndex)
-                                if (fieldSig != null) return fieldSig
-                            }
+            if (node.type == "ERROR" && !passedCallback) {
+                val target = resolveIncompleteCallFromError(node)
+                if (target != null) {
+                    val parts = target.split('.')
+                    if (parts.size >= 2) {
+                        val varName = parts[0]
+                        val methodName = parts.drop(1).joinToString(".")
+                        val typeName = resolveVarTypeFromEnclosingCallback(cache, node, varName)
+                        if (typeName != null) {
+                            val paramIndex = estimateParamIndexInError(fullText, node, cursorPos)
+                            val sig = formatMethodSignature(cache, typeName, methodName, target, paramIndex)
+                            if (sig != null) return sig
+                            val fieldSig = formatFieldSignature(cache, typeName, methodName, target, paramIndex)
+                            if (fieldSig != null) return fieldSig
                         }
                     }
                 }
             }
             node = node.parent
         }
-        logger.info("getSignatureHelpFlat: no arguments/call_expression node found in parent chain")
 
         val parenPos = fullText.lastIndexOf('(', cursorPos - 1)
-        if (parenPos >= 0) {
-            val beforeParen = fullText.substring(0, parenPos).trimEnd()
-            val dotIdx = beforeParen.lastIndexOf('.')
-            if (dotIdx > 0) {
-                val rawVar = beforeParen.substring(0, dotIdx).trim()
-                val varName = rawVar.split(Regex("[^a-zA-Z0-9_]")).lastOrNull()
-                val methodName = beforeParen.substring(dotIdx + 1).trim()
-                if (varName != null && methodName.isNotEmpty() && rawVar.contains(varName)) {
-                    val target = "$varName.$methodName"
-                    logger.info("getSignatureHelpFlat: text fallback target='{}'", target)
+        if (parenPos < 0) return null
+        val beforeParen = fullText.substring(0, parenPos).trimEnd()
+        val dotIdx = beforeParen.lastIndexOf('.')
+        if (dotIdx < 0) return null
 
-                    val allParts = target.split('.')
-                    if (allParts.size >= 2) {
-                        val group = allParts[0]
-                        val eventName = allParts.drop(1).joinToString(".")
-                        val event = cache.eventsByGroup[group]?.find { it.eventName == eventName }
-                        if (event != null) {
-                            return "$target(callback: ${event.eventClass.substringAfterLast('.')})"
-                        }
-                    }
+        val rawVar = beforeParen.substring(0, dotIdx).trim()
+        val varName = rawVar.split(Regex("[^a-zA-Z0-9_]")).lastOrNull() ?: return null
+        val methodName = beforeParen.substring(dotIdx + 1).trim()
+        if (methodName.isEmpty() || !rawVar.contains(varName)) return null
 
-                    var typeName = resolveVarTypeFromEnclosingCallback(cache, start, varName)
-                    if (typeName == null) {
-                        typeName = resolveVarTypeTextBased(cache, fullText, parenPos, varName)
-                        logger.info("getSignatureHelpFlat: text fallback text-based typeName='{}'", typeName)
-                    }
-                    if (typeName != null) {
-                        val argsText = fullText.substring(parenPos + 1, cursorPos.coerceAtMost(fullText.length))
-                        val paramIndex = countCommasInText(argsText)
-                        val sig = formatMethodSignature(cache, typeName, methodName, target, paramIndex)
-                        if (sig != null) return sig
-                        val fieldSig = formatFieldSignature(cache, typeName, methodName, target, paramIndex)
-                        if (fieldSig != null) return fieldSig
-                    }
-                }
+        val target = "$varName.$methodName"
+        val allParts = target.split('.')
+        if (allParts.size >= 2) {
+            val group = allParts[0]
+            val eventName = allParts.drop(1).joinToString(".")
+            val event = cache.eventsByGroup[group]?.find { it.eventName == eventName }
+            if (event != null) {
+                return "$target(callback: ${event.eventClass.substringAfterLast('.')})"
             }
+        }
+
+        var typeName = resolveVarTypeFromEnclosingCallback(cache, start, varName)
+        if (typeName == null) {
+            typeName = resolveVarTypeTextBased(cache, fullText, parenPos, varName)
+        }
+        if (typeName != null) {
+            val argsText = fullText.substring(parenPos + 1, cursorPos.coerceAtMost(fullText.length))
+            val paramIndex = countCommasInText(argsText)
+            val sig = formatMethodSignature(cache, typeName, methodName, target, paramIndex)
+            if (sig != null) return sig
+            val fieldSig = formatFieldSignature(cache, typeName, methodName, target, paramIndex)
+            if (fieldSig != null) return fieldSig
         }
         return null
     }
@@ -1146,17 +1167,13 @@ object KubeJSIntelligenceService {
      * `ServerEvents.recipes(...)` display the event callback type directly.
      */
     private fun resolveSignatureForCall(cache: FlatCache, call: Node, paramIndex: Int = 0): String? {
-        val target = extractCallTarget(call) ?: return null.also {
-            logger.info("resolveSignatureForCall: extractCallTarget returned null")
-        }
-        logger.info("resolveSignatureForCall: target='{}'", target)
+        val target = extractCallTarget(call) ?: return null
         val parts = target.split('.')
 
         if (parts.size >= 2) {
             val groupName = parts[0]
             val eventLookup = parts.drop(1).joinToString(".")
             val event = cache.eventsByGroup[groupName]?.find { it.eventName == eventLookup }
-            logger.info("resolveSignatureForCall: event registration check: group='{}' event='{}' found={}", groupName, eventLookup, event != null)
             if (event != null) {
                 val callbackType = event.eventClass.substringAfterLast('.')
                 return "$target(callback: $callbackType)"
@@ -1166,16 +1183,12 @@ object KubeJSIntelligenceService {
         if (parts.size >= 2) {
             val varName = parts[0]
             val methodName = parts.drop(1).joinToString(".")
-            logger.info("resolveSignatureForCall: method lookup: varName='{}' methodName='{}'", varName, methodName)
             val typeName = resolveVarTypeFromEnclosingCallback(cache, call, varName)
-            logger.info("resolveSignatureForCall: resolved typeName='{}'", typeName)
             if (typeName != null) {
                 val sig = formatMethodSignature(cache, typeName, methodName, target, paramIndex)
-                logger.info("resolveSignatureForCall: formatted sig='{}'", sig)
                 if (sig != null) return sig
 
                 val fieldSig = formatFieldSignature(cache, typeName, methodName, target, paramIndex)
-                logger.info("resolveSignatureForCall: field sig='{}'", fieldSig)
                 if (fieldSig != null) return fieldSig
             }
         }
@@ -1184,7 +1197,6 @@ object KubeJSIntelligenceService {
         if (cls != null && cls.constructors.isNotEmpty()) {
             return "${cls.simpleName}${cls.constructors.first()}"
         }
-        logger.info("resolveSignatureForCall: fallback returning null (no signature found)")
         return null
     }
 
@@ -1611,7 +1623,7 @@ object KubeJSIntelligenceService {
      * FlatBuffer metadata is preferred for richer type kind and side information;
      * SQLite is used as a fallback for older project registry exports.
      */
-    fun getHover(project: ProjectBase, symbol: String): HoverContent? {
+    override fun getHover(project: ProjectBase, symbol: String): HoverContent? {
         val fb = getData(project)
         if (fb != null) {
             val binding = fb.bindingByName[symbol]
@@ -1648,7 +1660,7 @@ object KubeJSIntelligenceService {
      * (ItemStack, Ingredient, etc.) or if the enclosing call cannot be resolved.
      * @return the slot info, or null if the position is not a valid drop target.
      */
-    fun findItemSlotAt(project: ProjectBase, fullText: String, charPos: Int): ItemSlotInfo? {
+    override fun findItemSlotAt(project: ProjectBase, fullText: String, charPos: Int): ItemSlotInfo? {
         val cache = getData(project) ?: return null
         if (charPos < 0 || charPos > fullText.length) return null
         val result = TreeSitterService.parse(fullText) ?: return null
@@ -1665,12 +1677,40 @@ object KubeJSIntelligenceService {
      * parameters (ItemStack, Ingredient, etc.) or are in unresolvable calls.
      * Used by drag-drop to highlight valid drop targets.
      */
-    fun findAllItemSlots(project: ProjectBase, fullText: String): List<ItemSlotInfo> {
+    override fun findAllItemSlots(project: ProjectBase, fullText: String): List<ItemSlotInfo> {
         val cache = getData(project) ?: return emptyList()
         val result = TreeSitterService.parse(fullText) ?: return emptyList()
         val slots = mutableListOf<ItemSlotInfo>()
         findItemSlotsRecursive(cache, fullText, result.rootNode, slots)
         return slots
+    }
+
+    override fun findTickDurationAt(project: ProjectBase, fullText: String, cursorPos: Int): Int? {
+        val cache = getData(project) ?: return null
+        val result = TreeSitterService.parse(fullText) ?: return null
+        var node = result.findNodeAt(cursorPos) ?: return null
+        if (node.type !in setOf("number", "decimal", "hex")) return null
+        val value = node.text()?.toString()?.toIntOrNull() ?: return null
+        val callExpression = findEnclosingCallExpr(node) ?: return null
+        val target = extractCallTarget(callExpression) ?: return null
+        val parts = target.split(".")
+        if (parts.size < 2) return null
+        val varName = parts[0]
+        val methodName = parts.drop(1).joinToString(".")
+        val typeName = resolveVarTypeFromEnclosingCallback(cache, callExpression, varName)
+            ?: cache.bindingByName[varName]?.type
+        if (typeName == null) return null
+        val argsNode = findArgumentsAncestor(node) ?: return null
+        val argIndex = currentParameterIndex(fullText, argsNode, cursorPos)
+        val paramType = lookupParamType(cache, typeName, methodName, argIndex)
+        if (paramType != null && isTickDurationType(paramType)) return value
+        return null
+    }
+
+    private fun isTickDurationType(type: String): Boolean {
+        val trimmed = type.trim().substringAfterLast('.')
+        return trimmed.contains("TickDuration", ignoreCase = true) ||
+               trimmed.contains("tick", ignoreCase = true)
     }
 
     /**
@@ -2066,4 +2106,135 @@ object KubeJSIntelligenceService {
         val simple = trimmed.substringAfterLast('.')
         return simple == "ItemStack" || simple == "Ingredient" || simple == "IIngredient"
     }
+
+    fun extractIndexableRecipes(projectPath: String, filePath: String): List<IndexableDocument> {
+        if (!TreeSitterService.isAvailable()) return emptyList()
+        val file = java.io.File(filePath)
+        if (!file.exists()) return emptyList()
+        val project = projectFromPath(projectPath) ?: return emptyList()
+        val cache = getData(project) ?: return emptyList()
+        val fullText = try { file.readText() } catch (_: Exception) { return emptyList() }
+        val result = TreeSitterService.parse(fullText) ?: return emptyList()
+        val documents = mutableListOf<IndexableDocument>()
+        collectRecipeDocuments(result.rootNode, fullText, projectPath, filePath, documents, cache)
+        return documents
+    }
+
+    private fun collectRecipeDocuments(
+        node: Node, fullText: String, projectPath: String, filePath: String,
+        documents: MutableList<IndexableDocument>, cache: FlatCache
+    ) {
+        if (node.type == "call_expression") {
+            val target = extractCallTarget(node)
+            if (target == "ServerEvents.recipes") {
+                val argsNode = node.children.firstOrNull { it.type == "arguments" } ?: return
+                for (arg in argsNode.children) {
+                    if (arg.type == "arrow_function" || arg.type == "function") {
+                        val body = arg.children.firstOrNull { it.type == "statement_block" } ?: continue
+                        extractRecipeCalls(body, fullText, projectPath, filePath, documents, cache)
+                    }
+                }
+            }
+        }
+        for (child in node.children) {
+            collectRecipeDocuments(child, fullText, projectPath, filePath, documents, cache)
+        }
+    }
+
+    private fun extractRecipeCalls(
+        node: Node, fullText: String, projectPath: String, filePath: String,
+        documents: MutableList<IndexableDocument>, cache: FlatCache
+    ) {
+        if (node.type == "call_expression") {
+            val target = extractCallTarget(node) ?: return
+            if (target.startsWith("event.")) {
+                val methodName = target.substringAfter("event.")
+                val recipeType = lookupRecipeType(cache, methodName)
+                if (recipeType != null) {
+                    val argsNode = node.children.firstOrNull { it.type == "arguments" }
+                    if (argsNode != null) {
+                        val doc = buildRecipeDocument(argsNode, recipeType, node, fullText, filePath)
+                        if (doc != null) documents.add(doc)
+                    }
+                }
+            }
+        }
+        for (child in node.children) {
+            extractRecipeCalls(child, fullText, projectPath, filePath, documents, cache)
+        }
+    }
+
+    private fun buildRecipeDocument(
+        argsNode: Node, recipeType: String, callNode: Node,
+        fullText: String, filePath: String
+    ): IndexableDocument? {
+        val itemIds = mutableListOf<String>()
+        collectItemIdStrings(argsNode, itemIds)
+        if (itemIds.isEmpty()) return null
+
+        val outputId = itemIds.first()
+        val inputIds = itemIds.drop(1)
+
+        val mtime = try { java.io.File(filePath).lastModified() } catch (_: Exception) { 0L }
+        val sourceLine = lineNumberAt(fullText, callNode.startByte.toInt())
+        val name = outputId.substringAfter(':')
+            .replace('_', ' ')
+            .replaceFirstChar { it.uppercase() }
+        val detail = "$recipeType · ${filePath.substringAfter("/kubejs/")}"
+
+        return IndexableDocument(
+            id = "kubejs_recipe:$outputId:${File(filePath).nameWithoutExtension}",
+            kind = "recipe",
+            name = name,
+            nameExact = outputId,
+            detail = detail,
+            path = filePath,
+            modId = "kubejs",
+            tags = "recipe $recipeType",
+            mtime = mtime,
+            outputId = outputId,
+            inputIds = inputIds.joinToString(" "),
+            recipeType = recipeType,
+            sourceKind = "kubejs_script",
+            sourceLine = sourceLine
+        )
+    }
+
+    private fun collectItemIdStrings(node: Node, ids: MutableList<String>) {
+        if (node.type == "string") {
+            val raw = node.text().toString()
+            val content = raw.removeSurrounding("\"").removeSurrounding("'")
+            if (content.contains(':')) {
+                ids.add(content)
+            }
+        }
+        for (child in node.children) {
+            collectItemIdStrings(child, ids)
+        }
+    }
+
+    private fun lookupRecipeType(cache: FlatCache, methodName: String): String? {
+        for (schemaId in recipeSchemaCandidates(methodName)) {
+            val schemas = cache.recipesBySchemaId[schemaId]
+            if (!schemas.isNullOrEmpty()) {
+                return schemaId
+            }
+        }
+        return null
+    }
+
+    private fun lineNumberAt(text: String, byteOffset: Int): Long {
+        val pos = byteOffset.coerceIn(0, text.length)
+        var line = 1L
+        for (i in 0 until pos) {
+            if (text[i] == '\n') line++
+        }
+        return line
+    }
+
+    private fun projectFromPath(path: String): ProjectBase? =
+        io.github.tritium_launcher.launcher.core.project.ProjectMngr.projects.find {
+            it.projectDir.toAbsolute().toString() ==
+                VPath.get(path).toAbsolute().toString()
+        }
 }

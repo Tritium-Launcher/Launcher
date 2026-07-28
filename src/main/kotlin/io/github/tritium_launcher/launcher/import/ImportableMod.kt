@@ -1,7 +1,12 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.import
 
+import io.github.tritium_launcher.api.io.VPath
 import io.github.tritium_launcher.launcher.core.mod.ModSide
-import io.github.tritium_launcher.launcher.io.VPath
 
 /**
  * Represents a mod discovered during instance scanning that can be imported.

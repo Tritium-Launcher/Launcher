@@ -1,6 +1,12 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.theme.qt
 
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.launcher.ui.theme.TCol
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
 import io.qt.widgets.QWidget
 import kotlinx.coroutines.CoroutineScope
@@ -17,21 +23,41 @@ annotation class QtStyleMarker
  * Build rules with [StyleBuilder] and [QtStyleSheet], then apply via [qtStyle],
  * [QWidget.setStyle], or [QWidget.setThemedStyle].
  */
+@Suppress("unused")
 @QtStyleMarker
 class StyleBuilder internal constructor(private val selector: String? = null) {
     private val props = LinkedHashMap<String, String>()
     private val children = mutableListOf<StyleBuilder>()
 
     fun backgroundColor(color: String) { props["background-color"] = color }
+    @JvmName("backgroundColorTCol")
+    fun backgroundColor(color: TCol) { props["background-color"] = color.value }
     fun background(value: String) { props["background"] = value }
+    @JvmName("backgroundTCol")
+    fun background(value: TCol) { props["background"] = value.value }
     fun color(color: String) { props["color"] = color }
+    @JvmName("colorTCol")
+    fun color(color: TCol) { props["color"] = color.value }
     fun selectionColor(color: String) { props["selection-color"] = color }
+    @JvmName("selectionColorTCol")
+    fun selectionColor(color: TCol) { props["selection-color"] = color.value }
+    @JvmName("borderTCol")
     fun border(
         width: Int = 1,
-        color: String = "#ffffff",
+        color: TCol = TCol.white,
         direction: String = "",
         style: String = "solid"
     ) {
+        when(direction) {
+            ""       -> props["border"] = "$width" + "px $style ${color.value}"
+            "top"    -> props["border-top"] = "$width" + "px $style ${color.value}"
+            "right"  -> props["border-right"] = "$width" + "px $style ${color.value}"
+            "bottom" -> props["border-bottom"] = "$width" + "px $style ${color.value}"
+            "left"   -> props["border-left"] = "$width" + "px $style ${color.value}"
+        }
+    }
+
+    fun border(width: Int, color: String, direction: String = "", style: String = "solid") {
         when(direction) {
             ""       -> props["border"] = "$width" + "px $style $color"
             "top"    -> props["border-top"] = "$width" + "px $style $color"
@@ -47,12 +73,22 @@ class StyleBuilder internal constructor(private val selector: String? = null) {
     /**
      * Applies borders on every side except [excludedSide].
      */
+    @JvmName("borderExceptTCol")
     fun borderExcept(
         excludedSide: String,
         width: Int = 1,
-        color: String = "#ffffff",
+        color: TCol = TCol.white,
         style: String = "solid"
     ) {
+        val excluded = excludedSide.lowercase()
+        border()
+        if(excluded != "top") border(width, color, "top", style)
+        if(excluded != "right") border(width, color, "right", style)
+        if(excluded != "bottom") border(width, color, "bottom", style)
+        if(excluded != "left") border(width, color, "left", style)
+    }
+
+    fun borderExcept(excludedSide: String, width: Int, color: String, style: String = "solid") {
         val excluded = excludedSide.lowercase()
         border()
         if(excluded != "top") border(width, color, "top", style)
@@ -70,7 +106,9 @@ class StyleBuilder internal constructor(private val selector: String? = null) {
             Corner.All -> props["border-radius"] = "${radiusPx}px"
         }
     }
-    fun outlineColor(value: String) { props["outline-color"] = value}
+    fun outlineColor(value: String) { props["outline-color"] = value }
+    @JvmName("outlineColorTCol")
+    fun outlineColor(value: TCol) { props["outline-color"] = value.value}
     fun padding(allPx: Int) { props["padding"] = "${allPx}px"}
     fun padding(top: Int = 0, right: Int = 0, bottom: Int = 0, left: Int = 0) { props["padding"] = "${top}px ${right}px ${bottom}px ${left}px" }
     fun margin(allPx: Int) { props["margin"] = "${allPx}px"}
@@ -93,6 +131,8 @@ class StyleBuilder internal constructor(private val selector: String? = null) {
     fun showDecorationSelected(value: Boolean = true) { props["show-decoration-selected"] = if(value) "1" else "0" }
 
     fun any(name: String, value: String) { props[name] = value }
+    @JvmName("anyTCol")
+    fun any(name: String, value: TCol) { props[name] = value.value }
 
     fun descendant(selectorSuffix: String, block: StyleBuilder.() -> Unit) {
         val childSelector = when {
@@ -172,7 +212,7 @@ fun QWidget.setThemedStyle(block: QtStyleSheet.() -> Unit): () -> Unit {
     apply()
 
     val job = CoroutineScope(Dispatchers.Main).launch {
-        ThemeMngr.currentThemeId.collect { apply() }
+        ThemeMngr.currentColorThemeId.collect { apply() }
     }
 
     try {
@@ -202,15 +242,6 @@ fun QWidget.setStyle(block: StyleBuilder.() -> Unit) {
     this.styleSheet = style.toStyleSheet()
     this.update()
     this.repaint()
-}
-
-/**
- * Convenience helpers for CSS color strings.
- */
-object QtColor {
-    fun rgb(r: Int, g: Int, b: Int) = "rgb($r,$g,$b)"
-    fun rgba(r: Int, g: Int, b: Int, a: Double) = "rgba($r,$g,$b,$a)"
-    fun hex(hex: String) = if (hex.startsWith("#")) hex else "#$hex"
 }
 
 /**

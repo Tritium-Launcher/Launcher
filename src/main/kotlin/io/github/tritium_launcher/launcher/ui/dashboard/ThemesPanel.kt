@@ -1,17 +1,22 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.dashboard
 
-import io.github.tritium_launcher.launcher.connect
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.platform.Platform
+import io.github.tritium_launcher.api.settings.SettingNode
+import io.github.tritium_launcher.api.theme.ThemeType
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingKeys
 import io.github.tritium_launcher.launcher.extension.core.CoreSettingValues
 import io.github.tritium_launcher.launcher.font.FontMngr
-import io.github.tritium_launcher.launcher.logger
 import io.github.tritium_launcher.launcher.m
-import io.github.tritium_launcher.launcher.platform.Platform
-import io.github.tritium_launcher.launcher.settings.SettingNode
 import io.github.tritium_launcher.launcher.settings.SettingsMngr
 import io.github.tritium_launcher.launcher.ui.theme.TColors
 import io.github.tritium_launcher.launcher.ui.theme.ThemeMngr
-import io.github.tritium_launcher.launcher.ui.theme.ThemeType
 import io.github.tritium_launcher.launcher.ui.theme.qt.setThemedStyle
 import io.github.tritium_launcher.launcher.ui.widgets.TComboBox
 import io.github.tritium_launcher.launcher.ui.widgets.TPushButton
@@ -36,7 +41,8 @@ class ThemesPanel internal constructor(): QWidget() {
 
     private val mainLayout = QVBoxLayout()
 
-    private val themeComboBox = TComboBox()
+    private val colorThemeCombo = TComboBox()
+    private val iconSetCombo = TComboBox()
     private val openFolderBtn = TPushButton {
         text = "Folder"
         minimumHeight = 30
@@ -59,11 +65,6 @@ class ThemesPanel internal constructor(): QWidget() {
         value = 12
     }
 
-    private val themeListener: () -> Unit = {
-        refreshThemeList()
-        refreshSelection()
-        updateThemeItemBackgrounds()
-    }
     private var isUpdating = false
 
     companion object {
@@ -75,8 +76,10 @@ class ThemesPanel internal constructor(): QWidget() {
         mainLayout.contentsMargins = 16.m
         mainLayout.widgetSpacing = 16
 
-        themeComboBox.view()?.setItemDelegate(ThemeItemDelegate())
-        applyThemeComboPopupStyle()
+        colorThemeCombo.view()?.setItemDelegate(ColorThemeItemDelegate())
+        applyComboPopupStyle(colorThemeCombo)
+        iconSetCombo.view()?.setItemDelegate(IconSetItemDelegate())
+        applyComboPopupStyle(iconSetCombo)
 
         val themeGroup = createThemeSection()
         mainLayout.addWidget(themeGroup)
@@ -87,16 +90,25 @@ class ThemesPanel internal constructor(): QWidget() {
         mainLayout.addStretch(1)
 
         loadAvailableFonts()
-        refreshThemeList()
-        refreshSelection()
+        refreshColorThemeList()
+        refreshIconSetList()
+        refreshSelections()
         loadCurrentFontSettings()
-        updateThemeItemBackgrounds()
+        updateColorThemeItemBackgrounds()
 
         setupConnections()
 
         CoroutineScope(Dispatchers.Main).launch {
-            ThemeMngr.currentThemeId.collect { _ ->
-                themeListener()
+            ThemeMngr.currentColorThemeId.collect { _ ->
+                refreshColorThemeList()
+                refreshSelections()
+                updateColorThemeItemBackgrounds()
+            }
+        }
+        CoroutineScope(Dispatchers.Main).launch {
+            ThemeMngr.currentIconSetId.collect { _ ->
+                refreshIconSetList()
+                refreshSelections()
             }
         }
     }
@@ -108,17 +120,25 @@ class ThemesPanel internal constructor(): QWidget() {
             widgetSpacing = 12
         }
 
-        val comboRow = QWidget()
-        val comboLayout = hBoxLayout(comboRow) {
+        val colorRow = QWidget()
+        val colorLayout = hBoxLayout(colorRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
         }
+        val colorLabel = label("Colors:") { minimumWidth = 80 }
+        colorLayout.addWidget(colorLabel)
+        colorLayout.addWidget(colorThemeCombo, 1)
+        layout.addWidget(colorRow)
 
-        val label = label("Theme:") { minimumWidth = 80 }
-
-        comboLayout.addWidget(label)
-        comboLayout.addWidget(themeComboBox, 1)
-        layout.addWidget(comboRow)
+        val iconRow = QWidget()
+        val iconLayout = hBoxLayout(iconRow) {
+            contentsMargins = 0.m
+            widgetSpacing = 8
+        }
+        val iconLabel = label("Icons:") { minimumWidth = 80 }
+        iconLayout.addWidget(iconLabel)
+        iconLayout.addWidget(iconSetCombo, 1)
+        layout.addWidget(iconRow)
 
         val btnRow = QWidget()
         val btnLayout = hBoxLayout(btnRow)
@@ -178,13 +198,11 @@ class ThemesPanel internal constructor(): QWidget() {
         }
     }
 
-    private fun refreshThemeList() {
+    private fun refreshColorThemeList() {
         isUpdating = true
-        val current = ThemeMngr.currentThemeId
-        val prev = themeComboBox.currentData() as? String ?: current
-        val blocker = QSignalBlocker(themeComboBox)
+        val blocker = QSignalBlocker(colorThemeCombo)
         try {
-            val entries = ThemeMngr.availableThemeIds().map { id ->
+            val entries = ThemeMngr.availableColorThemeIds().map { id ->
                 val label = ThemeMngr.getThemeName(id) ?: id
                 val type = ThemeMngr.getThemeType(id) ?: ThemeType.Dark
                 ThemeEntry(id, label, type)
@@ -202,28 +220,44 @@ class ThemesPanel internal constructor(): QWidget() {
                     model.appendRow(item)
                 }
             }
-            themeComboBox.setModel(model)
-            val target = entries.firstOrNull { it.id == prev }?.id
-                ?: entries.firstOrNull { it.id == ThemeMngr.currentThemeIdValue }?.id
-                ?: entries.firstOrNull()?.id
-            val idx = target?.let { themeComboBox.findData(it) } ?: -1
-            if(idx >= 0) themeComboBox.currentIndex = idx
+            colorThemeCombo.setModel(model)
         } finally {
             blocker.unblock()
         }
         isUpdating = false
     }
 
-    private fun refreshSelection() {
+    private fun refreshIconSetList() {
         isUpdating = true
-        val idx = themeComboBox.findData(ThemeMngr.currentThemeId)
-        if(idx >= 0 && idx < themeComboBox.count) {
-            val blocker = QSignalBlocker(themeComboBox)
-            try {
-                themeComboBox.currentIndex = idx
-            } finally {
-                blocker.unblock()
+        val blocker = QSignalBlocker(iconSetCombo)
+        try {
+            val ids = ThemeMngr.availableIconSetIds().sortedBy { (ThemeMngr.getThemeName(it) ?: it).lowercase() }
+            val model = QStandardItemModel()
+            ids.forEach { id ->
+                val label = ThemeMngr.getThemeName(id) ?: id
+                val item = QStandardItem(label)
+                item.setData(id, Qt.ItemDataRole.UserRole)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled, Qt.ItemFlag.ItemIsSelectable)
+                model.appendRow(item)
             }
+            iconSetCombo.setModel(model)
+        } finally {
+            blocker.unblock()
+        }
+        isUpdating = false
+    }
+
+    private fun refreshSelections() {
+        isUpdating = true
+        var idx = colorThemeCombo.findData(ThemeMngr.currentColorThemeIdValue)
+        if (idx >= 0 && idx < colorThemeCombo.count) {
+            val blocker = QSignalBlocker(colorThemeCombo)
+            try { colorThemeCombo.currentIndex = idx } finally { blocker.unblock() }
+        }
+        idx = iconSetCombo.findData(ThemeMngr.currentIconSetIdValue)
+        if (idx >= 0 && idx < iconSetCombo.count) {
+            val blocker = QSignalBlocker(iconSetCombo)
+            try { iconSetCombo.currentIndex = idx } finally { blocker.unblock() }
         }
         isUpdating = false
     }
@@ -248,20 +282,20 @@ class ThemesPanel internal constructor(): QWidget() {
         }
     }
 
-    private fun updateThemeItemBackgrounds() {
-        for (i in 0 until themeComboBox.count) {
-            val isSeparator = themeComboBox.itemData(i, SeparatorRole) as? Boolean ?: false
+    private fun updateColorThemeItemBackgrounds() {
+        for (i in 0 until colorThemeCombo.count) {
+            val isSeparator = colorThemeCombo.itemData(i, SeparatorRole) as? Boolean ?: false
             if (isSeparator) continue
-            val id = themeComboBox.itemData(i) as? String ?: continue
+            val id = colorThemeCombo.itemData(i) as? String ?: continue
             val bgHex = ThemeMngr.getThemeColorHex(id, "Surface0") ?: continue
             val textHex = ThemeMngr.getThemeColorHex(id, "Text") ?: continue
-            themeComboBox.setItemData(i, QBrush(QColor(bgHex)), Qt.ItemDataRole.BackgroundRole)
-            themeComboBox.setItemData(i, QBrush(QColor(textHex)), Qt.ItemDataRole.ForegroundRole)
+            colorThemeCombo.setItemData(i, QBrush(QColor(bgHex)), Qt.ItemDataRole.BackgroundRole)
+            colorThemeCombo.setItemData(i, QBrush(QColor(textHex)), Qt.ItemDataRole.ForegroundRole)
         }
-        themeComboBox.view()?.viewport()?.update()
+        colorThemeCombo.view()?.viewport()?.update()
     }
 
-    private class ThemeItemDelegate : QStyledItemDelegate() {
+    private open inner class BaseItemDelegate : QStyledItemDelegate() {
         override fun paint(painter: QPainter?, option: QStyleOptionViewItem, index: QModelIndex) {
             val opt = QStyleOptionViewItem(option)
             val isSeparator = index.data(SeparatorRole) as? Boolean ?: false
@@ -269,14 +303,22 @@ class ThemesPanel internal constructor(): QWidget() {
                 painter ?: return
                 val rect = opt.rect
                 painter.save()
-                painter.fillRect(rect, QBrush(QColor(TColors.Surface1)))
-                painter.setPen(QColor(TColors.Subtext))
+                painter.fillRect(rect, TColors.Surface1.toQB())
+                painter.setPen(TColors.Subtext.toQC())
                 val font = QFont(opt.font)
                 painter.setFont(font)
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter.value(), index.data(Qt.ItemDataRole.DisplayRole).toString())
                 painter.restore()
                 return
             }
+            drawItem(painter, opt, index)
+        }
+
+        protected open fun drawItem(painter: QPainter?, opt: QStyleOptionViewItem, index: QModelIndex) {}
+    }
+
+    private inner class ColorThemeItemDelegate : BaseItemDelegate() {
+        override fun drawItem(painter: QPainter?, opt: QStyleOptionViewItem, index: QModelIndex) {
             val bg = index.data(Qt.ItemDataRole.BackgroundRole) as? QBrush
             val fg = index.data(Qt.ItemDataRole.ForegroundRole) as? QBrush
             val p = painter ?: return
@@ -301,19 +343,43 @@ class ThemesPanel internal constructor(): QWidget() {
         }
     }
 
+    private inner class IconSetItemDelegate : BaseItemDelegate() {
+        override fun drawItem(painter: QPainter?, opt: QStyleOptionViewItem, index: QModelIndex) {
+            val p = painter ?: return
+            val rect = opt.rect
+            val isHot = opt.state.testFlag(QStyle.StateFlag.State_MouseOver) || opt.state.testFlag(QStyle.StateFlag.State_Selected)
+            if (isHot) {
+                val highlight = opt.palette.color(QPalette.ColorRole.Highlight)
+                p.fillRect(rect, highlight)
+            }
+            val text = index.data(Qt.ItemDataRole.DisplayRole).toString()
+            p.setPen(opt.palette.color(QPalette.ColorRole.Text))
+            val textRect = rect.adjusted(6, 0, -6, 0)
+            p.drawText(textRect, opt.displayAlignment.value(), text)
+        }
+    }
+
     private fun setupConnections() {
-        themeComboBox.currentIndexChanged.connect { idx: Int ->
+        colorThemeCombo.currentIndexChanged.connect { idx: Int ->
             if(isUpdating) return@connect
             if(idx < 0) return@connect
-            val isSeparator = themeComboBox.itemData(idx, SeparatorRole) as? Boolean ?: false
+            val isSeparator = colorThemeCombo.itemData(idx, SeparatorRole) as? Boolean ?: false
             if (isSeparator) return@connect
-            val id = themeComboBox.itemData(idx) as? String ?: return@connect
-            ThemeMngr.setTheme(id)
+            val id = colorThemeCombo.itemData(idx) as? String ?: return@connect
+            ThemeMngr.setColorTheme(id)
+        }
+
+        iconSetCombo.currentIndexChanged.connect { idx: Int ->
+            if(isUpdating) return@connect
+            if(idx < 0) return@connect
+            val id = iconSetCombo.itemData(idx) as? String ?: return@connect
+            ThemeMngr.setIconSet(id)
         }
 
         refreshBtn.clicked.connect {
-            refreshThemeList()
-            refreshSelection()
+            refreshColorThemeList()
+            refreshIconSetList()
+            refreshSelections()
         }
 
         openFolderBtn.clicked.connect {
@@ -321,7 +387,7 @@ class ThemesPanel internal constructor(): QWidget() {
                 val dir = ThemeMngr.userThemesDir.toAbsolute()
                 if (!dir.exists()) dir.mkdirs()
                 val localPath = dir.toString()
-                val opened = QDesktopServices.openUrl(dir.toQUrl())
+                val opened = Platform.openFile(dir)
                 if (!opened) {
                     val fallbackOpened = Platform.openBrowser(dir.toJFile().toURI().toString())
                     if (!fallbackOpened) {
@@ -340,8 +406,8 @@ class ThemesPanel internal constructor(): QWidget() {
         editorFontSizeSpinner.valueChanged.connect { saveEditorFont() }
     }
 
-    private fun applyThemeComboPopupStyle() {
-        val view = themeComboBox.view() ?: return
+    private fun applyComboPopupStyle(combo: TComboBox) {
+        val view = combo.view() ?: return
         view.frameShape = QFrame.Shape.Box
         view.frameShadow = QFrame.Shadow.Plain
         view.lineWidth = 2

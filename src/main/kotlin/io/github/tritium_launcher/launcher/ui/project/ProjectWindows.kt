@@ -1,10 +1,15 @@
+/*
+ * Copyright (c) 2025 FooterMan and contributors.
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package io.github.tritium_launcher.launcher.ui.project
 
-import io.github.tritium_launcher.launcher.connect
-import io.github.tritium_launcher.launcher.core.project.ProjectBase
-import io.github.tritium_launcher.launcher.logger
+import io.github.tritium_launcher.api.connect
+import io.github.tritium_launcher.api.core.project.ProjectBase
+import io.github.tritium_launcher.api.logger
+import io.github.tritium_launcher.api.runOnGuiThread
 import io.github.tritium_launcher.launcher.ui.dashboard.Dashboard
-import io.github.tritium_launcher.launcher.ui.helpers.runOnGuiThread
 import io.qt.core.QThread
 import io.qt.widgets.QApplication
 import kotlinx.coroutines.*
